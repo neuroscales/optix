@@ -44,15 +44,15 @@ class Tags:
     Attributes
     ----------
     targets : tuple of str
-        What it estimates, e.g. ``("shading", "sensor")``.
+        What it estimates, e.g. `("shading", "sensor")`.
     streaming : str
-        Data access pattern: ``"pointwise"``, ``"per-frame"``, ``"halo"``,
-        ``"per-pixel-stats"`` or ``"whole-stack"``.
+        Data access pattern: `"pointwise"`, `"per-frame"`, `"halo"`,
+        `"per-pixel-stats"` or `"whole-stack"`.
     modality : tuple of str
         Imaging modalities it is meant for.
     noise : str
-        Noise model: ``"none"``, ``"gaussian"``, ``"poisson"``,
-        ``"poisson-gaussian"``, ...
+        Noise model: `"none"`, `"gaussian"`, `"poisson"`,
+        `"poisson-gaussian"`, ...
     many_frames : bool
         Whether it needs many frames.
     reference : str
@@ -89,7 +89,7 @@ class History:
     def record(self, objective: float, **extras: float) -> None:
         """Append one iteration.
 
-        Takes Python floats: the caller does the single ``.item()`` per
+        Takes Python floats: the caller does the single `.item()` per
         iteration.
         """
         self.objective.append(float(objective))
@@ -97,9 +97,9 @@ class History:
             self.extras.setdefault(key, []).append(float(value))
 
     def gain(self) -> float:
-        """Relative change of the last step, ``(L_t - L_{t-1}) / |L_t|``.
+        """Relative change of the last step, `(L_t - L_{t-1}) / |L_t|`.
 
-        Returns ``inf`` with fewer than two records.
+        Returns `inf` with fewer than two records.
         """
         if len(self.objective) < 2:
             return math.inf
@@ -107,7 +107,7 @@ class History:
         return (last - prev) / (abs(last) + 1e-30)
 
     def check(self, tol: float, *, monotone: bool = False) -> bool:
-        """Whether ``|L_t - L_{t-1}| / |L_t| < tol``; sets ``converged``.
+        """Whether `|L_t - L_{t-1}| / |L_t| < tol`; sets `converged`.
 
         Parameters
         ----------
@@ -193,12 +193,12 @@ def _shares_memory(a: object, b: object) -> bool:
 class Estimator:
     """Base class of optix estimators.
 
-    Subclasses define ``tags`` (which registers them), the ``paper`` and
-    ``recommended`` presets, spell out their options as keyword-only
+    Subclasses define `tags` (which registers them), the `paper` and
+    `recommended` presets, spell out their options as keyword-only
     parameters defaulting to None, and call
-    ``self._resolve(faithful, locals())``. They implement ``_fit`` and
-    ``_apply``; the public [`fit`][optix.Estimator.fit] /
-    [`apply`][optix.Estimator.apply] run them under ``torch.no_grad()``.
+    `self._resolve(faithful, locals())`. They implement `_fit` and
+    `_apply`; the public [`fit`][optix.Estimator.fit] /
+    [`apply`][optix.Estimator.apply] run them under `torch.no_grad()`.
 
     Attributes
     ----------
@@ -208,8 +208,8 @@ class Estimator:
         Whether the resolved options equal the paper preset.
     estimates : dict of str to Estimate
         Results of [`fit`][optix.Estimator.fit], e.g.
-        ``{"sensor": ..., "shading": ...}``. Parameter maps are shaped
-        ``(*group, *spatial)``, spatial axes in layout order.
+        `{"sensor": ..., "shading": ...}`. Parameter maps are shaped
+        `(*group, *spatial)`, spatial axes in layout order.
     layout : Layout or None
         Layout used by the last [`fit`][optix.Estimator.fit] (or given at
         construction); [`apply`][optix.Estimator.apply] uses it for plain
@@ -218,9 +218,9 @@ class Estimator:
 
     Notes
     -----
-    Subclasses receive a [`Labeled`][optix.io.Labeled] array in ``_fit`` /
-    ``_apply`` whenever a layout is set, so that the io and stats helpers
-    pick it up; ``_layout_of`` and ``_map_shape`` give the layout (default
+    Subclasses receive a [`Labeled`][optix.io.Labeled] array in `_fit` /
+    `_apply` whenever a layout is set, so that the io and stats helpers
+    pick it up; `_layout_of` and `_map_shape` give the layout (default
     included) and the shape of the parameter maps.
     """
 
@@ -247,15 +247,15 @@ class Estimator:
         Parameters
         ----------
         faithful : bool
-            Selects the preset of defaults: ``paper`` when True,
-            ``recommended`` when False. Explicit option values always win.
+            Selects the preset of defaults: `paper` when True,
+            `recommended` when False. Explicit option values always win.
         dtype, device : optional
             Working backend (default: configuration; the device follows a
             Tensor input when unset).
         layout : Layout, optional
             Axis roles of the data (see [`Layout`][optix.io.Layout]); can
             also be given to [`fit`][optix.Estimator.fit], or carried by a
-            labelled array. Default: ``(*samples, H, W)``.
+            labelled array. Default: `(*samples, H, W)`.
         **options
             Hyper-parameters (the base's view of the subclass's options).
         """
@@ -269,7 +269,7 @@ class Estimator:
         self._resolve(faithful, options)
 
     def _resolve(self, faithful: bool, params: Mapping[str, object]) -> None:
-        """Resolve options against the preset selected by ``faithful``."""
+        """Resolve options against the preset selected by `faithful`."""
         preset = self.paper if faithful else self.recommended
         options = {}
         for name, value in params.items():
@@ -303,10 +303,10 @@ class Estimator:
         Parameters
         ----------
         data : array-like or Labeled
-            Data; ``(*samples, H, W)`` without a layout.
+            Data; `(*samples, H, W)` without a layout.
         layout : Layout, optional
-            Axis roles (default: that of a labelled ``data``, else the one
-            given at construction). Stored in ``self.layout``.
+            Axis roles (default: that of a labelled `data`, else the one
+            given at construction). Stored in `self.layout`.
         init : Estimate, sequence of Estimate, or Estimator, optional
             Initial values (cloned; the caller's objects are not modified).
         callback : callable, optional
@@ -316,7 +316,7 @@ class Estimator:
         Returns
         -------
         Estimator
-            self, with ``estimates`` and ``history`` filled. ``history``
+            self, with `estimates` and `history` filled. `history`
             is reset at the start of each call.
         """
         self.history = History()
@@ -353,12 +353,12 @@ class Estimator:
             Data, in the layout of the fit (unless labelled otherwise).
         out : writable array-like, optional
             Output (tensor, numpy, zarr, memmap...). Default: a new tensor
-            on the device of ``data`` if it is a Tensor, else on the CPU.
+            on the device of `data` if it is a Tensor, else on the CPU.
 
         Returns
         -------
         writable array-like
-            ``out``.
+            `out`.
         """
         if not isinstance(data, Labeled):
             data = self._labeled(data, self.layout)
@@ -383,7 +383,7 @@ class Estimator:
     # -- helpers for subclasses ------------------------------------------
     @staticmethod
     def _labeled(data: ArrayLike, layout: Layout | None) -> ArrayLike:
-        """``data`` labelled with ``layout`` (unchanged when None)."""
+        """`data` labelled with `layout` (unchanged when None)."""
         if layout is None:
             return data
         if isinstance(data, Labeled):
@@ -392,13 +392,13 @@ class Estimator:
 
     @staticmethod
     def _layout_of(data: ArrayLike, ndim: int = 2) -> Layout:
-        """Layout of ``data`` (the default one with ``ndim`` spatial dims)."""
+        """Layout of `data` (the default one with `ndim` spatial dims)."""
         if isinstance(data, Labeled):
             return data.layout
         return Layout.default(len(data.shape), ndim)
 
     def _map_shape(self, data: ArrayLike, ndim: int = 2) -> tuple[int, ...]:
-        """Shape ``(*group, *spatial)`` of the parameter maps for ``data``."""
+        """Shape `(*group, *spatial)` of the parameter maps for `data`."""
         return self._layout_of(data, ndim).map_shape(data)
 
     @staticmethod
@@ -421,9 +421,9 @@ class Estimator:
         shape: Sequence[int] | None = None,
         like: object = None,
     ) -> Estimate | None:
-        """First estimate of type ``cls`` in ``init``, cloned and moved.
+        """First estimate of type `cls` in `init`, cloned and moved.
 
-        Fields must broadcast to ``shape`` (scalars do); ``None`` fields
+        Fields must broadcast to `shape` (scalars do); `None` fields
         are left for the data-driven initialisation.
         """
         for estimate in self._init_estimates(init):
@@ -466,13 +466,13 @@ class Estimator:
         overhead: float = 2.0,
         contiguous: bool = False,
     ) -> WritableArrayLike:
-        """Apply ``fn(chunk, batch)`` to frame batches and store the results.
+        """Apply `fn(chunk, batch)` to frame batches and store the results.
 
-        ``batch`` is ``(n, *spatial)``; ``chunk.group`` selects the
-        parameters of a ``(*group, *spatial)`` map. ``fn`` returns a tensor
-        of the shape of ``batch``, written back with ``chunk.store``.
-        In-place use (``out is data``) is safe: chunks are owned. ``batch``
-        is a strided view unless ``contiguous`` (see
+        `batch` is `(n, *spatial)`; `chunk.group` selects the
+        parameters of a `(*group, *spatial)` map. `fn` returns a tensor
+        of the shape of `batch`, written back with `chunk.store`.
+        In-place use (`out is data`) is safe: chunks are owned. `batch`
+        is a strided view unless `contiguous` (see
         [`frame_batches`][optix.io.frame_batches]).
         """
         raw = data.array if isinstance(data, Labeled) else data
@@ -502,15 +502,15 @@ class Estimator:
         pad: str | None = None,
         contiguous: bool = False,
     ) -> WritableArrayLike:
-        """Apply ``fn`` to blocks with a halo and store the cropped cores.
+        """Apply `fn` to blocks with a halo and store the cropped cores.
 
-        ``contiguous=True`` hands ``fn`` dense blocks (FFTs, convolutions;
+        `contiguous=True` hands `fn` dense blocks (FFTs, convolutions;
         see [`blocks`][optix.io.blocks]).
 
         Raises
         ------
         ValueError
-            If ``out`` is (or shares memory with) ``data`` while the halo is
+            If `out` is (or shares memory with) `data` while the halo is
             nonzero: halos would read already-processed neighbours.
         """
         raw = data.array if isinstance(data, Labeled) else data
@@ -560,7 +560,7 @@ class Estimator:
         return {}
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
-        """Restore what ``_extra_state`` returned."""
+        """Restore what `_extra_state` returned."""
 
     def state_dict(self) -> dict[str, object]:
         """Everything needed to rebuild the fitted estimator."""
@@ -589,7 +589,7 @@ class Estimator:
         return self
 
     def save(self, path: str | os.PathLike) -> None:
-        """Save with ``torch.save`` (no pickled classes)."""
+        """Save with `torch.save` (no pickled classes)."""
         torch.save(self.state_dict(), path)
 
     def __repr__(self) -> str:
@@ -607,7 +607,7 @@ def load(path: str | os.PathLike) -> Estimator | Estimate:
     Returns
     -------
     Estimator or Estimate
-        Dispatched on the saved class name (``weights_only`` loading).
+        Dispatched on the saved class name (`weights_only` loading).
     """
     state = torch.load(path, weights_only=True)
     if "type" in state:
@@ -621,5 +621,5 @@ def load(path: str | os.PathLike) -> Estimator | Estimate:
 
 
 def estimators() -> dict[str, type[Estimator]]:
-    """Registered estimator classes (those defining ``tags``), by name."""
+    """Registered estimator classes (those defining `tags`), by name."""
     return dict(_REGISTRY)

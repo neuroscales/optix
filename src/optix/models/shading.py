@@ -25,9 +25,9 @@ def random_shading(
 ) -> ShadingEstimate:
     """Draw a smooth random flat field.
 
-    flat = exp(f) with f a random combination of the lowest ``order``
+    flat = exp(f) with f a random combination of the lowest `order`
     DCT-II functions along each dim (no DC term), scaled so that
-    std(f) = ``strength``, then normalised to mean 1.
+    std(f) = `strength`, then normalised to mean 1.
 
     Parameters
     ----------
@@ -46,7 +46,7 @@ def random_shading(
     Returns
     -------
     ShadingEstimate
-        ``flat`` and ``dark`` maps, ``meta["flat_norm"] == "mean"``.
+        `flat` and `dark` maps, `meta["flat_norm"] == "mean"`.
     """
     backend = resolve_backend(dtype, device)
     gen = generator(seed, torch.device("cpu"))
@@ -79,9 +79,9 @@ def simulate_shading(x: Tensor, shading: ShadingEstimate) -> Tensor:
     x : (*batch, frames, H, W) Tensor
         Unshaded signal.
     shading : ShadingEstimate
-        Fields that are None are treated as absent terms (``flat = 1``,
-        ``dark = 0``, ``baseline = 0``). ``baseline`` has shape
-        ``(*batch, frames)``.
+        Fields that are None are treated as absent terms (`flat = 1`,
+        `dark = 0`, `baseline = 0`). `baseline` has shape
+        `(*batch, frames)`.
 
     Returns
     -------

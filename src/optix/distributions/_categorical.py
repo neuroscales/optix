@@ -19,28 +19,28 @@ class CategoricalExpectations(NamedTuple):
 
 
 class Categorical(Distribution):
-    """Categorical distribution over ``K`` categories (event shape ``()``).
+    """Categorical distribution over `K` categories (event shape `()`).
 
     Notes
     -----
-    Give exactly one of ``probs`` or ``logits``; it is stored as given
+    Give exactly one of `probs` or `logits`; it is stored as given
     (unnormalised, categories in the last dim) and the normalised forms
-    are derived on access. ``Categorical(logits=elog_pi + elog_lik)`` is
+    are derived on access. `Categorical(logits=elog_pi + elog_lik)` is
     the variational update of responsibilities.
 
     **Values.** The representation of a value is read from its dtype:
 
-    - integer dtype: labels in ``[0, K)``, shape ``(*batch,)``;
-    - floating or boolean dtype: one-hot or soft assignments ``r``, shape
-      ``(*batch, K)``; ``log_prob(r)`` = ∑ₖ rₖ ln pₖ is the expected
+    - integer dtype: labels in `[0, K)`, shape `(*batch,)`;
+    - floating or boolean dtype: one-hot or soft assignments `r`, shape
+      `(*batch, K)`; `log_prob(r)` = ∑ₖ rₖ ln pₖ is the expected
       log-likelihood used by variational Bayes.
 
     Integers always mean labels, including the int64 output of
-    ``torch.nn.functional.one_hot``: cast it with ``.float()`` or
-    ``.bool()`` first.
+    `torch.nn.functional.one_hot`: cast it with `.float()` or
+    `.bool()` first.
     [`sample`][optix.distributions.Categorical.sample] returns int64
-    labels, or float one-hot vectors with ``one_hot=True``. Expectations
-    ([`mean`][optix.distributions.Categorical.mean] = ``probs``), entropy
+    labels, or float one-hot vectors with `one_hot=True`. Expectations
+    ([`mean`][optix.distributions.Categorical.mean] = `probs`), entropy
     and KL do not depend on the representation. There is no
     reparameterised sampling (as in torch,
     [`rsample`][optix.distributions.Distribution.rsample] raises).
@@ -72,12 +72,12 @@ class Categorical(Distribution):
         probs : (*batch, K) Tensor, optional
             Non-negative weights, normalised by their sum.
         logits : (*batch, K) Tensor, optional
-            Log-weights, normalised by ``log_softmax``.
+            Log-weights, normalised by `log_softmax`.
         validate, cache, dtype, device
-            See [`Gamma`][optix.distributions.Gamma]. ``validate=True``
+            See [`Gamma`][optix.distributions.Gamma]. `validate=True`
             also makes [`log_prob`][optix.distributions.Categorical.log_prob]
-            check that integer labels are in range (kept by ``expand``,
-            indexing, ``to`` and ``detach``).
+            check that integer labels are in range (kept by `expand`,
+            indexing, `to` and `detach`).
         """
         if (probs is None) == (logits is None):
             raise ValueError(
@@ -133,22 +133,22 @@ class Categorical(Distribution):
 
     @property
     def logits(self) -> Tensor:
-        """Normalised logits ln p, ``(*batch, K)``."""
+        """Normalised logits ln p, `(*batch, K)`."""
         return self._view("norm_logits")
 
     @property
     def probs(self) -> Tensor:
-        """Normalised probabilities p, ``(*batch, K)``."""
+        """Normalised probabilities p, `(*batch, K)`."""
         return self._view("norm_probs")
 
     @property
     def mean(self) -> Tensor:
-        """E[onehot(z)] = p, ``(*batch, K)``."""
+        """E[onehot(z)] = p, `(*batch, K)`."""
         return self.probs
 
     @property
     def variance(self) -> Tensor:
-        """Var[onehot(z)ₖ] = pₖ (1 − pₖ), ``(*batch, K)``."""
+        """Var[onehot(z)ₖ] = pₖ (1 − pₖ), `(*batch, K)`."""
         p = self._get("norm_probs")
         return self._out(p * (1 - p), 1)
 
@@ -162,9 +162,9 @@ class Categorical(Distribution):
         Parameters
         ----------
         value : Tensor
-            Integer labels ``(*sample, *batch)``: ln p[value]. Or
+            Integer labels `(*sample, *batch)`: ln p[value]. Or
             floating / boolean one-hot or soft assignments
-            ``(*sample, *batch, K)``: ∑ₖ rₖ ln pₖ (with 0 ln 0 = 0).
+            `(*sample, *batch, K)`: ∑ₖ rₖ ln pₖ (with 0 ln 0 = 0).
 
         Returns
         -------
@@ -175,15 +175,15 @@ class Categorical(Distribution):
         Raises
         ------
         ValueError
-            If the last dim of an assignment is not ``K``, or if a label
+            If the last dim of an assignment is not `K`, or if a label
             is out of range and the object was built with
-            ``validate=True`` (that check synchronises and is skipped
+            `validate=True` (that check synchronises and is skipped
             while compiling).
 
         Notes
         -----
-        Without ``validate=True``, labels are not range-checked: an
-        out-of-range label raises a ``RuntimeError`` on the CPU and a
+        Without `validate=True`, labels are not range-checked: an
+        out-of-range label raises a `RuntimeError` on the CPU and a
         device-side assert on CUDA (which leaves the CUDA context
         unusable), so validate labels when their source is not trusted.
         """
@@ -225,10 +225,10 @@ class Categorical(Distribution):
     def sample(
         self, sample_shape: Sequence[int] = (), *, one_hot: bool = False
     ) -> Tensor:
-        """Samples: int64 labels, or float one-hot vectors (``one_hot``).
+        """Samples: int64 labels, or float one-hot vectors (`one_hot`).
 
-        Labels have shape ``(*sample_shape, *batch)``; one-hot vectors
-        ``(*sample_shape, *batch, K)`` in the distribution's dtype.
+        Labels have shape `(*sample_shape, *batch)`; one-hot vectors
+        `(*sample_shape, *batch, K)` in the distribution's dtype.
         """
         labels = self.to_torch().sample(torch.Size(sample_shape))
         if not one_hot:
@@ -239,8 +239,8 @@ class Categorical(Distribution):
     def natural_params(self) -> tuple[Tensor]:
         """(η,): the stored log-weights, up to an additive constant.
 
-        For ``logits`` these are the given logits, for ``probs`` their
-        logarithm (unnormalised), so that ``log_normalizer`` is
+        For `logits` these are the given logits, for `probs` their
+        logarithm (unnormalised), so that `log_normalizer` is
         logsumexp(η).
         """
         return (self._view("eta"),)
@@ -255,11 +255,11 @@ class Categorical(Distribution):
 
     @classmethod
     def from_natural(cls, eta: Tensor) -> Self:
-        """Distribution with logits ``eta`` (η), stored as given."""
+        """Distribution with logits `eta` (η), stored as given."""
         return cls._new(eta, form=("logits",))
 
     def to_torch(self) -> torch.distributions.Categorical:
-        """``torch.distributions.Categorical(logits=logits)``."""
+        """`torch.distributions.Categorical(logits=logits)`."""
         return torch.distributions.Categorical(
             logits=self.logits, validate_args=False
         )

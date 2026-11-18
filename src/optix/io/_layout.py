@@ -27,24 +27,24 @@ class Layout:
       be the storage order.
     * **sample** axes index pictures that share the same parameters
       (frames, time points, z planes, ...). Iterators flatten them, in
-      storage order, into one leading axis of length ``n``.
+      storage order, into one leading axis of length `n`.
     * **group** axes index independent fits (e.g. one flat field per
-      channel). Parameter maps are shaped ``(*group, *spatial)``, with the
+      channel). Parameter maps are shaped `(*group, *spatial)`, with the
       group axes in the order given here.
 
     Every axis has exactly one role; axes that are not named default to
-    ``sample``.
+    `sample`.
 
     Parameters
     ----------
     axes : str or sequence of str, optional
         Axis labels, in storage order: a string of single-character names
-        (``"tczyx"``) or a sequence of names. Without labels, roles are
+        (`"tczyx"`) or a sequence of names. Without labels, roles are
         given by (possibly negative) positions.
     spatial : str, int or sequence of str / int
         Spatial axes, in the order wanted for chunks and maps. A string is
         split into characters when every label is a single character
-        (``"yx"``), else it names one axis.
+        (`"yx"`), else it names one axis.
     sample : str, int or sequence of str / int, optional
         Sample axes (default: every axis without a role).
     group : str, int or sequence of str / int, optional
@@ -53,32 +53,32 @@ class Layout:
     Raises
     ------
     ValueError
-        For an empty ``spatial``, unknown or repeated names, positions out
+        For an empty `spatial`, unknown or repeated names, positions out
         of range, or an axis given two roles.
 
     Examples
     --------
-    Light-sheet stack stored as ``(z, y, x)``, where each ``x`` is one
-    picture of the ``(y, z)`` plane: chunks are ``(n, Y, Z)``.
+    Light-sheet stack stored as `(z, y, x)`, where each `x` is one
+    picture of the `(y, z)` plane: chunks are `(n, Y, Z)`.
 
     >>> layout = Layout("zyx", spatial="yz", sample="x")
     >>> layout.shape_of((40, 30, 500))
     ((), (500,), (30, 40))
 
-    OME-NGFF ``(t, c, z, y, x)`` with one flat field per channel, shared
-    over ``t`` and ``z``: parameter maps are ``(C, Y, X)``.
+    OME-NGFF `(t, c, z, y, x)` with one flat field per channel, shared
+    over `t` and `z`: parameter maps are `(C, Y, X)`.
 
     >>> Layout("tczyx", spatial="yx", group="c").shape_of((5, 3, 7, 64, 64))
     ((3,), (5, 7), (64, 64))
 
-    The default, ``(*samples, *spatial)`` with two trailing spatial axes:
+    The default, `(*samples, *spatial)` with two trailing spatial axes:
 
     >>> Layout.default(4, 2)
     Layout(axes=None, spatial=(-2, -1), sample=None, group=())
 
     Notes
     -----
-    A per-axis ``spacing`` (voxel size) may be added later.
+    A per-axis `spacing` (voxel size) may be added later.
     """
 
     axes: tuple[str, ...] | None = None
@@ -147,7 +147,7 @@ class Layout:
 
     @classmethod
     def default(cls, ndim_total: int, ndim_spatial: int) -> "Layout":
-        """The ``(*samples, *spatial)`` convention.
+        """The `(*samples, *spatial)` convention.
 
         Parameters
         ----------
@@ -201,7 +201,7 @@ class Layout:
         Raises
         ------
         ValueError
-            If the labels do not match ``ndim``, a position is out of range
+            If the labels do not match `ndim`, a position is out of range
             or an axis has two roles.
         """
         if self.axes is not None and len(self.axes) != ndim:
@@ -255,9 +255,9 @@ class Layout:
         )
 
     def permutation(self, ndim: int) -> tuple[int, ...]:
-        """Storage axes in ``(*group, *sample, *spatial)`` order.
+        """Storage axes in `(*group, *sample, *spatial)` order.
 
-        ``x.permute(layout.permutation(x.ndim))`` is the canonical view.
+        `x.permute(layout.permutation(x.ndim))` is the canonical view.
         """
         group, sample, spatial = self.positions(ndim)
         return group + sample + spatial
@@ -274,12 +274,12 @@ class Layout:
         return tuple(inverse)
 
     def map_shape(self, array: ArrayLike | Sequence[int]) -> tuple[int, ...]:
-        """Shape ``(*group, *spatial)`` of a fitted parameter map."""
+        """Shape `(*group, *spatial)` of a fitted parameter map."""
         group, _, spatial = self.shape_of(array)
         return group + spatial
 
     def to_dict(self) -> dict[str, object]:
-        """Plain dict (for ``state_dict``); ``Layout(**d)`` rebuilds it."""
+        """Plain dict (for `state_dict`); `Layout(**d)` rebuilds it."""
         return {
             "axes": self.axes,
             "spatial": self.spatial,
@@ -292,8 +292,8 @@ class Labeled:
     """An array-like bundled with its [`Layout`][optix.io.Layout].
 
     The wrapped array is never loaded. Built by
-    [`labeled`][optix.io.labeled]. Indexing, ``shape`` and every other
-    attribute (``dtype``, ``chunks``, ...) pass through to the wrapped
+    [`labeled`][optix.io.labeled]. Indexing, `shape` and every other
+    attribute (`dtype`, `chunks`, ...) pass through to the wrapped
     array.
 
     Attributes
@@ -304,14 +304,14 @@ class Labeled:
     """
 
     def __init__(self, array: ArrayLike, layout: Layout) -> None:
-        """Wrap ``array`` and check that ``layout`` fits its dims.
+        """Wrap `array` and check that `layout` fits its dims.
 
         Parameters
         ----------
         array : array-like
             The array to label.
         layout : Layout
-            Axis roles of ``array``.
+            Axis roles of `array`.
         """
         layout.positions(len(array.shape))
         self.array = array
@@ -402,10 +402,10 @@ def labeled(
 def bind(
     data: ArrayLike, layout: Layout | None = None, ndim: int | None = None
 ) -> tuple[ArrayLike, Layout | None]:
-    """Unwrap a ``Labeled`` and reconcile it with ``layout`` / ``ndim``.
+    """Unwrap a `Labeled` and reconcile it with `layout` / `ndim`.
 
-    Returns the raw array and the explicit layout (None when neither ``data``
-    nor ``layout`` carries one: the caller then uses the default).
+    Returns the raw array and the explicit layout (None when neither `data`
+    nor `layout` carries one: the caller then uses the default).
     """
     if isinstance(data, Labeled):
         if layout is not None and layout != data.layout:

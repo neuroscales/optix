@@ -22,23 +22,23 @@ def tile_reduce(
     overhead: float = 2.0,
     **chunk_options: object,
 ) -> Tensor | tuple[Tensor, ...]:
-    """Apply ``fn`` to row tiles holding all samples and stitch the maps.
+    """Apply `fn` to row tiles holding all samples and stitch the maps.
 
     Parameters
     ----------
     data : array-like or Labeled
         Data.
     fn : callable
-        Takes a ``(rows, *rest, N)`` tile (spatial axes in layout order,
-        ``N`` = all samples of one group, last) and returns one or several
-        ``(rows, *rest)`` maps.
+        Takes a `(rows, *rest, N)` tile (spatial axes in layout order,
+        `N` = all samples of one group, last) and returns one or several
+        `(rows, *rest)` maps.
     ndim : int, optional
         Without a layout: number of trailing spatial dims (default 2).
     layout : Layout, optional
         Axis roles (see [`row_tiles`][optix.io.row_tiles]). Tiles are cut
         along the first spatial axis.
     overhead : float
-        Chunk-sized temporaries held by ``fn`` (see
+        Chunk-sized temporaries held by `fn` (see
         [`chunk_length`][optix.io.chunk_length]).
     **chunk_options
         Forwarded to [`row_tiles`][optix.io.row_tiles].
@@ -46,7 +46,7 @@ def tile_reduce(
     Returns
     -------
     Tensor or tuple of Tensor
-        Full ``(*group, *spatial)`` maps, on the working device.
+        Full `(*group, *spatial)` maps, on the working device.
     """
     tiles = row_tiles(
         data,
@@ -102,7 +102,7 @@ def order_statistics(
     data : array-like or Labeled
         Data.
     k : int or sequence of int
-        1-based rank(s), as in ``torch.kthvalue``.
+        1-based rank(s), as in `torch.kthvalue`.
     ndim, layout : optional
         See [`tile_reduce`][optix.stats.tile_reduce].
     **kw
@@ -115,9 +115,9 @@ def order_statistics(
 
     Notes
     -----
-    Up to four ranks use repeated ``torch.kthvalue``; more ranks use one
-    ``sort`` (whose int64 indices make it heavier: ``overhead`` defaults to
-    3 then). ``torch.quantile`` is not used: it rejects large inputs.
+    Up to four ranks use repeated `torch.kthvalue`; more ranks use one
+    `sort` (whose int64 indices make it heavier: `overhead` defaults to
+    3 then). `torch.quantile` is not used: it rejects large inputs.
     NaNs give undefined results.
     """
     n = _nsamples(data, ndim, layout)
@@ -170,8 +170,8 @@ def median_mad(
     Returns
     -------
     median, mad : (*group, *spatial) Tensor
-        Lower median (rank ``(N + 1) // 2``, as ``torch.median``) and the
-        lower median of ``|data - median|``, unscaled (multiply by 1.4826 for
+        Lower median (rank `(N + 1) // 2`, as `torch.median`) and the
+        lower median of `|data - median|`, unscaled (multiply by 1.4826 for
         a Gaussian standard deviation).
     """
     n = _nsamples(data, ndim, layout)

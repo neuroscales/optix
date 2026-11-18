@@ -42,7 +42,7 @@ def _batch_dims(
 
 
 def _sum(t: Tensor, dims: tuple[int, ...]) -> Tensor:
-    """``t.sum(dims)``; nothing is reduced when ``dims`` is empty."""
+    """`t.sum(dims)`; nothing is reduced when `dims` is empty."""
     return t.sum(dims) if dims else t
 
 
@@ -57,7 +57,7 @@ def _prepare(
     weight: Tensor | None,
     dim: int | Sequence[int] | None,
 ) -> tuple[Tensor, Tensor | None, tuple[int, ...], torch.Size]:
-    """Float ``x``, weights broadcast to its batch part, reduced dims."""
+    """Float `x`, weights broadcast to its batch part, reduced dims."""
     x = torch.as_tensor(x)
     if not x.is_floating_point():
         x = x.to(resolve_backend()["dtype"])
@@ -75,7 +75,7 @@ def _count(
     batch: torch.Size,
     like: Tensor,
 ) -> Tensor:
-    """Total weight over ``dims``, in its storage dtype.
+    """Total weight over `dims`, in its storage dtype.
 
     Without weights, the exact number of samples (int64); otherwise the
     sum of the weights, reduced in their dtype and stored in float64.
@@ -95,7 +95,7 @@ def _count_dtype(t: Tensor) -> torch.dtype:
 def _wsum(
     t: Tensor, weight: Tensor | None, dims: tuple[int, ...], e: int
 ) -> Tensor:
-    """``sum(w * t)`` over the batch ``dims`` of ``t`` (``e`` event dims)."""
+    """`sum(w * t)` over the batch `dims` of `t` (`e` event dims)."""
     if weight is not None:
         t = weight.reshape(weight.shape + (1,) * e) * t
     return _sum(t, dims)
@@ -119,32 +119,32 @@ class SuffStats:
     Holds ∑ wₙ T(xₙ) and the total weight n = ∑ wₙ over a set of samples
     (observed values, or expectations of latent ones). This is what models
     accumulate over batches and what
-    [`posterior`][optix.distributions.posterior] and the ``fit``
+    [`posterior`][optix.distributions.posterior] and the `fit`
     classmethods consume.
 
-    Fields have shape ``(*batch, *field_event)`` and are broadcast against
+    Fields have shape `(*batch, *field_event)` and are broadcast against
     each other. **dtype**: the statistics of a batch are reduced in the
-    data's own dtype (no data-sized upcast); ``dtype=`` in the
+    data's own dtype (no data-sized upcast); `dtype=` in the
     constructors casts only the reduced result, which is how a float64
-    running state is obtained from float32 data. **Counts** (``n``, and
-    the ``counts`` of
+    running state is obtained from float32 data. **Counts** (`n`, and
+    the `counts` of
     [`CategoricalStats`][optix.distributions.CategoricalStats]) are small
     and exact whatever the data dtype: int64 when unweighted, float64 when
-    they are sums of weights (a float32 count stops counting past ``2**24``).
+    they are sums of weights (a float32 count stops counting past `2**24`).
     Merging an int64 count with a float64 one gives a float64 count, and
     [`dtype`][optix.distributions.SuffStats.dtype],
     [`to`][optix.distributions.SuffStats.to] and the constructors'
-    ``dtype=`` apply to the other fields only.
+    `dtype=` apply to the other fields only.
 
-    Statistics merge with ``+`` (out of place),
+    Statistics merge with `+` (out of place),
     [`add_`][optix.distributions.SuffStats.add_] (in place, also
     available as [`merge`][optix.distributions.SuffStats.merge]) and
     [`sum`][optix.distributions.SuffStats.sum] (over batch dims);
-    ``zeros()`` is the identity of ``+`` and n = 0 entries are legal
+    `zeros()` is the identity of `+` and n = 0 entries are legal
     everywhere. Weights must be non-negative (not checked).
     """
 
-    # No ``__slots__``: see the note in ``Distribution`` (torch 2.3's
+    # No `__slots__`: see the note in `Distribution` (torch 2.3's
     # dynamo evaluates the properties of slotted objects eagerly).
     _values: tuple[Tensor, ...]
     _batch_shape: torch.Size
@@ -164,7 +164,7 @@ class SuffStats:
             def get(self: SuffStats, i: int = i) -> Tensor:
                 return self._values[i]
 
-            get.__doc__ = f"Field ``{name}``."
+            get.__doc__ = f"Field `{name}`."
             setattr(cls, name, property(get))
 
     def _setup(self, *values: object) -> None:
@@ -238,7 +238,7 @@ class SuffStats:
         return self._values
 
     def _full(self) -> tuple[Tensor, ...]:
-        """Fields expanded to ``batch_shape + field_event``."""
+        """Fields expanded to `batch_shape + field_event`."""
         out = []
         for t, (_, e) in zip(self._values, self._fields, strict=True):
             out.append(t.expand(self._batch_shape + t.shape[t.ndim - e :]))
@@ -285,18 +285,18 @@ class SuffStats:
         return self._new(*self._combine(self._values, other._values))
 
     def __radd__(self, other: object) -> Self:
-        """``0 + s``, so that ``sum([s1, s2, ...])`` works."""
+        """`0 + s`, so that `sum([s1, s2, ...])` works."""
         if isinstance(other, int) and other == 0:
             return self.copy()
         return NotImplemented
 
     def add_(self, other: Self) -> Self:
-        """Merge ``other`` into ``self``, in place; return ``self``.
+        """Merge `other` into `self`, in place; return `self`.
 
-        ``self``'s fields must have the full batch shape and own their
+        `self`'s fields must have the full batch shape and own their
         memory (build it with [`zeros`][optix.distributions.SuffStats.zeros] or
-        [`copy`][optix.distributions.SuffStats.copy]). ``other`` is
-        cast to ``self``'s dtype and device first, so a float64
+        [`copy`][optix.distributions.SuffStats.copy]). `other` is
+        cast to `self`'s dtype and device first, so a float64
         accumulator accepts float32 batch statistics. An int64 count that
         receives a float64 (weighted) count is replaced by a float64
         tensor (the only field that is not updated in place).
@@ -340,12 +340,12 @@ class SuffStats:
     def merge(self, other: Self) -> Self:
         """Alias of [`add_`][optix.distributions.SuffStats.add_].
 
-        This is the ``Reducer.merge`` name.
+        This is the `Reducer.merge` name.
         """
         return self.add_(other)
 
     def scale(self, factor: Tensor | float) -> Self:
-        """Statistics with the total weight multiplied by ``factor``.
+        """Statistics with the total weight multiplied by `factor`.
 
         Used for tempering, subsampling corrections and stochastic VB.
         """
@@ -355,7 +355,7 @@ class SuffStats:
         return self._new(*self._scaled(factor))
 
     def sum(self, dim: int | Sequence[int] | None = None) -> Self:
-        """Merge along batch dims (``None``: all); event dims are kept.
+        """Merge along batch dims (`None`: all); event dims are kept.
 
         Negative dims count from the last batch dim.
         """
@@ -370,7 +370,7 @@ class SuffStats:
     ) -> Self:
         """Copy on another device and/or floating dtype.
 
-        Unlike ``optix.stats.Reducer.to``, this returns a new object. The
+        Unlike `optix.stats.Reducer.to`, this returns a new object. The
         count keeps its int64 / float64 dtype.
         """
         out = []
@@ -388,7 +388,7 @@ class SuffStats:
         return self._new(*(t.clone() for t in self._full()))
 
     def state_dict(self) -> dict[str, object]:
-        """``{"class", "args", "state"}``, as ``Reducer.state_dict``."""
+        """`{"class", "args", "state"}`, as `Reducer.state_dict`."""
         names = [n for n, _ in self._fields]
         return {
             "class": type(self).__name__,
@@ -414,17 +414,17 @@ class SuffStats:
         dtype: torch.dtype | None = None,
         device: torch.device | str | None = None,
     ) -> Self:
-        """Empty accumulator (identity of ``+``) with owned fields.
+        """Empty accumulator (identity of `+`) with owned fields.
 
         Parameters
         ----------
         batch_shape : sequence of int
             Batch shape.
         event_shape : sequence of int
-            Event shape of the family (``(K,)`` for Dirichlet and
+            Event shape of the family (`(K,)` for Dirichlet and
             Categorical statistics).
         dtype, device
-            Default: the configuration. Pass ``torch.float64`` for a
+            Default: the configuration. Pass `torch.float64` for a
             running state accumulated over many batches: float32 sums
             lose their low digits as they grow. The count is int64 (it
             becomes float64 when a weighted count is merged into it).
@@ -443,7 +443,7 @@ class SuffStats:
 
 
 class GammaStats(SuffStats):
-    """Statistics of a Gamma likelihood: ``(n, sum_x, sum_log_x)``."""
+    """Statistics of a Gamma likelihood: `(n, sum_x, sum_log_x)`."""
 
     _fields = (("n", 0), ("sum_x", 0), ("sum_log_x", 0))
     sum_x: Tensor
@@ -485,11 +485,11 @@ class GammaStats(SuffStats):
             Samples > 0.
         weight : Tensor, optional
             Non-negative frequency weights (or a boolean mask),
-            broadcastable to ``x``.
+            broadcastable to `x`.
         dim : int or sequence of int or None
-            Reduced dims (``None``: all, ``()``: none). Required.
+            Reduced dims (`None`: all, `()`: none). Required.
         dtype : torch.dtype, optional
-            dtype of the result (the reduction runs in ``x``'s dtype).
+            dtype of the result (the reduction runs in `x`'s dtype).
 
         Returns
         -------
@@ -517,8 +517,8 @@ class GammaStats(SuffStats):
     ) -> Self:
         """Statistics of latent samples given E[ln x] and E[x].
 
-        The arguments are the fields of ``Gamma.expected_stats()``;
-        ``weight``, ``dim`` and ``dtype`` as in
+        The arguments are the fields of `Gamma.expected_stats()`;
+        `weight`, `dim` and `dtype` as in
         [`from_samples`][optix.distributions.GammaStats.from_samples].
         """
         log_x, x = torch.broadcast_tensors(
@@ -534,7 +534,7 @@ class GammaStats(SuffStats):
 
 
 class DirichletStats(SuffStats):
-    """Statistics of a Dirichlet likelihood: ``(n, sum_log_x)``."""
+    """Statistics of a Dirichlet likelihood: `(n, sum_log_x)`."""
 
     _fields = (("n", 0), ("sum_log_x", 1))
     sum_log_x: Tensor
@@ -545,7 +545,7 @@ class DirichletStats(SuffStats):
         Parameters
         ----------
         n : Tensor
-            Total weight ∑ w, shape ``(*batch)``.
+            Total weight ∑ w, shape `(*batch)`.
         sum_log_x : (*batch, K) Tensor
             ∑ w ln x.
         """
@@ -560,10 +560,10 @@ class DirichletStats(SuffStats):
         dim: int | Sequence[int] | None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Statistics of observed points ``x`` of the simplex ``(..., K)``.
+        """Statistics of observed points `x` of the simplex `(..., K)`.
 
-        ``weight`` broadcasts against ``x.shape[:-1]``; ``dim`` are batch
-        dims (the last dim of ``x`` is the event); see
+        `weight` broadcasts against `x.shape[:-1]`; `dim` are batch
+        dims (the last dim of `x` is the event); see
         [`GammaStats.from_samples`][optix.distributions.GammaStats.from_samples].
         """
         x, w, dims, batch = _prepare(cls.__name__, x, 1, weight, dim)
@@ -584,8 +584,8 @@ class DirichletStats(SuffStats):
     ) -> Self:
         """Statistics of latent probability vectors given E[ln x].
 
-        ``log_x`` is ``Dirichlet.expected_stats().log_x`` (or
-        ``Dirichlet.mean_log``), shape ``(..., K)``.
+        `log_x` is `Dirichlet.expected_stats().log_x` (or
+        `Dirichlet.mean_log`), shape `(..., K)`.
         """
         log_x, w, dims, batch = _prepare(cls.__name__, log_x, 1, weight, dim)
         return cls._new(
@@ -595,7 +595,7 @@ class DirichletStats(SuffStats):
 
 
 class CategoricalStats(SuffStats):
-    """Statistics of a categorical likelihood: ``counts`` ``(*batch, K)``."""
+    """Statistics of a categorical likelihood: `counts` `(*batch, K)`."""
 
     _fields = (("counts", 1),)
     counts: Tensor
@@ -607,16 +607,16 @@ class CategoricalStats(SuffStats):
         ----------
         counts : (*batch, K) Tensor
             Weighted counts ∑ w onehot(z) (or ∑ w p for soft
-            assignments). ``n = counts.sum(-1)``. Stored as int64 when
+            assignments). `n = counts.sum(-1)`. Stored as int64 when
             integral (unweighted labels), else float64, whatever
-            ``dtype=`` says (see
+            `dtype=` says (see
             [`SuffStats`][optix.distributions.SuffStats]).
         """
         self._setup(counts)
 
     @property
     def n(self) -> Tensor:
-        """Total weight ``counts.sum(-1)``."""
+        """Total weight `counts.sum(-1)`."""
         return self._values[0].sum(-1)
 
     @classmethod
@@ -628,7 +628,7 @@ class CategoricalStats(SuffStats):
         dim: int | Sequence[int] | None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Statistics of one-hot or soft assignments ``x`` ``(..., K)``.
+        """Statistics of one-hot or soft assignments `x` `(..., K)`.
 
         See [`from_samples`][optix.distributions.GammaStats.from_samples]
         of `GammaStats`; for integer labels use
@@ -647,9 +647,9 @@ class CategoricalStats(SuffStats):
         dim: int | Sequence[int] | None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Statistics of latent labels given their probabilities ``E[x]``.
+        """Statistics of latent labels given their probabilities `E[x]`.
 
-        ``x`` is ``Categorical.expected_stats().x`` (the responsibilities).
+        `x` is `Categorical.expected_stats().x` (the responsibilities).
         """
         return cls.from_samples(x, weight, dim=dim, dtype=dtype)
 
@@ -663,7 +663,7 @@ class CategoricalStats(SuffStats):
         dim: int | Sequence[int] | None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Statistics of integer labels in ``[0, num_classes)``.
+        """Statistics of integer labels in `[0, num_classes)`.
 
         Parameters
         ----------
@@ -673,12 +673,12 @@ class CategoricalStats(SuffStats):
             Number of categories K.
         weight, dim, dtype
             As in [`from_samples`][optix.distributions.GammaStats.from_samples]
-            of `GammaStats` (``dtype`` is accepted for symmetry; counts are
+            of `GammaStats` (`dtype` is accepted for symmetry; counts are
             int64 without weights, float64 with).
 
         Notes
         -----
-        The labels are scattered into a ``(*kept, K)`` buffer: no one-hot
+        The labels are scattered into a `(*kept, K)` buffer: no one-hot
         tensor of the data's size is built. Weights are summed in their
         own floating dtype (integer or boolean weights in the
         configuration's), then stored in float64.
@@ -708,10 +708,10 @@ class CategoricalStats(SuffStats):
 
 
 class NormalStats(SuffStats):
-    """Statistics of a Normal likelihood, central form ``(n, mean, scatter)``.
+    """Statistics of a Normal likelihood, central form `(n, mean, scatter)`.
 
     mean = ∑ w x / n and scatter = ∑ w (x − mean)², the same state as
-    ``optix.stats.Moments(order=2)``. Raw power sums are never formed, so
+    `optix.stats.Moments(order=2)`. Raw power sums are never formed, so
     large offsets do not destroy the scatter in float32.
 
     !!! references "References"
@@ -745,7 +745,7 @@ class NormalStats(SuffStats):
         mean : Tensor
             Weighted mean (any value where n = 0, conventionally 0).
         scatter : Tensor
-            Weighted sum of squared deviations from ``mean``.
+            Weighted sum of squared deviations from `mean`.
         """
         self._setup(n, mean, scatter)
 
@@ -853,12 +853,12 @@ class NormalStats(SuffStats):
 
     @classmethod
     def from_moments(cls, moments: "Moments") -> Self:
-        """``(count, mean, m2)`` of an ``optix.stats.Moments``.
+        """`(count, mean, m2)` of an `optix.stats.Moments`.
 
-        ``mean`` and ``m2`` are not copied; the count is stored as a
+        `mean` and `m2` are not copied; the count is stored as a
         float64 (or int64) count.
 
-        Requires ``order >= 2`` and at least one update.
+        Requires `order >= 2` and at least one update.
         """
         if moments.order < 2 or moments.count is None:
             raise ValueError(

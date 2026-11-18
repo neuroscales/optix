@@ -20,7 +20,7 @@ class DirichletExpectations(NamedTuple):
 
 
 class Dirichlet(Distribution):
-    """Dirichlet distribution over the simplex (event shape ``(K,)``).
+    """Dirichlet distribution over the simplex (event shape `(K,)`).
 
     p(π) = Γ(α₀) / ∏ Γ(αₖ) · ∏ πₖ^(αₖ − 1) with α₀ = ∑ αₖ.
 
@@ -64,12 +64,12 @@ class Dirichlet(Distribution):
 
     @property
     def concentration(self) -> Tensor:
-        """Concentration α, ``(*batch, K)``."""
+        """Concentration α, `(*batch, K)`."""
         return self._view("concentration")
 
     @property
     def mean(self) -> Tensor:
-        """E[π] = α / α₀, ``(*batch, K)``."""
+        """E[π] = α / α₀, `(*batch, K)`."""
         return self._out(F.dirichlet_mean(*self.params()), 1)
 
     @property
@@ -79,7 +79,7 @@ class Dirichlet(Distribution):
 
     @property
     def mean_log(self) -> Tensor:
-        """E[ln π] = ψ(α) − ψ(α₀), ``(*batch, K)``."""
+        """E[ln π] = ψ(α) − ψ(α₀), `(*batch, K)`."""
         return self._out(F.dirichlet_mean_log(*self.params()), 1)
 
     def entropy(self) -> Tensor:
@@ -111,7 +111,7 @@ class Dirichlet(Distribution):
         return cls._new(eta_log_x + 1)
 
     def to_torch(self) -> torch.distributions.Dirichlet:
-        """``torch.distributions.Dirichlet(concentration)``."""
+        """`torch.distributions.Dirichlet(concentration)`."""
         return torch.distributions.Dirichlet(
             self.concentration, validate_args=False
         )
@@ -128,7 +128,7 @@ class Dirichlet(Distribution):
 
         Maximises n (ln Γ(α₀) − ∑ ln Γ(αₖ)) + ∑ (αₖ − 1) ∑ ln xₖ with
         [`fit_dirichlet`][optix.special.fit_dirichlet], started at
-        ``init``.
+        `init`.
 
         Parameters
         ----------
@@ -144,7 +144,7 @@ class Dirichlet(Distribution):
         Returns
         -------
         Dirichlet
-            Batch shape ``broadcast(stats.batch_shape, init)``.
+            Batch shape `broadcast(stats.batch_shape, init)`.
         """
         if isinstance(init, Dirichlet):
             alpha0 = init._get("concentration")

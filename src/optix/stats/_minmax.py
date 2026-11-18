@@ -18,11 +18,11 @@ class MinMax(Reducer):
     Attributes
     ----------
     min, max : Tensor
-        Running extrema (``+inf`` / ``-inf`` where nothing was seen).
+        Running extrema (`+inf` / `-inf` where nothing was seen).
 
     Notes
     -----
-    NaNs propagate: mask them out with ``weight`` instead. ``weight`` is a
+    NaNs propagate: mask them out with `weight` instead. `weight` is a
     boolean mask (nonzero = keep).
     """
 
@@ -40,7 +40,7 @@ class MinMax(Reducer):
         super().__init__(dim=dim)
 
     def update(self, x: Tensor, *, weight: Tensor | None = None) -> Self:
-        """Add a chunk of data; ``weight`` is an optional boolean mask."""
+        """Add a chunk of data; `weight` is an optional boolean mask."""
         x = x.detach()
         if not x.is_floating_point():
             x = x.to(torch.get_default_dtype())

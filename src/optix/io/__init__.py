@@ -2,8 +2,8 @@
 
 Axis roles (spatial, sample, group) are declared with a
 [`Layout`][optix.io.Layout], either attached to the data with
-[`labeled`][optix.io.labeled] or passed as ``layout=``. Without one, data
-are ``(*samples, *spatial)`` with ``ndim`` trailing spatial dims.
+[`labeled`][optix.io.labeled] or passed as `layout=`. Without one, data
+are `(*samples, *spatial)` with `ndim` trailing spatial dims.
 """
 
 from ._arrays import (

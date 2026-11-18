@@ -50,7 +50,7 @@ def chunk_length(
     multiple: int | None = None,
     maximum: int | None = None,
 ) -> int:
-    """How many items (frames, rows, ...) of ``item_shape`` fit the budget.
+    """How many items (frames, rows, ...) of `item_shape` fit the budget.
 
     The budget is the size of **one chunk on the working device**, not the
     total memory used by the process.
@@ -64,10 +64,10 @@ def chunk_length(
     memory : int, optional
         Budget in bytes (default: configuration).
     batch : int, optional
-        If set, the budget is ``batch * prod(frame_shape)`` elements
-        instead (``batch`` wins over ``memory``).
+        If set, the budget is `batch * prod(frame_shape)` elements
+        instead (`batch` wins over `memory`).
     frame_shape : sequence of int, optional
-        Shape of one frame (used with ``batch``; default ``item_shape``).
+        Shape of one frame (used with `batch`; default `item_shape`).
     overhead : float
         Number of chunk-sized temporaries, in the working dtype, that the
         consumer holds, counting the chunk itself.
@@ -99,11 +99,11 @@ def chunk_length(
 
 
 def _prefetch(source: Iterable[T], depth: int) -> Iterator[T]:
-    """Run ``source`` in a daemon thread, keeping up to ``depth`` items ready.
+    """Run `source` in a daemon thread, keeping up to `depth` items ready.
 
-    Exceptions raised by ``source`` are re-raised in the consumer. When the
-    consumer stops early (``break``, ``close()``), the thread is stopped and
-    joined. Up to ``depth + 2`` items are alive at a time.
+    Exceptions raised by `source` are re-raised in the consumer. When the
+    consumer stops early (`break`, `close()`), the thread is stopped and
+    joined. Up to `depth + 2` items are alive at a time.
     """
     items: queue.Queue = queue.Queue(maxsize=depth)
     stop = threading.Event()
@@ -149,7 +149,7 @@ def _prefetch(source: Iterable[T], depth: int) -> Iterator[T]:
 
 
 def _pad(x: Tensor, pad: Sequence[tuple[int, int]], mode: str) -> Tensor:
-    """Pad the trailing ``len(pad)`` dims of ``x``."""
+    """Pad the trailing `len(pad)` dims of `x`."""
     offset = x.ndim - len(pad)
     for d, (before, after) in enumerate(pad):
         if not (before or after):
@@ -205,7 +205,7 @@ class _View:
     def copies(self, contiguous: bool) -> bool:
         """Whether turning a loaded block into a chunk may copy it.
 
-        With ``contiguous``, any permutation to layout order copies.
+        With `contiguous`, any permutation to layout order copies.
         Otherwise only flattening sample axes that are not adjacent in
         storage (a spatial axis lies between them) does.
         """
@@ -218,7 +218,7 @@ class _View:
         return False
 
     def inner(self, plan: Plan) -> Index:
-        """``plan.inner`` (blocked axes in storage order) in layout order."""
+        """`plan.inner` (blocked axes in storage order) in layout order."""
         ranks = {a: i for i, a in enumerate(self._blocked)}
         return tuple(plan.inner[ranks[a]] for a in self.spatial)
 
@@ -226,34 +226,34 @@ class _View:
 class Chunk(tuple):
     """One loaded chunk.
 
-    Unpacks as ``(index, data)``, or ``(index, data, inner)`` for
+    Unpacks as `(index, data)`, or `(index, data, inner)` for
     [`blocks`][optix.io.blocks].
 
     Attributes
     ----------
     index : Index
         Region of the core in the source, in storage order (full-length:
-        ints and slices). ``out[index] = ...`` is only valid for the default
+        ints and slices). `out[index] = ...` is only valid for the default
         layout and a chunk spanning one sample axis: use
         [`store`][optix.io.Chunk.store].
     data : Tensor
         Loaded data, owned by the consumer; a strided view in layout
-        order unless the iterator was built with ``contiguous=True``.
-        [`frame_batches`][optix.io.frame_batches]: ``(n, *spatial)``;
-        [`row_tiles`][optix.io.row_tiles]: ``(*sample, *spatial)``;
-        [`blocks`][optix.io.blocks]: ``(*spatial)`` core + halo. Spatial
+        order unless the iterator was built with `contiguous=True`.
+        [`frame_batches`][optix.io.frame_batches]: `(n, *spatial)`;
+        [`row_tiles`][optix.io.row_tiles]: `(*sample, *spatial)`;
+        [`blocks`][optix.io.blocks]: `(*spatial)` core + halo. Spatial
         axes are in layout order, sample axes in storage order.
     inner : Index or None
-        Crop of ``data`` that gives the core ([`blocks`][optix.io.blocks]
+        Crop of `data` that gives the core ([`blocks`][optix.io.blocks]
         only).
     group : tuple of int
         Position along the group axes (layout order).
     samples : tuple of slice
         Region along the sample axes (storage order); index a per-sample
-        state of shape ``(*group, *sample, ...)`` with
-        ``state[chunk.group + chunk.samples]``.
+        state of shape `(*group, *sample, ...)` with
+        `state[chunk.group + chunk.samples]`.
     sample_shape : tuple of int
-        Shape of ``samples``; ``n`` is its product.
+        Shape of `samples`; `n` is its product.
     spatial : tuple of slice
         Region of the core along the spatial axes (layout order).
     """
@@ -327,26 +327,26 @@ class Chunk(tuple):
         *,
         into: str = "source",
     ) -> None:
-        """Write a result computed from this chunk into ``out``.
+        """Write a result computed from this chunk into `out`.
 
         Parameters
         ----------
         out : writable array-like
             Destination (a [`Labeled`][optix.io.Labeled] is unwrapped).
         result : Tensor
-            Shaped like ``data`` along the sample and spatial axes (see
-            ``into``). For [`blocks`][optix.io.blocks], a result of the loaded
+            Shaped like `data` along the sample and spatial axes (see
+            `into`). For [`blocks`][optix.io.blocks], a result of the loaded
             shape is cropped to the core.
         into : {"source", "map", "samples"}
-            ``"source"``: ``out`` has the shape of the source, in storage
-            order, and ``result`` is ``(n, *spatial)`` (or ``data``'s
+            `"source"`: `out` has the shape of the source, in storage
+            order, and `result` is `(n, *spatial)` (or `data`'s
             shape); it is un-flattened and permuted back.
-            ``"map"``: ``out`` is a ``(*group, *spatial)`` map in layout
-            order and ``result`` is ``(*spatial)``, reduced over the
+            `"map"`: `out` is a `(*group, *spatial)` map in layout
+            order and `result` is `(*spatial)`, reduced over the
             samples (e.g. over a row tile, which holds all samples of a
             group).
-            ``"samples"``: ``out`` is a per-sample state
-            ``(*group, *sample, *rest)`` and ``result`` is ``(n, *rest)``.
+            `"samples"`: `out` is a per-sample state
+            `(*group, *sample, *rest)` and `result` is `(n, *rest)`.
         """
         if into not in _INTO:
             raise ValueError(f"into must be one of {_INTO}, got {into!r}")
@@ -402,12 +402,12 @@ class Chunks:
     Built by [`frame_batches`][optix.io.frame_batches],
     [`row_tiles`][optix.io.row_tiles] and [`blocks`][optix.io.blocks].
     Sizes and the backend are resolved at construction, so iterating twice
-    gives identical chunks and ``len()`` is exact. Items are
+    gives identical chunks and `len()` is exact. Items are
     [`Chunk`][optix.io.Chunk].
 
     Every yielded data tensor is owned by the consumer: it may be modified
     in place and never aliases the source. It is a permuted (strided) view
-    of the loaded block, not a dense copy, unless ``contiguous=True``.
+    of the loaded block, not a dense copy, unless `contiguous=True`.
 
     Attributes
     ----------
@@ -540,7 +540,7 @@ def _check_ndim(shape: tuple[int, ...], ndim: int) -> None:
 def _layout_for(
     data: ArrayLike, layout: Layout | None, ndim: int | None
 ) -> tuple[ArrayLike, Layout]:
-    """Raw source and layout (default: ``ndim`` trailing spatial dims)."""
+    """Raw source and layout (default: `ndim` trailing spatial dims)."""
     source, layout = bind(data, layout, ndim)
     if layout is None:
         ndim = 2 if ndim is None else ndim
@@ -566,7 +566,7 @@ def _amplification(
     align: Sequence[int],
     axes: Sequence[int],
 ) -> float:
-    """Product of the per-axis read amplifications along ``axes``."""
+    """Product of the per-axis read amplifications along `axes`."""
     factor = 1.0
     for a in axes:
         n, spec = shape[a], specs[a]
@@ -601,10 +601,10 @@ def frame_batches(
         Source data.
     ndim : int, optional
         Without a layout: number of trailing spatial dims (default 2); the
-        leading dims are samples (``(*batch, frames, *spatial)``).
+        leading dims are samples (`(*batch, frames, *spatial)`).
     layout : Layout, optional
         Axis roles (default: that of a [`Labeled`][optix.io.Labeled]
-        ``data``, else ``Layout.default(data.ndim, ndim)``).
+        `data`, else `Layout.default(data.ndim, ndim)`).
     overhead : float
         Number of chunk-sized temporaries the consumer holds (see
         [`chunk_length`][optix.io.chunk_length]).
@@ -612,14 +612,14 @@ def frame_batches(
         Chunk budget in bytes, explicit frame count, and read-ahead depth
         (default: configuration).
     align : sequence of int, optional
-        Storage chunks to align to (default: ``chunks_of(data)``). Pass
-        ``chunks_of(out)`` when writing to a chunked output.
+        Storage chunks to align to (default: `chunks_of(data)`). Pass
+        `chunks_of(out)` when writing to a chunked output.
     dtype, device : optional
         Working backend.
     contiguous : bool
         If True, every chunk is made dense (C-contiguous in layout order),
         e.g. for FFTs or convolutions, and that copy is counted in the
-        budget (``overhead + 1``) whenever the layout permutes the axes.
+        budget (`overhead + 1`) whenever the layout permutes the axes.
         By default chunks are strided views of the loaded block: the only
         copy is the unavoidable one when sample axes that are not adjacent
         in storage are flattened (also counted in the budget).
@@ -628,9 +628,9 @@ def frame_batches(
     -------
     Chunks
         Yields [`Chunk`][optix.io.Chunk] items, unpacking as
-        ``(index, data)``: ``data`` is ``(n, *spatial)``, the sample axes
+        `(index, data)`: `data` is `(n, *spatial)`, the sample axes
         being flattened in storage order and the spatial axes in layout
-        order. Write a result back with ``chunk.store(out, result)``.
+        order. Write a result back with `chunk.store(out, result)`.
 
     Notes
     -----
@@ -736,18 +736,18 @@ def row_tiles(
         Spatial axis along which strips are cut: a position among the
         spatial axes in layout order (negative allowed), or a name.
     overhead, memory, batch, align, dtype, device, prefetch, contiguous
-        See [`frame_batches`][optix.io.frame_batches]. With ``batch``, a
-        tile holds about as many elements as ``batch`` frames.
+        See [`frame_batches`][optix.io.frame_batches]. With `batch`, a
+        tile holds about as many elements as `batch` frames.
 
     Returns
     -------
     Chunks
         Yields [`Chunk`][optix.io.Chunk] items, unpacking as
-        ``(index, data)``: ``data`` is ``(*sample, *spatial)`` (sample
+        `(index, data)`: `data` is `(*sample, *spatial)` (sample
         axes in storage order, not flattened; spatial axes in layout order,
-        cut along ``axis``).
-        Store a per-pixel reduction with ``chunk.store(map, r,
-        into="map")``.
+        cut along `axis`).
+        Store a per-pixel reduction with `chunk.store(map, r,
+        into="map")`.
 
     Notes
     -----
@@ -863,44 +863,44 @@ def blocks(
     data : array-like or Labeled
         Source data.
     block : sequence of int or None, optional
-        Core block size along each spatial axis (layout order); ``None``
+        Core block size along each spatial axis (layout order); `None`
         entries mean the whole extent. Without a layout, the blocked dims
-        are the trailing ``len(block)`` dims. If ``block`` is None, the
+        are the trailing `len(block)` dims. If `block` is None, the
         blocked dims are the spatial axes of the layout, or without one the
-        trailing ``len(halo)`` dims (all dims if ``halo`` is a scalar), and
+        trailing `len(halo)` dims (all dims if `halo` is a scalar), and
         the size is chosen automatically: starting from the full extents,
-        the largest dim is halved until ``∏(block + 2 * halo) *
-        overhead`` fits the budget, then sizes are aligned to storage
+        the largest dim is halved until `∏(block + 2 * halo) *
+        overhead` fits the budget, then sizes are aligned to storage
         chunks. Group and sample axes are iterated one index at a time.
     halo : int or sequence of int
         Halo width along each blocked dim.
     layout : Layout, optional
         Axis roles (default: that of a [`Labeled`][optix.io.Labeled]
-        ``data``, else as described above).
+        `data`, else as described above).
     pad : {None, "reflect", "replicate", "zeros"}
         None: halos are clipped at the array boundary, so edge blocks are
         smaller and the algorithm applies its own boundary condition, as it
         would on the whole array. Otherwise every block has shape exactly
-        ``block + 2 * halo``, boundary halos and short trailing cores being
+        `block + 2 * halo`, boundary halos and short trailing cores being
         filled by padding. Where reflection would need a pad at least as
         large as the loaded extent, replicate padding is used along that
         dim instead (with a warning at construction).
     overhead, memory, batch, align, dtype, device, prefetch, contiguous
-        See [`frame_batches`][optix.io.frame_batches]. With ``batch``, the
-        budget is ``batch`` frames of the last two spatial axes.
+        See [`frame_batches`][optix.io.frame_batches]. With `batch`, the
+        budget is `batch` frames of the last two spatial axes.
 
     Returns
     -------
     Chunks
         Yields [`Chunk`][optix.io.Chunk] items, unpacking as
-        ``(index, data, inner)``: ``data`` is core + halo with the spatial
-        axes in layout order, ``data[inner]`` is the core, and ``index`` is
-        where the core lives in ``data``. ``chunk.store(out, result)``
+        `(index, data, inner)`: `data` is core + halo with the spatial
+        axes in layout order, `data[inner]` is the core, and `index` is
+        where the core lives in `data`. `chunk.store(out, result)`
         crops and writes back.
 
     Notes
     -----
-    Writing results back into ``data`` itself is wrong when ``halo > 0`` (a
+    Writing results back into `data` itself is wrong when `halo > 0` (a
     block's halo would read already-processed neighbours).
     """
     source, layout = bind(data, layout)

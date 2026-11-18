@@ -54,20 +54,20 @@ def stirling_residual(a: Tensor) -> Tensor:
 def ratio_minus_log(
     num: Tensor, den: Tensor | float = 1.0, diff: Tensor | None = None
 ) -> Tensor:
-    """y − 1 − ln y with y = ``num`` / ``den`` > 0, without cancellation.
+    """y − 1 − ln y with y = `num` / `den` > 0, without cancellation.
 
     Parameters
     ----------
     num, den : Tensor
-        Positive numerator and denominator of the ratio ``y``.
+        Positive numerator and denominator of the ratio `y`.
     diff : Tensor, optional
-        ``num - den``, when the caller has a more accurate value than the
+        `num - den`, when the caller has a more accurate value than the
         rounded difference (e.g. a sum of elementwise differences).
 
     Returns
     -------
     Tensor
-        Non-negative, ≈ x² / 2 with x = (``num`` − ``den``) / ``den``. Near
+        Non-negative, ≈ x² / 2 with x = (`num` − `den`) / `den`. Near
         y = 1 (|x| < 0.2), x − ln(1 + x) is computed as
         2u² / (1 − u) − 2 (atanh u − u) with u = x / (2 + x) and a series
         for atanh u − u; x is formed from the difference, so it keeps its

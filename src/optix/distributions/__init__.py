@@ -16,7 +16,7 @@ Two layers:
 Accumulated sufficient statistics
 ([`SuffStats`][optix.distributions.SuffStats] subclasses) are mergeable
 containers consumed by [`posterior`][optix.distributions.posterior] and
-the ``fit`` classmethods.
+the `fit` classmethods.
 """
 
 from . import (

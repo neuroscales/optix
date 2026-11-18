@@ -3,19 +3,19 @@
 Every function takes and returns tensors, broadcasts its inputs, keeps
 event dims last, never reads the configuration, never synchronises with
 the host and has no data-dependent Python control flow, so it can be
-inlined into a ``torch.compile`` kernel without graph breaks. Nothing is
+inlined into a `torch.compile` kernel without graph breaks. Nothing is
 validated: invalid parameters give NaN or infinities.
 
 Each family has one canonical signature:
 
-- Gamma: shape ``a`` and rate ``b``;
-- Dirichlet: concentration ``alpha`` of shape ``(..., K)``;
-- Categorical: normalised logits ``l`` = ln p of shape ``(..., K)``;
-- Normal: mean ``m`` and precision ``lam`` (plus
+- Gamma: shape `a` and rate `b`;
+- Dirichlet: concentration `alpha` of shape `(..., K)`;
+- Categorical: normalised logits `l` = ln p of shape `(..., K)`;
+- Normal: mean `m` and precision `lam` (plus
   [`normal_log_prob_var`][optix.distributions.functional.normal_log_prob_var]
   in variance form, for likelihood kernels).
 
-KL divergences take all parameters of ``q``, then all of ``p``, and are
+KL divergences take all parameters of `q`, then all of `p`, and are
 not clamped at zero (in float32 nearly equal distributions can give a
 slightly negative value).
 """
@@ -145,7 +145,7 @@ def gamma_mean_log_ms(mean: Tensor, shape: Tensor) -> Tensor:
 
 
 def gamma_mean_inv(a: Tensor, b: Tensor) -> Tensor:
-    """E[1 / x] = b / (a − 1) under Gamma(a, b); ``inf`` if a ≤ 1.
+    """E[1 / x] = b / (a − 1) under Gamma(a, b); `inf` if a ≤ 1.
 
     Parameters
     ----------
@@ -346,7 +346,7 @@ def _dirichlet_log_norm(alpha: Tensor) -> Tensor:
 
 
 def dirichlet_log_prob(x: Tensor, alpha: Tensor) -> Tensor:
-    """Log-density of Dir(α) at a point ``x`` of the simplex.
+    """Log-density of Dir(α) at a point `x` of the simplex.
 
     ln p(x) = ln Γ(α₀) − ∑ ln Γ(αₖ) + ∑ (αₖ − 1) ln xₖ.
 
@@ -411,7 +411,7 @@ The same function object as [`kl_dirichlet`][optix.special.kl_dirichlet].
 
 
 def categorical_normalize(logits: Tensor) -> Tensor:
-    """Normalised logits ``log_softmax(logits)`` (last dim = categories).
+    """Normalised logits `log_softmax(logits)` (last dim = categories).
 
     Parameters
     ----------
@@ -421,7 +421,7 @@ def categorical_normalize(logits: Tensor) -> Tensor:
     Returns
     -------
     (..., K) Tensor
-        ``l`` with logsumexp(l) = 0.
+        `l` with logsumexp(l) = 0.
     """
     return torch.log_softmax(logits, -1)
 
@@ -429,8 +429,8 @@ def categorical_normalize(logits: Tensor) -> Tensor:
 def categorical_logits_from_probs(probs: Tensor) -> Tensor:
     """Normalised logits ln(p / ∑ p) of non-negative weights.
 
-    Zero weights give ``-inf`` with a zero (finite) gradient, thanks to a
-    double ``where``.
+    Zero weights give `-inf` with a zero (finite) gradient, thanks to a
+    double `where`.
 
     Parameters
     ----------
@@ -453,13 +453,13 @@ def categorical_entropy(logits: Tensor) -> Tensor:
     Parameters
     ----------
     logits : (..., K) Tensor
-        Normalised logits ``l`` = ln p.
+        Normalised logits `l` = ln p.
 
     Returns
     -------
     (...) Tensor
         Entropy; the gradient stays finite where p = 0 (double
-        ``where``).
+        `where`).
     """
     p = logits.exp()
     pos = p > 0
@@ -468,19 +468,19 @@ def categorical_entropy(logits: Tensor) -> Tensor:
 
 
 def categorical_log_prob(index: Tensor, logits: Tensor) -> Tensor:
-    """Log-probability ``l[index]`` of integer labels.
+    """Log-probability `l[index]` of integer labels.
 
     Parameters
     ----------
     index : Tensor
-        Integer labels, broadcastable against ``logits.shape[:-1]``.
+        Integer labels, broadcastable against `logits.shape[:-1]`.
     logits : (..., K) Tensor
         Normalised logits.
 
     Returns
     -------
     Tensor
-        Broadcast shape of ``index`` and ``logits.shape[:-1]``.
+        Broadcast shape of `index` and `logits.shape[:-1]`.
     """
     shape = torch.broadcast_shapes(index.shape, logits.shape[:-1])
     k = logits.shape[-1]
@@ -511,13 +511,13 @@ def categorical_kl(lq: Tensor, lp: Tensor) -> Tensor:
     Parameters
     ----------
     lq, lp : (..., K) Tensor
-        Normalised logits of ``q`` and ``p``.
+        Normalised logits of `q` and `p`.
 
     Returns
     -------
     (...) Tensor
-        Divergence; ``+inf`` where q > 0 and p = 0. Gradients are finite
-        where q = 0 (double ``where``).
+        Divergence; `+inf` where q > 0 and p = 0. Gradients are finite
+        where q = 0 (double `where`).
     """
     q = lq.exp()
     pos = q > 0
@@ -530,7 +530,7 @@ def categorical_kl(lq: Tensor, lp: Tensor) -> Tensor:
 
 
 def normal_variance(lam: Tensor) -> Tensor:
-    """Variance 1 / λ of a Normal with precision ``lam`` (λ).
+    """Variance 1 / λ of a Normal with precision `lam` (λ).
 
     Parameters
     ----------
@@ -646,9 +646,9 @@ def normal_kl(mq: Tensor, lq: Tensor, mp: Tensor, lp: Tensor) -> Tensor:
     Parameters
     ----------
     mq, lq : Tensor
-        Mean and precision of ``q``.
+        Mean and precision of `q`.
     mp, lp : Tensor
-        Mean and precision of ``p``.
+        Mean and precision of `p`.
 
     Returns
     -------

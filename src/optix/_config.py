@@ -1,11 +1,11 @@
 """Process-wide and context-local configuration.
 
-The active configuration is the innermost ``with optix.config(...)`` block
+The active configuration is the innermost `with optix.config(...)` block
 of the current context, else the process-wide defaults set with
-[`set_config`][optix.set_config] (seeded at import from ``OPTIX_*`` environment
+[`set_config`][optix.set_config] (seeded at import from `OPTIX_*` environment
 variables).
 
-Public entry points (iterator construction, ``fit``, ``apply``) read the
+Public entry points (iterator construction, `fit`, `apply`) read the
 configuration once and pass explicit values down; private kernels never
 call [`get_config`][optix.get_config].
 """
@@ -41,18 +41,18 @@ class Config:
     Attributes
     ----------
     dtype : torch.dtype or None
-        Working floating-point dtype. ``None`` means
-        ``torch.get_default_dtype()``.
+        Working floating-point dtype. `None` means
+        `torch.get_default_dtype()`.
     device : torch.device or None
-        Working device. ``None`` means the device of a Tensor input, else
+        Working device. `None` means the device of a Tensor input, else
         the torch default device.
     memory : int
         Budget, in bytes, of one loaded chunk on the working device.
     batch : int or None
-        Explicit number of frames per chunk. Overrides ``memory``.
+        Explicit number of frames per chunk. Overrides `memory`.
     compile : bool
-        Whether kernels decorated with ``maybe_compile`` go through
-        ``torch.compile``.
+        Whether kernels decorated with `maybe_compile` go through
+        `torch.compile`.
     prefetch : int
         Number of chunks read ahead in a background thread (0 = off).
     """
@@ -66,7 +66,7 @@ class Config:
 
 
 class Backend(TypedDict):
-    """Resolved working dtype and device, usable as ``x.to(**backend)``."""
+    """Resolved working dtype and device, usable as `x.to(**backend)`."""
 
     dtype: torch.dtype
     device: torch.device
@@ -98,8 +98,8 @@ def parse_bytes(value: int | float | str) -> int:
     Parameters
     ----------
     value : int or float or str
-        A number of bytes (``1e9``) or a string with an optional unit
-        (``"512MiB"``, ``"2GB"``, ``"1.5 GiB"``). Decimal units (kB, MB,
+        A number of bytes (`1e9`) or a string with an optional unit
+        (`"512MiB"`, `"2GB"`, `"1.5 GiB"`). Decimal units (kB, MB,
         GB, TB) are powers of 1000, binary units (KiB, MiB, GiB, TiB) are
         powers of 1024. Units are case-insensitive.
 
@@ -213,7 +213,7 @@ def _normalize(options: dict[str, object]) -> dict[str, object]:
 
 
 def _from_environ() -> Config:
-    """Build the process-wide defaults from ``OPTIX_*`` variables."""
+    """Build the process-wide defaults from `OPTIX_*` variables."""
     cfg = Config()
     for key in ("dtype", "device", "memory", "batch", "compile"):
         var = f"OPTIX_{key.upper()}"
@@ -242,7 +242,7 @@ def get_config() -> Config:
     Returns
     -------
     Config
-        The innermost ``with config(...)`` override of the current
+        The innermost `with config(...)` override of the current
         context, else the process-wide defaults.
     """
     local = _local.get()
@@ -255,8 +255,8 @@ def set_config(**options: object) -> None:
     Parameters
     ----------
     **options
-        Any field of ``Config``. Values are validated and normalised
-        (``"float64"`` → ``torch.float64``, ``"1GiB"`` → bytes, ...).
+        Any field of `Config`. Values are validated and normalised
+        (`"float64"` → `torch.float64`, `"1GiB"` → bytes, ...).
 
     Raises
     ------
@@ -267,7 +267,7 @@ def set_config(**options: object) -> None:
 
     Notes
     -----
-    An active ``with config(...)`` block keeps shadowing the options it
+    An active `with config(...)` block keeps shadowing the options it
     overrides.
     """
     global _global
@@ -279,7 +279,7 @@ def set_config(**options: object) -> None:
 class config(contextlib.ContextDecorator):
     """Temporarily override options.
 
-    Usable as a context manager (``with optix.config(device="cuda"):``) or
+    Usable as a context manager (`with optix.config(device="cuda"):`) or
     as a decorator. Overrides apply to the current thread / asyncio task
     only: threads started inside the block see the process-wide defaults.
 
@@ -295,7 +295,7 @@ class config(contextlib.ContextDecorator):
         Parameters
         ----------
         **options
-            Any field of ``Config``. Values are validated immediately.
+            Any field of `Config`. Values are validated immediately.
         """
         self._options = _normalize(options)
         self._tokens: list[Token] = []
@@ -324,17 +324,17 @@ def resolve_backend(
     ----------
     dtype : torch.dtype or str, optional
         Explicit dtype. Default: configuration, else
-        ``torch.get_default_dtype()``. Never follows ``like``.
+        `torch.get_default_dtype()`. Never follows `like`.
     device : torch.device or str, optional
         Explicit device. Default: configuration, else the device of
-        ``like`` if it is a Tensor, else the torch default device.
+        `like` if it is a Tensor, else the torch default device.
     like : object, optional
         Input data whose device is followed when no device is set.
 
     Returns
     -------
     Backend
-        ``{"dtype": ..., "device": ...}``, usable as ``x.to(**backend)``.
+        `{"dtype": ..., "device": ...}`, usable as `x.to(**backend)`.
 
     Raises
     ------

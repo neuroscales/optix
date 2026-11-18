@@ -59,7 +59,7 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
         Right-hand side. Values ≤ 0 (which round-off can produce) are
         clamped to ε / 2, which caps ν at about 1 / ε, where ε is the
         machine epsilon of the dtype. Values above 1 / ε (including
-        ``inf``) are clamped to 1 / ε, which keeps ν ≳ ε and the result
+        `inf`) are clamped to 1 / ε, which keeps ν ≳ ε and the result
         finite.
     niter : int
         Number of Newton iterations.
@@ -67,7 +67,7 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     Returns
     -------
     Tensor
-        Shape parameter ν, same shape and dtype as ``c``.
+        Shape parameter ν, same shape and dtype as `c`.
 
     Notes
     -----
@@ -116,7 +116,7 @@ def inv_digamma(y: Tensor, niter: int = 5) -> Tensor:
     Returns
     -------
     Tensor
-        x > 0 such that ψ(x) = ``y``.
+        x > 0 such that ψ(x) = `y`.
 
     Notes
     -----
@@ -160,7 +160,7 @@ def dirichlet_elog(alpha: Tensor) -> Tensor:
 def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     """Dirichlet maximum likelihood given expected log-probabilities.
 
-    Maximises ln Γ(∑ aₖ) − ∑ ln Γ(aₖ) + ∑ (aₖ − 1) ``elogpi``ₖ over a > 0
+    Maximises ln Γ(∑ aₖ) − ∑ ln Γ(aₖ) + ∑ (aₖ − 1) `elogpi`ₖ over a > 0
     with Newton's method, using the diagonal-plus-rank-one structure of
     the Hessian.
 
@@ -170,7 +170,7 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
         Mean log-probabilities (sufficient statistics), last dim =
         categories.
     alpha : (..., K) Tensor
-        Initial concentration parameters (broadcast against ``elogpi``).
+        Initial concentration parameters (broadcast against `elogpi`).
     niter : int
         Number of iterations.
 
@@ -183,7 +183,7 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     -----
     Whenever a Newton step would make any component of a vector
     non-positive, that vector takes the fixed-point update
-    a = ψ⁻¹(ψ(∑ aₖ) + ``elogpi``) instead, which always stays positive
+    a = ψ⁻¹(ψ(∑ aₖ) + `elogpi`) instead, which always stays positive
     (and is also taken when the Newton step is not finite).
 
     Convergence is only local: Newton's method needs a warm start (for

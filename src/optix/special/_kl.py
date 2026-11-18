@@ -14,7 +14,7 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
     Parameters
     ----------
     a, b : (..., K) Tensor
-        Concentration parameters of ``q`` and ``p`` (last dim =
+        Concentration parameters of `q` and `p` (last dim =
         categories).
 
     Returns
@@ -60,9 +60,9 @@ def kl_gamma(
     Parameters
     ----------
     shape_q, rate_q : Tensor
-        Shape and rate of ``q``.
+        Shape and rate of `q`.
     shape_p, rate_p : Tensor
-        Shape and rate of ``p``.
+        Shape and rate of `p`.
 
     Returns
     -------
@@ -102,9 +102,9 @@ def kl_normal(
     Parameters
     ----------
     mean_q, var_q : Tensor
-        Mean and variance of ``q``.
+        Mean and variance of `q`.
     mean_p, var_p : Tensor
-        Mean and variance of ``p``.
+        Mean and variance of `p`.
 
     Returns
     -------

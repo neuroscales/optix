@@ -14,23 +14,23 @@ __all__ = ["Gamma", "GammaExpectations"]
 
 
 class GammaExpectations(NamedTuple):
-    """``E[T(x)]`` of a Gamma, ordered like its natural parameters."""
+    """`E[T(x)]` of a Gamma, ordered like its natural parameters."""
 
     log_x: Tensor
     x: Tensor
 
 
 class Gamma(Distribution):
-    """Gamma distribution over x > 0, elementwise (event shape ``()``).
+    """Gamma distribution over x > 0, elementwise (event shape `()`).
 
     p(x) = bᵃ xᵃ⁻¹ exp(−b x) / Γ(a) with shape a and rate b.
 
     Notes
     -----
-    Give ``shape`` with exactly one of ``rate``, ``scale`` or ``mean``;
+    Give `shape` with exactly one of `rate`, `scale` or `mean`;
     the given pair is stored, everything else is derived on access. The
     canonical parameters of
-    [`functional`][optix.distributions.functional] are ``(shape, rate)``.
+    [`functional`][optix.distributions.functional] are `(shape, rate)`.
 
     Exponential family: T(x) = (ln x, x), η = (a − 1, −b),
     A = ln Γ(a) − a ln b, h(x) = 1.
@@ -123,17 +123,17 @@ class Gamma(Distribution):
     # -- parameters ------------------------------------------------------
     @property
     def shape(self) -> Tensor:
-        """Shape a, ``(*batch)``."""
+        """Shape a, `(*batch)`."""
         return self._view("shape")
 
     @property
     def rate(self) -> Tensor:
-        """Rate b, ``(*batch)``."""
+        """Rate b, `(*batch)`."""
         return self._view("rate")
 
     @property
     def scale(self) -> Tensor:
-        """Scale 1 / b, ``(*batch)``."""
+        """Scale 1 / b, `(*batch)`."""
         return self._view("scale")
 
     # -- expectations ----------------------------------------------------
@@ -164,7 +164,7 @@ class Gamma(Distribution):
 
     @property
     def mean_inv(self) -> Tensor:
-        """E[1 / x] = b / (a − 1); ``inf`` where a ≤ 1."""
+        """E[1 / x] = b / (a − 1); `inf` where a ≤ 1."""
         return self._out(F.gamma_mean_inv(*self.params()))
 
     def entropy(self) -> Tensor:
@@ -196,7 +196,7 @@ class Gamma(Distribution):
         return cls._new(eta_log_x + 1, -eta_x)
 
     def to_torch(self) -> torch.distributions.Gamma:
-        """``torch.distributions.Gamma(shape, rate)``."""
+        """`torch.distributions.Gamma(shape, rate)`."""
         return torch.distributions.Gamma(
             self.shape, self.rate, validate_args=False
         )
@@ -217,8 +217,8 @@ class Gamma(Distribution):
         ln ν − ψ(ν) = c (see
         [`fit_gamma_shape`][optix.special.fit_gamma_shape]) with
 
-        - ``mean`` free: μ = x̄ and c = ln x̄ − l̄;
-        - ``mean`` fixed: μ = ``mean``, ρ = x̄ / μ and
+        - `mean` free: μ = x̄ and c = ln x̄ − l̄;
+        - `mean` fixed: μ = `mean`, ρ = x̄ / μ and
           c = (ρ − 1 − ln ρ) + (ln x̄ − l̄).
 
         Parameters
@@ -238,8 +238,8 @@ class Gamma(Distribution):
         -------
         Gamma
             Stored in the mean / shape parameterisation (μ, ν), batch
-            shape ``stats.batch_shape`` (broadcast with ``mean`` and
-            ``init``). Gradients stay finite where n = 0.
+            shape `stats.batch_shape` (broadcast with `mean` and
+            `init`). Gradients stay finite where n = 0.
         """
         n, sx, slx = stats.astuple()
         n = n.to(sx.dtype)  # int64 / float64 count

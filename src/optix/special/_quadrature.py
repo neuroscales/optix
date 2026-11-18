@@ -38,15 +38,15 @@ def gauss_hermite(
         Quadrature nodes, increasing.
     logw : (n,) Tensor
         Natural logarithm of the weights. Log-weights are returned so that
-        large ``n`` does not underflow.
+        large `n` does not underflow.
 
     Notes
     -----
-    ∑ exp(``logw``) · f(``nodes``) ≈ ∫ f(x) exp(−x²) dx, exactly for
+    ∑ exp(`logw`) · f(`nodes`) ≈ ∫ f(x) exp(−x²) dx, exactly for
     polynomials of degree ≤ 2n − 1. For a Gaussian expectation use the
     change of variables x = μ + √2 σ t:
 
-        E[f(x)] ≈ (1/√π) ∑ exp(``logw``) · f(μ + √2 σ ``nodes``),  x ∼ N(μ, σ²)
+        E[f(x)] ≈ (1/√π) ∑ exp(`logw`) · f(μ + √2 σ `nodes`),  x ∼ N(μ, σ²)
     """
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")

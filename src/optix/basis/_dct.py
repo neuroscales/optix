@@ -27,7 +27,7 @@ def dct_basis(
         Number of samples.
     k : int, optional
         Number of (lowest-frequency) basis functions, ≤ n.
-        Default: ``n``.
+        Default: `n`.
     dtype, device : optional
         Output dtype and device (default: from the configuration).
 
@@ -59,7 +59,7 @@ def dct_bending(
 ) -> Tensor:
     """Diagonal regulariser of a separable DCT-II basis.
 
-    Energy of the ``order``-th derivatives of each separable basis
+    Energy of the `order`-th derivatives of each separable basis
     function ∏_d B_d[:, j_d]. The DCT-II functions diagonalise the
     discrete Laplacian with reflecting (Neumann) boundaries, with
     eigenvalues λⱼ = (2 − 2 cos(π j / n)) / h² (h = spacing). The energy
@@ -68,7 +68,7 @@ def dct_bending(
     and m = 2 the bending energy.
 
     The discrete eigenvalues are used (rather than the continuous
-    (π j / (n h))²) so that, for ``order=1``, the penalty equals the
+    (π j / (n h))²) so that, for `order=1`, the penalty equals the
     finite-difference energy exactly; both agree at low frequencies.
 
     Parameters
@@ -136,7 +136,7 @@ def project(x: Tensor, bases: Sequence[Tensor]) -> Tensor:
     Returns
     -------
     (..., k1, ..., kd) Tensor
-        Coefficients ``x`` ×₁ B₁ᵀ ⋯ ×_d B_dᵀ.
+        Coefficients `x` ×₁ B₁ᵀ ⋯ ×_d B_dᵀ.
     """
     return _apply(x, bases, transpose=True)
 
@@ -154,6 +154,6 @@ def reconstruct(coef: Tensor, bases: Sequence[Tensor]) -> Tensor:
     Returns
     -------
     (..., n1, ..., nd) Tensor
-        Signal ``coef`` ×₁ B₁ ⋯ ×_d B_d.
+        Signal `coef` ×₁ B₁ ⋯ ×_d B_d.
     """
     return _apply(coef, bases, transpose=False)

@@ -1,4 +1,4 @@
-"""Conjugate updates registered with ``posterior``."""
+"""Conjugate updates registered with `posterior`."""
 
 import torch
 from torch import Tensor
@@ -20,13 +20,13 @@ def _known(value: object, like: Tensor) -> Tensor:
 
 
 def _like(stats: tuple[Tensor, ...], like: Tensor) -> tuple[Tensor, ...]:
-    """Statistics on ``like``'s device and dtype (counts are int64 or
+    """Statistics on `like`'s device and dtype (counts are int64 or
     float64; the update runs in the prior's dtype)."""
     return tuple(t.to(dtype=like.dtype, device=like.device) for t in stats)
 
 
 def _seen(n: Tensor, xbar: Tensor) -> Tensor:
-    """``xbar`` (x̄) where n > 0, else 0: the mean of no data may be NaN."""
+    """`xbar` (x̄) where n > 0, else 0: the mean of no data may be NaN."""
     return torch.where(n > 0, xbar, 0)
 
 
@@ -42,7 +42,7 @@ def _dirichlet_categorical(
 
 @_register_posterior(Gamma, GammaStats)
 def _gamma_rate(prior: Gamma, stats: GammaStats, *, shape: Tensor) -> Gamma:
-    """Rate of a Gamma likelihood with known ``shape``.
+    """Rate of a Gamma likelihood with known `shape`.
 
     aₙ = a₀ + shape · n and bₙ = b₀ + ∑x.
     """
@@ -56,7 +56,7 @@ def _gamma_rate(prior: Gamma, stats: GammaStats, *, shape: Tensor) -> Gamma:
 def _gamma_precision(
     prior: Gamma, stats: NormalStats, *, mean: Tensor
 ) -> Gamma:
-    """Precision of a Normal likelihood with known ``mean``.
+    """Precision of a Normal likelihood with known `mean`.
 
     aₙ = a₀ + n / 2 and bₙ = b₀ + (scatter + n (x̄ − mean)²) / 2.
     """
@@ -71,7 +71,7 @@ def _gamma_precision(
 def _normal_mean(
     prior: Normal, stats: NormalStats, *, precision: Tensor
 ) -> Normal:
-    """Mean of a Normal likelihood with known ``precision`` P.
+    """Mean of a Normal likelihood with known `precision` P.
 
     λₙ = λ₀ + n P and μₙ = (λ₀ μ₀ + n P x̄) / λₙ (μ₀ where λₙ = 0).
     """

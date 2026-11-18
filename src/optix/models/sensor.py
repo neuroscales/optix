@@ -48,8 +48,8 @@ def random_sensor(
     Returns
     -------
     SensorEstimate
-        ``offset``, ``variance`` and ``gain`` maps of ``shape`` and a
-        boolean ``defective`` map.
+        `offset`, `variance` and `gain` maps of `shape` and a
+        boolean `defective` map.
     """
     backend = resolve_backend(dtype, device)
     gen = generator(seed, backend["device"])
@@ -82,7 +82,7 @@ def simulate_sensor(
     signal : (..., H, W) Tensor
         Expected number of electrons (≥ 0).
     sensor : SensorEstimate
-        Needs ``offset``, ``variance`` and ``gain``. ``defective`` is a
+        Needs `offset`, `variance` and `gain`. `defective` is a
         label only: defective pixels are simulated like the others.
     seed : int, optional
     quantize : torch.dtype, optional

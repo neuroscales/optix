@@ -20,19 +20,19 @@ class Histogram(Reducer):
     Attributes
     ----------
     counts : (bins + 2, *item) Tensor
-        ``counts[0]`` counts values below ``lo``, ``counts[-1]`` values
-        above ``hi`` (and NaNs), ``counts[1:-1]`` the regular bins. A value
-        equal to ``hi`` goes into the last regular bin.
+        `counts[0]` counts values below `lo`, `counts[-1]` values
+        above `hi` (and NaNs), `counts[1:-1]` the regular bins. A value
+        equal to `hi` goes into the last regular bin.
 
     Notes
     -----
     Integer counts make the result exactly independent of chunking and
-    order. A zero-width range (``hi == lo``, dead pixels) puts every value
-    equal to ``lo`` into the first regular bin.
+    order. A zero-width range (`hi == lo`, dead pixels) puts every value
+    equal to `lo` into the first regular bin.
 
     The state holds (bins + 2) · ∏(item) counts: 64 bins on a
     2048 × 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
-    warning is emitted when it exceeds the configured chunk ``memory``.
+    warning is emitted when it exceeds the configured chunk `memory`.
     """
 
     _state = ("counts", "lo", "hi")
@@ -54,7 +54,7 @@ class Histogram(Reducer):
             Range, as scalars or per-pixel maps (typically from a
             [`MinMax`][optix.stats.MinMax] pass). Fixed at construction.
         bins : int
-            Number of regular bins between ``lo`` and ``hi``.
+            Number of regular bins between `lo` and `hi`.
         dim : int or tuple of int or None
             Reduced dims of each chunk (see
             [`Reducer`][optix.stats.Reducer]).
@@ -105,9 +105,9 @@ class Histogram(Reducer):
         Parameters
         ----------
         x : Tensor
-            Chunk; the dims in ``self.dim`` are reduced.
+            Chunk; the dims in `self.dim` are reduced.
         weight : Tensor, optional
-            Boolean mask or integer counts, broadcastable to ``x``.
+            Boolean mask or integer counts, broadcastable to `x`.
 
         Returns
         -------
@@ -176,7 +176,7 @@ class Histogram(Reducer):
         Returns
         -------
         (bins + 2, *item) Tensor
-            ``cdf[j]`` = fraction of values in bins ``0..j`` (float64; NaN
+            `cdf[j]` = fraction of values in bins `0..j` (float64; NaN
             where nothing was counted).
         """
         cum = self._edges_cumulative()
@@ -193,9 +193,9 @@ class Histogram(Reducer):
         Returns
         -------
         (*item) or (Q, *item) Tensor
-            Quantiles (dtype of ``lo``). The error is bounded by one bin
-            width inside ``[lo, hi]``; ranks falling in the underflow or
-            overflow bins are clamped to ``lo`` / ``hi``. NaN where nothing
+            Quantiles (dtype of `lo`). The error is bounded by one bin
+            width inside `[lo, hi]`; ranks falling in the underflow or
+            overflow bins are clamped to `lo` / `hi`. NaN where nothing
             was counted.
         """
         cum = self._edges_cumulative()  # cum[j] = count below edge j

@@ -19,17 +19,17 @@ class NormalExpectations(NamedTuple):
 
 
 class Normal(Distribution):
-    """Normal distribution, elementwise (event shape ``()``).
+    """Normal distribution, elementwise (event shape `()`).
 
     Notes
     -----
-    Give exactly one of ``var``, ``std`` or ``precision``. It is stored as
+    Give exactly one of `var`, `std` or `precision`. It is stored as
     given; the others are derived on access. The canonical parameters of
     [`functional`][optix.distributions.functional] are
-    ``(mean, precision)``.
+    `(mean, precision)`.
 
     A "diagonal" multivariate Normal is this class with a trailing batch
-    dim of size K; reduce it yourself, e.g. ``kl_divergence(q, p).sum(-1)``.
+    dim of size K; reduce it yourself, e.g. `kl_divergence(q, p).sum(-1)`.
 
     Exponential family: T(x) = (x, x²), η = (λμ, −λ/2),
     A = λμ² / 2 − ½ ln λ, ln h = −½ ln(2π).
@@ -68,7 +68,7 @@ class Normal(Distribution):
             Mean μ.
         var : Tensor or float, optional
             Variance σ² (also the unnamed second argument:
-            ``Normal(mu, sigma2)``).
+            `Normal(mu, sigma2)`).
         std : Tensor or float, optional
             Standard deviation σ.
         precision : Tensor or float, optional
@@ -106,7 +106,7 @@ class Normal(Distribution):
     # -- parameters ------------------------------------------------------
     @property
     def mean(self) -> Tensor:
-        """Mean μ = E[x], ``(*batch)``."""
+        """Mean μ = E[x], `(*batch)`."""
         return self._view("mean")
 
     @property
@@ -172,7 +172,7 @@ class Normal(Distribution):
         return cls._new(eta_x / lam, lam)
 
     def to_torch(self) -> torch.distributions.Normal:
-        """``torch.distributions.Normal(mean, std)``."""
+        """`torch.distributions.Normal(mean, std)`."""
         return torch.distributions.Normal(
             self.mean, self.std, validate_args=False
         )
