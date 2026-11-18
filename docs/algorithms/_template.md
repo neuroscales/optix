@@ -89,5 +89,22 @@ a large `zarr` array, the extensions.*
 
 ## References
 
-1. Author A, Author B. Title. *Journal* **vol**, pages (year).
-   [doi:10.xxxx/xxxxx](https://doi.org/10.xxxx/xxxxx)
+!!! references "References"
+
+    1. Author A, Author B. *Title.* Journal **vol**(issue):pages, year.
+       [doi:10.xxxx/xxxxx](https://doi.org/10.xxxx/xxxxx)
+
+    ??? quote "BibTeX"
+
+        ```bibtex
+        @article{author2000key,
+          author  = {Author, A. and Author, B.},
+          title   = {Title},
+          journal = {Journal},
+          volume  = {1},
+          number  = {1},
+          pages   = {1--10},
+          year    = {2000},
+          doi     = {10.xxxx/xxxxx},
+        }
+        ```

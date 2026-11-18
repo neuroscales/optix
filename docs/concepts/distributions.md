@@ -170,7 +170,7 @@ Gamma, Normal, Dirichlet and Categorical belong to *exponential families*,
 whose densities can be written
 
 $$
-p(x \mid \eta) = h(x)\,\exp\bigl(\eta \cdot T(x) - A(\eta)\bigr),
+p(x \mid \eta) = \chi(x)\,\exp\bigl(\eta \cdot T(x) - A(\eta)\bigr),
 $$
 
 with *sufficient statistics* $T(x)$, *natural parameters* $\eta$ and a
@@ -180,7 +180,7 @@ form most of what variational Bayes needs is simple.
 | Family | $T(x)$ | $\eta$ | $A(\eta)$ |
 |---|---|---|---|
 | Gamma$(a, b)$ | $(\log x,\; x)$ | $(a - 1,\; -b)$ | $\log\Gamma(a) - a \log b$ |
-| Normal$(m, \tau)$ | $(x,\; x^2)$ | $(\tau m,\; -\tau/2)$ | $\tau m^2/2 - \tfrac12\log\tau$ |
+| $\mathcal{N}(m, \tau^{-1})$ | $(x,\; x^2)$ | $(\tau m,\; -\tau/2)$ | $\tau m^2/2 - \tfrac12\log\tau$ |
 | Dirichlet$(\alpha)$ | $\log \pi$ | $\alpha - 1$ | $\sum_k \log\Gamma(\alpha_k) - \log\Gamma(\alpha_0)$ |
 | Categorical$(\pi)$ | one-hot$(z)$ | $\log \pi$ | $\log\sum_k e^{\eta_k}$ |
 
@@ -215,17 +215,17 @@ means adding up $N$ values of $T$. The data enter through nothing else, which is
 why a few numbers per pixel replace the whole stack.
 
 optix keeps those numbers in *sufficient-statistics containers*, one per
-likelihood: they hold the total weight $N$ and the weighted sum of $T$.
+likelihood: they hold the total weight $N = \sum_n w_n$ and the weighted sum of $T$.
 
 | Container | Holds | For a likelihood that is |
 |---|---|---|
-| `GammaStats` | $N$, $\sum x$, $\sum \log x$ | Gamma |
-| `NormalStats` | $N$, $\bar{x}$, $M = \sum (x - \bar{x})^2$ | Normal |
-| `CategoricalStats` | counts $\sum \text{one-hot}(z)$ | Categorical |
-| `DirichletStats` | $N$, $\sum \log\pi$ | Dirichlet |
+| `GammaStats` | $N$, $\sum_n w_n x_n$, $\sum_n w_n \log x_n$ | Gamma |
+| `NormalStats` | $N$, $\bar{x} = \sum_n w_n x_n / N$, $M = \sum_n w_n (x_n - \bar{x})^2$ | Normal |
+| `CategoricalStats` | counts $\sum_n w_n\,\text{one-hot}(z_n)$ | Categorical |
+| `DirichletStats` | $N$, $\sum_n w_n \log\pi_n$ | Dirichlet |
 
-(`NormalStats` stores the mean and the scatter $M$ rather than $\sum x$ and
-$\sum x^2$, for the numerical reasons given [below](#numerical-stability).)
+(`NormalStats` stores the mean and the scatter $M$ rather than $\sum_n w_n x_n$ and
+$\sum_n w_n x_n^2$, for the numerical reasons given [below](#numerical-stability).)
 They are built from observed samples with `from_samples(x, weight, dim=...)`, or
 from the *expected* statistics of latent variables with `from_expectations`.
 All weights must be non-negative; a boolean mask is a valid weight.
@@ -240,12 +240,12 @@ updates available are:
 
 | Prior | Statistics | Known | Posterior |
 |---|---|---|---|
-| Dirichlet$(\alpha_0)$ | `CategoricalStats` | | Dirichlet$(\alpha_0 + \text{counts})$ |
-| Gamma$(a_0, b_0)$ over the rate of a Gamma | `GammaStats` | `shape` $=\nu$ | Gamma$(a_0 + \nu N,\; b_0 + \sum x)$ |
+| Dirichlet$(\alpha^{(0)})$ | `CategoricalStats` | | Dirichlet$\bigl(\alpha^{(0)} + \sum_n w_n\,\text{one-hot}(z_n)\bigr)$ |
+| Gamma$(a_0, b_0)$ over the rate of a Gamma | `GammaStats` | `shape` $=\nu$ | Gamma$(a_0 + \nu N,\; b_0 + \sum_n w_n x_n)$ |
 | Gamma$(a_0, b_0)$ over the precision of a Normal | `NormalStats` | `mean` $=m$ | Gamma$(a_0 + N/2,\; b_0 + \tfrac12 (M + N(\bar{x} - m)^2))$ |
-| Normal$(m_0, \tau_0)$ over the mean of a Normal | `NormalStats` | `precision` $=\tau$ | Normal$(m_N, \tau_0 + N\tau)$, $m_N = \dfrac{\tau_0 m_0 + N\tau\bar{x}}{\tau_0 + N\tau}$ |
+| $\mathcal{N}(m_0, \tau_0^{-1})$ over the mean of a Normal | `NormalStats` | `precision` $=\tau$ | $\mathcal{N}\bigl(m_N, (\tau_0 + N\tau)^{-1}\bigr)$, $m_N = \dfrac{\tau_0 m_0 + N\tau\bar{x}}{\tau_0 + N\tau}$ |
 
-The third row is worth seeing once. For observations $x_n \sim \mathcal{N}(m, 1/\tau)$ with
+The third row is worth seeing once. For observations $x_n \sim \mathcal{N}(m, \tau^{-1})$ with
 a Gamma$(a_0, b_0)$ prior on $\tau$, the posterior is proportional to
 
 $$
@@ -259,8 +259,9 @@ $(N, \bar{x}, M)$ are all the data have to give. The result is stored in the
 parameterisation in which the update is additive, here shape and rate.
 
 As an example, take the dark frames of a camera and infer, pixel by pixel, the
-precision $\tau = 1/\sigma^2$ of the read noise. With the mean of each pixel
-taken as known, the result should be near $1/1.5^2 \approx 0.44$:
+precision $\tau = 1/\sigma^2$ of the read noise. With each pixel's mean taken as known, the result should be near $1/1.5^2 \approx 0.44$.
+Plugging in the sample mean costs one degree of freedom, so the estimate is high
+by a factor of about $N/(N-1)$, on top of the prior's pull:
 
 ```pycon
 >>> from optix.models import random_sensor, simulate_sensor
@@ -343,9 +344,14 @@ $$
 $$
 
 where $\bar{x}$ and $\overline{\log x}$ are the means of $x$ and $\log x$ in the
-statistics; the equation is solved by a fixed number of Newton steps, which keeps
-it batched and free of host synchronisation. (With `mean=` given, only the shape is
-fitted.)
+statistics; the equation is solved by a fixed number of Newton steps on $1/\nu$, which keeps
+it batched and free of host synchronisation. With `mean=` given (a fixed $\mu$, so only the
+shape is fitted), the equation becomes
+
+$$
+\log\nu - \psi(\nu) = \log\bar{x} - \overline{\log x} + (q - 1 - \log q),
+\qquad q = \bar{x} / \mu.
+$$
 
 ```pycon
 >>> x = Gamma(5.0, 0.5).sample((20000,))
@@ -492,9 +498,9 @@ The remedy is algebraic rather than numerical. `optix.special` provides the
 building blocks. For large $a$, Stirling's formula gives
 
 $$
-\log\Gamma(a) = \bigl(a - \tfrac12\bigr)\log a - a + \tfrac12\log 2\pi + r(a),
+\log\Gamma(a) = \bigl(a - \tfrac12\bigr)\log a - a + \tfrac12\log 2\pi + \rho(a),
 \qquad
-r(a) \approx \frac{1}{12a} - \frac{1}{360a^3} + \cdots,
+\rho(a) \approx \frac{1}{12a} - \frac{1}{360a^3} + \cdots,
 $$
 
 and the digamma function is $\psi(a) = \log a - \delta(a)$ with
@@ -505,9 +511,9 @@ $$
 
 Substituting these in the KL divergence cancels the large terms *on paper*,
 and what remains is a sum of small quantities that are computed accurately:
-the residuals $r(a)$ (`stirling_residual`), $\delta(a)$ (`log_minus_digamma`),
-and $g(y) = y - 1 - \log y$ for a ratio $y$ near 1 (`ratio_minus_log`), which behaves like $x^2/2$ for
-$y = 1 + x$ and is evaluated from a series so that it does not collapse to zero. The
+the residuals $\rho(a)$ (`stirling_residual`), $\delta(a)$ (`log_minus_digamma`),
+and $\varphi(u) = u - 1 - \log u$ for a ratio $u$ near 1 (`ratio_minus_log`), which behaves like $\epsilon^2/2$ for
+$u = 1 + \epsilon$ and is evaluated from a series so that it does not collapse to zero. The
 same trick is used for the entropy, the expected logarithms and the Dirichlet
 divergence, and is why `Gamma.mean_log` has a dedicated path in the mean-and-shape
 form. Even $\delta(a)$ alone shows the effect:
@@ -533,7 +539,7 @@ Other habits follow from the same concern.
   `SuffStats.zeros(..., dtype=torch.float64)` makes a double-precision
   accumulator for batches of single-precision statistics.
 - **Never form raw power sums.** `NormalStats` and `Moments` hold the mean and the
-  scatter $M = \sum (x - \bar{x})^2$ and merge them with Pebay's pairwise
+  scatter $M = \sum (x - \bar{x})^2$ and merge them with Pébay's pairwise
   formulas, instead of holding $\sum x$ and $\sum x^2$. For a camera with an
   offset of 100 ADU and a noise of 1.5 ADU, $\sum x^2$ is thousands of times larger
   than the scatter it is meant to produce, and `float32` keeps about seven digits.
@@ -572,4 +578,4 @@ $$
 \frac{1}{\sqrt{\pi}} \sum_i w_i\, f\bigl(m + \sqrt{2}\, s\, t_i\bigr),
 $$
 
-with nodes $t_i$ and weights $w_i$ for the weight function $e^{-t^2}$.
+with $s = \sqrt{v}$, nodes $t_i$ and weights $w_i$ for the weight function $e^{-t^2}$.

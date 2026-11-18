@@ -16,6 +16,9 @@ nav = [
     "algorithms/index.md",
     "algorithms/_template.md",
   ]},
+  {"Contributing" = [
+    "contributing/style.md",
+  ]},
   {"API reference" = [
     "reference/index.md",
     "reference/configuration.md",
@@ -39,6 +42,7 @@ edit_uri = "blob/main/docs"
 site_dir = "site"
 docs_dir = "docs"
 watch = ["src", "docs"]
+extra_css = ["stylesheets/extra.css"]
 extra_javascript = [
   "javascripts/mathjax.js",
   "https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js",
@@ -67,6 +71,8 @@ paths = ["src"]
 [project.plugins.mkdocstrings.handlers.python.options]
 docstring_style = "numpy"
 merge_init_into_class = true
+signature_crossrefs = true
+relative_crossrefs = true
 separate_signature = true
 members_order = "source"
 show_source = false

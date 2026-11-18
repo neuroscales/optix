@@ -42,15 +42,21 @@ appear and recalled here.
 | $D$ | dark image (additive term, camera offset included) | `ShadingEstimate.dark` |
 | $\beta_i$ | baseline of frame $i$ | `ShadingEstimate.baseline` |
 | $P$, $B$, $\kappa_j$ | number of samples along an axis; DCT basis matrix; eigenvalue of its $j$-th function | `dct_basis`, `dct_bending` |
+| $h$, $\ell$ | grid spacing; order of the derivative energy $f^\top(-\Delta_h)^\ell f$ | `dct_bending(order=)` |
 | $\mathcal{N}(m, \tau^{-1})$ | Normal with mean $m$ and precision $\tau = 1/v$ | `Normal` |
-| $\mathrm{Gamma}(a, b)$ | Gamma with shape $a$ and rate $b$ (mean $\mu = a/b$) | `Gamma` |
+| $\mathrm{Gamma}(a, b)$ | Gamma with shape $a$ and rate $b$ | `Gamma` |
+| $\mu$ | Gamma mean, $\mu = a/b$ | `Gamma.mean` |
 | $\nu$ | Gamma shape in the mean-and-shape form $(\mu, \nu)$ | `Gamma(mean=, shape=)` |
 | $\alpha_k$, $\alpha_0$ | Dirichlet concentration, and $\alpha_0 = \sum_k \alpha_k$ | `Dirichlet` |
 | $\pi_k$ | class probability (Dirichlet variable, Categorical parameter) | `Categorical.probs` |
 | $r_{nk}$ | responsibility: probability that sample $n$ is in class $k$ | |
 | $T$, $\eta$, $A$ | sufficient statistics, natural parameters, log-normaliser | `expected_stats`, `natural_params`, `log_normalizer` |
 | $\bar{x}$, $M$ | weighted mean, and sum of squared deviations from it (scatter) | `NormalStats.mean`, `.scatter` |
+| $\chi(x)$ | base measure of an exponential family | |
 | $\psi$, $\Gamma$ | digamma function and gamma function | |
+| $\rho(a)$, $\delta(a)$, $\varphi(u)$ | Stirling residual, $\log a - \psi(a)$ and $u - 1 - \log u$, in their series forms | `stirling_residual`, `log_minus_digamma`, `ratio_minus_log` |
+| $G_i$, $X_i$ | group axes and spatial axes of an array | |
+| $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$ | expectation | |
 | $\mathrm{KL}(q \Vert p)$ | Kullback-Leibler divergence | `kl_divergence(q, p)` |
 | $L_t$ | objective at iteration $t$ | `History.objective` |

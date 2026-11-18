@@ -310,9 +310,11 @@ $$
 $$
 
 and `history.check(tol)` declares convergence when its absolute value falls
-below `tol`, recording the reason. Variational and EM objectives increase at
-every step, so `check(tol, monotone=True)` additionally warns if the objective
-*decreases*, which almost always flags a bug in the update equations.
+below `tol`, recording the reason. The objective of exact variational and EM updates (coordinate ascent) increases at
+every step, so `check(tol, monotone=True)` additionally warns if it
+*decreases*, which almost always flags a bug in the update equations. (Tempered or
+stochastic updates, such as those built on `stats.scale`, carry no such guarantee. The
+relative change divides by $\lvert L_t \rvert + 10^{-30}$, so a zero objective is safe.)
 
 ```pycon
 >>> history = optix.History()

@@ -117,7 +117,8 @@ derivation, and one that is a research contribution gets a long one.
    (groups, initialisation from another estimate, a large zarr array).
 
 9. **References.** The publication the algorithm implements, and others it relies
-   on, each with its DOI, verified against the publisher's page. Also the
+   on, each with its DOI, verified against the publisher's page, in the
+   [reference admonition](../contributing/style.md#references) with a BibTeX entry. Also the
    reference implementation the results were validated against, if there is one.
 
 Every algorithm is validated in two ways: against the reference implementation

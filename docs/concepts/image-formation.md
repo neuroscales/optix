@@ -73,7 +73,7 @@ This is a straight line. Its slope is the gain, and where the signal is zero
 (a mean of $o$) it reaches the read-noise variance. Writing it as $a\,\mathbb{E}[y] + b$ gives the
 Poisson-Gaussian parametrisation of Foi et al., with $a = g$ and
 $b = \sigma^2 - g\,o$ (the symbols $a$ and $b$ are local to this paragraph).
-optix stores $(o, \sigma^2, g)$ and derives $(a, b)$ when needed.
+optix stores $(o, \sigma^2, g)$, and $(a, b)$ follow from these as above.
 `SensorEstimate.noise_variance(mean)` evaluates the line:
 
 ```pycon
@@ -173,8 +173,8 @@ $$
 I = S\,I^0 + D,
 $$
 
-where $I^0$ is the image we would record under perfectly uniform
-conditions, $S$ the **flat field** (multiplicative, dimensionless) and $D$ the
+where $I^0$ is the signal we would record under uniform illumination, without the
+additive background $D$, $S$ the **flat field** (multiplicative, dimensionless) and $D$ the
 **dark image** (additive, in ADU). All three are maps over the picture. When
 frames are recorded in a sequence and the overall level drifts, for example
 because of a fluctuating light source or a background that changes
@@ -245,7 +245,7 @@ ones that most often cause silent mistakes, so it is worth knowing them.
   other.
 
 - **`dark` includes the camera offset.** `ShadingEstimate.dark` is the
-  whole additive image of the correction $(y - D - \beta)/S$, in ADU.
+  whole additive image of the correction $(I_i - D - \beta_i)/S$, in ADU.
   `SensorEstimate.offset` is the camera offset alone. A model that has only
   one additive term returns it in both fields. Because of that overlap,
   *corrections never subtract both*: pick the `dark` of a `ShadingEstimate`, or
@@ -317,19 +317,20 @@ torch.Size([4, 4])
 (0.102, 0.039)
 ```
 
-The DCT has a second virtue: it diagonalises the discrete Laplacian with
-reflecting (Neumann) boundaries, which are the natural boundary conditions of an
-image. The eigenvalue of function $j$ on an axis of $P$ samples spaced $h$ apart
+The DCT has a second virtue: it diagonalises the *negative* discrete Laplacian
+with reflecting (Neumann) boundaries, which are the natural boundary conditions of an
+image, $-\Delta_h B_{:,j} = \kappa_j B_{:,j}$. The eigenvalue of function $j$ on an axis of $P$ samples spaced $h$ apart
 is
 
 $$
 \kappa_j = \frac{2 - 2\cos(\pi j / P)}{h^2},
 $$
 
-and the energy of the derivatives of order $m$ of the separable function with indices
-$(j_1, \ldots, j_d)$ is $\bigl(\kappa_{j_1} + \cdots + \kappa_{j_d}\bigr)^m$. With $m = 1$ this
-is the membrane energy and with $m = 2$ the bending energy; either can serve as a
-penalty on the coefficients that grows with frequency and vanishes for the
+and for the separable function with indices $(j_1, \ldots, j_d)$ the weight
+$\bigl(\kappa_{j_1} + \cdots + \kappa_{j_d}\bigr)^\ell$ is the discrete energy
+$f^\top(-\Delta_h)^\ell f$: the gradient (membrane) energy for $\ell = 1$ and
+$\lVert\Delta_h f\rVert^2$ for $\ell = 2$, which approximates the bending energy.
+Either can serve as a penalty on the coefficients that grows with frequency and vanishes for the
 constant function, which leaves the overall level free. `dct_bending(shape, k, order=...)` returns these
 weights, one per coefficient:
 
@@ -344,3 +345,25 @@ True
 `random_shading` is built from the same pieces: it draws random coefficients on
 the lowest `order` DCT functions of each axis (leaving out the constant),
 exponentiates the result, and normalises it to a mean of 1.
+
+!!! references "References"
+
+    1. Foi A, Trimeche M, Katkovnik V, Egiazarian K. *Practical
+       Poissonian-Gaussian noise modeling and fitting for single-image raw-data.*
+       IEEE Trans Image Process **17**(10):1737-1754, 2008.
+       [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
+
+    ??? quote "BibTeX"
+
+        ```bibtex
+        @article{foi2008practical,
+          author  = {Foi, Alessandro and Trimeche, Mejdi and Katkovnik, Vladimir and Egiazarian, Karen},
+          title   = {Practical {P}oissonian-{G}aussian noise modeling and fitting for single-image raw-data},
+          journal = {IEEE Transactions on Image Processing},
+          volume  = {17},
+          number  = {10},
+          pages   = {1737--1754},
+          year    = {2008},
+          doi     = {10.1109/TIP.2008.2001399},
+        }
+        ```

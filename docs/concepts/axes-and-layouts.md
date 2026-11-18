@@ -22,7 +22,7 @@ parameter maps are shaped
 
 $$
 (\underbrace{G_1, \ldots}_{\text{group axes}},\;
-\underbrace{S_1, \ldots}_{\text{spatial axes}}),
+\underbrace{X_1, \ldots}_{\text{spatial axes}}),
 $$
 
 one map of the spatial shape for each combination of group indices. The
@@ -335,7 +335,10 @@ computation. Both are described with the other options in
 Data cross to the working device in their stored type and are converted to the
 working floating-point type there, so `uint16` frames travel the link at half
 the size of `float32`. Every chunk is owned by the consumer: you may modify it
-in place without touching the source.
+in place without touching the source. A chunk is a permuted, strided view of the
+loaded block, in layout order, rather than a dense copy; pass `contiguous=True` to
+the iterator if a kernel needs dense memory (this copies whenever the layout
+permutes the stored axes).
 
 ### Reading in the right order
 
@@ -378,13 +381,14 @@ the summary of their union is
 $$
 \begin{aligned}
 N &= N_a + N_b, \\
-\delta &= \bar{x}_b - \bar{x}_a, \\
-\bar{x} &= \bar{x}_a + \delta\,\frac{N_b}{N}, \\
-M &= M_a + M_b + \delta^2\,\frac{N_a N_b}{N},
+\theta &= \bar{x}_b - \bar{x}_a, \\
+\bar{x} &= \bar{x}_a + \theta\,\frac{N_b}{N}, \\
+M &= M_a + M_b + \theta^2\,\frac{N_a N_b}{N},
 \end{aligned}
 $$
 
-and the variance is $M / (N - 1)$. These are Pebay's pairwise formulas.
+and the variance is $M / (N - 1)$ (`var(ddof=1)`; for non-integer weights such as
+responsibilities use $M / N$, `var(ddof=0)`). These are Pébay's pairwise formulas.
 `Moments` never accumulates raw power sums, which lose all their digits when
 the mean is large compared with the spread, and that is exactly the situation
 of a camera whose offset is 100 ADU and whose noise is a few. It also keeps
@@ -403,3 +407,25 @@ quantiles are read with an error of at most one bin width, a uniform
 `Reservoir` sample, and the exact per-pixel `order_statistics` and
 `median_mad`. For a layout with groups, use `reduce_groups`, which keeps one
 copy of the reducers per group.
+
+!!! references "References"
+
+    1. Pébay P, Terriberry TB, Kolla H, Bennett J. *Numerically stable, scalable
+       formulas for parallel and online computation of higher-order multivariate
+       central moments with arbitrary weights.* Comput Stat **31**(4):1305-1325,
+       2016. [doi:10.1007/s00180-015-0637-z](https://doi.org/10.1007/s00180-015-0637-z)
+
+    ??? quote "BibTeX"
+
+        ```bibtex
+        @article{pebay2016numerically,
+          author  = {P{\'e}bay, Philippe and Terriberry, Timothy B. and Kolla, Hemanth and Bennett, Janine},
+          title   = {Numerically stable, scalable formulas for parallel and online computation of higher-order multivariate central moments with arbitrary weights},
+          journal = {Computational Statistics},
+          volume  = {31},
+          number  = {4},
+          pages   = {1305--1325},
+          year    = {2016},
+          doi     = {10.1007/s00180-015-0637-z},
+        }
+        ```
