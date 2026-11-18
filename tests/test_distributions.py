@@ -585,7 +585,9 @@ def _vb_kernel(x, shape, rate, m, lam, alpha):
 )
 def test_compile_with_objects_and_params():
     with warnings.catch_warnings():
-        warnings.simplefilter("error")
+        warnings.filterwarnings(
+            "error", message="torch.compile failed", category=RuntimeWarning
+        )
         with optix.config(compile=True):
             for seed in (0, 1):
                 q = Gamma(

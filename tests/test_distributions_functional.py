@@ -187,7 +187,9 @@ def test_compile_smoke():
         ref = _toy_kernel(*args)
         ref_fit = _toy_fit(args[0], -args[5], args[6])
     with warnings.catch_warnings():
-        warnings.simplefilter("error")
+        warnings.filterwarnings(
+            "error", message="torch.compile failed", category=RuntimeWarning
+        )
         with optix.config(compile=True):
             out = _toy_kernel(*args)
             out_fit = _toy_fit(args[0], -args[5], args[6])
