@@ -60,12 +60,12 @@ def dct_bending(
     """Diagonal regulariser of a separable DCT-II basis.
 
     Energy of the `order`-th derivatives of each separable basis
-    function ∏_d B_d[:, j_d]. The DCT-II functions diagonalise the
+    function `prod_d B_d[:, j_d]`. The DCT-II functions diagonalise the
     discrete Laplacian with reflecting (Neumann) boundaries, with
     eigenvalues λⱼ = (2 − 2 cos(π j / n)) / h² (h = spacing). The energy
     of the order-m derivatives (sum over all ordered derivative
-    multi-indices) is then (∑_d λ_{j_d})ᵐ: m = 1 is the membrane energy
-    and m = 2 the bending energy.
+    multi-indices) is then `(sum_d lambda_{j_d})^m`: m = 1 is the membrane
+    energy and m = 2 the bending energy.
 
     The discrete eigenvalues are used (rather than the continuous
     (π j / (n h))²) so that, for `order=1`, the penalty equals the
@@ -136,7 +136,7 @@ def project(x: Tensor, bases: Sequence[Tensor]) -> Tensor:
     Returns
     -------
     (..., k1, ..., kd) Tensor
-        Coefficients `x` ×₁ B₁ᵀ ⋯ ×_d B_dᵀ.
+        Coefficients `x x_1 B_1^T ... x_d B_d^T`.
     """
     return _apply(x, bases, transpose=True)
 
@@ -154,6 +154,6 @@ def reconstruct(coef: Tensor, bases: Sequence[Tensor]) -> Tensor:
     Returns
     -------
     (..., n1, ..., nd) Tensor
-        Signal `coef` ×₁ B₁ ⋯ ×_d B_d.
+        Signal `coef x_1 B_1 ... x_d B_d`.
     """
     return _apply(coef, bases, transpose=False)

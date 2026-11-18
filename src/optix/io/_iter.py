@@ -869,7 +869,7 @@ def blocks(
         blocked dims are the spatial axes of the layout, or without one the
         trailing `len(halo)` dims (all dims if `halo` is a scalar), and
         the size is chosen automatically: starting from the full extents,
-        the largest dim is halved until `∏(block + 2 * halo) *
+        the largest dim is halved until `prod(block + 2 * halo) *
         overhead` fits the budget, then sizes are aligned to storage
         chunks. Group and sample axes are iterated one index at a time.
     halo : int or sequence of int

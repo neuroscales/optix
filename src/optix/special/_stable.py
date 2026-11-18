@@ -1,12 +1,12 @@
 """Building blocks of cancellation-free Gamma and Dirichlet formulas.
 
-ln Γ(a) = (a − ½) ln a − a + ½ ln(2π) + r(a), where r is
+log Γ(a) = (a − ½) log a − a + ½ log(2π) + r(a), where r is
 [`stirling_residual`][optix.special.stirling_residual], and
-ψ(a) = ln a − lmd(a), where lmd is
+ψ(a) = log a − lmd(a), where lmd is
 [`log_minus_digamma`][optix.special.log_minus_digamma]: substituting these
-into an expression that combines ln Γ / ψ of large, nearly equal
+into an expression that combines log Γ / ψ of large, nearly equal
 arguments makes the large terms cancel algebraically, so only small,
-accurately computed residuals are left. The remaining ρ − 1 − ln ρ of a
+accurately computed residuals are left. The remaining ρ − 1 − log ρ of a
 ratio ρ close to 1 is [`ratio_minus_log`][optix.special.ratio_minus_log].
 """
 
@@ -21,7 +21,7 @@ _SERIES_FROM = 10.0
 
 
 def stirling_residual(a: Tensor) -> Tensor:
-    """ln Γ(a) − ((a − ½) ln a − a + ½ ln(2π)), elementwise.
+    """log Γ(a) − ((a − ½) log a − a + ½ log(2π)), elementwise.
 
     Parameters
     ----------
@@ -34,7 +34,7 @@ def stirling_residual(a: Tensor) -> Tensor:
         The remainder of Stirling's formula. For a > 10 the series
         1/(12a) − 1/(360a³) + 1/(1260a⁵) − 1/(1680a⁷) is used
         (absolute error below 1e-12), which keeps full relative
-        precision where the direct difference of ln Γ and its
+        precision where the direct difference of log Γ and its
         approximation would cancel.
     """
     a = torch.as_tensor(a)
@@ -54,7 +54,7 @@ def stirling_residual(a: Tensor) -> Tensor:
 def ratio_minus_log(
     num: Tensor, den: Tensor | float = 1.0, diff: Tensor | None = None
 ) -> Tensor:
-    """y − 1 − ln y with y = `num` / `den` > 0, without cancellation.
+    """y − 1 − log y with y = `num` / `den` > 0, without cancellation.
 
     Parameters
     ----------
@@ -68,10 +68,10 @@ def ratio_minus_log(
     -------
     Tensor
         Non-negative, ≈ x² / 2 with x = (`num` − `den`) / `den`. Near
-        y = 1 (|x| < 0.2), x − ln(1 + x) is computed as
+        y = 1 (|x| < 0.2), x − log(1 + x) is computed as
         2u² / (1 − u) − 2 (atanh u − u) with u = x / (2 + x) and a series
         for atanh u − u; x is formed from the difference, so it keeps its
-        relative precision. Elsewhere the direct y − 1 − ln y is accurate,
+        relative precision. Elsewhere the direct y − 1 − log y is accurate,
         and finite for ratios too small for 1 + x to be represented.
     """
     num = torch.as_tensor(num)

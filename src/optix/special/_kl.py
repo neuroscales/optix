@@ -24,18 +24,20 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
 
     Notes
     -----
-    With a₀ = ∑ aₖ and b₀ = ∑ bₖ,
-    KL = ln Γ(a₀) − ln Γ(b₀) − ∑ (ln Γ(aₖ) − ln Γ(bₖ))
-    + ∑ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀)), rewritten with
+    With a₀ = ∑ₖ aₖ and b₀ = ∑ₖ bₖ,
+    KL = log Γ(a₀) − log Γ(b₀) − ∑ₖ (log Γ(aₖ) − log Γ(bₖ)) +
+    ∑ₖ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀)), rewritten with
     [`stirling_residual`][optix.special.stirling_residual] r,
     [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
     [`ratio_minus_log`][optix.special.ratio_minus_log] g as
 
-    ∑ (bₖ g(aₖ/bₖ) + ½ ln(aₖ/bₖ)) − (b₀ g(a₀/b₀) + ½ ln(a₀/b₀))
-    + r(a₀) − r(b₀) − ∑ (r(aₖ) − r(bₖ))
-    − ∑ (aₖ − bₖ) lmd(aₖ) + (a₀ − b₀) lmd(a₀)
+    ```text
+    ∑ₖ (bₖ g(aₖ/bₖ) + ½ log(aₖ/bₖ)) − (b₀ g(a₀/b₀) + ½ log(a₀/b₀))
+    + r(a₀) − r(b₀) − ∑ₖ (r(aₖ) − r(bₖ))
+    − ∑ₖ (aₖ − bₖ) lmd(aₖ) + (a₀ − b₀) lmd(a₀)
+    ```
 
-    so that the ln Γ terms of large concentrations cancel exactly.
+    so that the log Γ terms of large concentrations cancel exactly.
     """
     a0 = a.sum(-1)
     b0 = b.sum(-1)
@@ -72,16 +74,22 @@ def kl_gamma(
     Notes
     -----
     With shapes a and rates b,
-    KL = (a_q − a_p) ψ(a_q) − ln Γ(a_q) + ln Γ(a_p)
-    + a_p ln(b_q/b_p) + a_q (b_p − b_q) / b_q, rewritten with
-    [`stirling_residual`][optix.special.stirling_residual] r,
+
+    ```text
+    KL = (a_q − a_p) ψ(a_q) − log Γ(a_q) + log Γ(a_p)
+         + a_p log(b_q/b_p) + a_q (b_p − b_q) / b_q
+    ```
+
+    rewritten with [`stirling_residual`][optix.special.stirling_residual] r,
     [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
     [`ratio_minus_log`][optix.special.ratio_minus_log] g as
 
-    a_p (g(a_q/a_p) + g(b_p/b_q)) + ½ ln(a_q/a_p)
+    ```text
+    a_p (g(a_q/a_p) + g(b_p/b_q)) + ½ log(a_q/a_p)
     + (a_q − a_p) ((b_p − b_q) / b_q − lmd(a_q)) + r(a_p) − r(a_q)
+    ```
 
-    which has no cancellation between large ln Γ / ψ values (float32
+    which has no cancellation between large log Γ / ψ values (float32
     stays accurate at shapes ≈ 1e6).
     """
     aq, bq, ap, bp = map(torch.as_tensor, (shape_q, rate_q, shape_p, rate_p))

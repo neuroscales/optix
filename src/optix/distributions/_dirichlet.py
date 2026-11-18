@@ -22,12 +22,12 @@ class DirichletExpectations(NamedTuple):
 class Dirichlet(Distribution):
     """Dirichlet distribution over the simplex (event shape `(K,)`).
 
-    p(π) = Γ(α₀) / ∏ Γ(αₖ) · ∏ πₖ^(αₖ − 1) with α₀ = ∑ αₖ.
+    p(π) = Γ(α₀) ∏ₖ πₖ^(αₖ − 1) / ∏ₖ Γ(αₖ) with α₀ = ∑ₖ αₖ.
 
     Notes
     -----
-    Exponential family: T(π) = ln π, η = α − 1,
-    A = ∑ ln Γ(αₖ) − ln Γ(α₀), h = 1.
+    Exponential family: T(π) = log π, η = α − 1,
+    A = ∑ₖ log Γ(αₖ) − log Γ(α₀), h = 1.
     """
 
     _forms = {("concentration",): (1,)}
@@ -79,15 +79,15 @@ class Dirichlet(Distribution):
 
     @property
     def mean_log(self) -> Tensor:
-        """E[ln π] = ψ(α) − ψ(α₀), `(*batch, K)`."""
+        """E[log π] = ψ(α) − ψ(α₀), `(*batch, K)`."""
         return self._out(F.dirichlet_mean_log(*self.params()), 1)
 
     def entropy(self) -> Tensor:
-        """∑ ln Γ(αₖ) − ln Γ(α₀) + (α₀ − K) ψ(α₀) − ∑ (αₖ − 1) ψ(αₖ)."""
+        """∑ₖ log Γ(αₖ) − log Γ(α₀) + (α₀ − K) ψ(α₀) − ∑ₖ (αₖ − 1) ψ(αₖ)."""
         return self._out(F.dirichlet_entropy(*self.params()))
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """ln Γ(α₀) − ∑ ln Γ(αₖ) + ∑ (αₖ − 1) ln πₖ."""
+        """log Γ(α₀) − ∑ₖ log Γ(αₖ) + ∑ₖ (αₖ − 1) log πₖ."""
         value = torch.as_tensor(value, dtype=self.dtype, device=self.device)
         shape = self._check_value_shape(value)
         return F.dirichlet_log_prob(value, *self.params()).expand(shape)
@@ -98,11 +98,11 @@ class Dirichlet(Distribution):
         return (self._out(alpha - 1, 1),)
 
     def log_normalizer(self) -> Tensor:
-        """A = ∑ ln Γ(αₖ) − ln Γ(α₀)."""
+        """A = ∑ₖ log Γ(αₖ) − log Γ(α₀)."""
         return self._out(F.dirichlet_log_normalizer(*self.params()))
 
     def expected_stats(self) -> DirichletExpectations:
-        """(E[ln π],)."""
+        """(E[log π],)."""
         return DirichletExpectations(self.mean_log)
 
     @classmethod
@@ -126,7 +126,7 @@ class Dirichlet(Distribution):
     ) -> Self:
         """Maximum-likelihood (type-II) Dirichlet from mean log-probabilities.
 
-        Maximises n (ln Γ(α₀) − ∑ ln Γ(αₖ)) + ∑ (αₖ − 1) ∑ ln xₖ with
+        Maximises n (log Γ(α₀) − ∑ₖ log Γ(αₖ)) + ∑ₖ (αₖ − 1) `sum_log_x`ₖ with
         [`fit_dirichlet`][optix.special.fit_dirichlet], started at
         `init`.
 

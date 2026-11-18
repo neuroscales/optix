@@ -32,7 +32,7 @@ class Normal(Distribution):
     dim of size K; reduce it yourself, e.g. `kl_divergence(q, p).sum(-1)`.
 
     Exponential family: T(x) = (x, x²), η = (λμ, −λ/2),
-    A = λμ² / 2 − ½ ln λ, ln h = −½ ln(2π).
+    A = λμ² / 2 − ½ log λ, log h = −½ log(2π).
     """
 
     _forms = {
@@ -139,11 +139,11 @@ class Normal(Distribution):
         return self._out(self._get("mean").square() + self._get("var"))
 
     def entropy(self) -> Tensor:
-        """H = (1 + ln(2π) − ln λ) / 2."""
+        """H = (1 + log(2π) − log λ) / 2."""
         return self._out(F.normal_entropy(self._get("precision")))
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """(ln λ − ln(2π) − λ (x − μ)²) / 2."""
+        """(log λ − log(2π) − λ (x − μ)²) / 2."""
         value = torch.as_tensor(value, dtype=self.dtype, device=self.device)
         shape = self._check_value_shape(value)
         if self._form[1] == "var":
@@ -158,7 +158,7 @@ class Normal(Distribution):
         return self._out(lam * m), self._out(-0.5 * lam)
 
     def log_normalizer(self) -> Tensor:
-        """A = λμ² / 2 − ½ ln λ."""
+        """A = λμ² / 2 − ½ log λ."""
         return self._out(F.normal_log_normalizer(*self.params()))
 
     def expected_stats(self) -> NormalExpectations:

@@ -42,11 +42,13 @@ def gauss_hermite(
 
     Notes
     -----
-    ∑ exp(`logw`) · f(`nodes`) ≈ ∫ f(x) exp(−x²) dx, exactly for
+    `sum(exp(logw) * f(nodes))` ≈ ∫ f(x) exp(−x²) dx, exactly for
     polynomials of degree ≤ 2n − 1. For a Gaussian expectation use the
-    change of variables x = μ + √2 σ t:
+    change of variables x = μ + √2 σ t::
 
-        E[f(x)] ≈ (1/√π) ∑ exp(`logw`) · f(μ + √2 σ `nodes`),  x ∼ N(μ, σ²)
+        E[f(x)] ≈ sum(exp(logw) * f(mu + sqrt(2) * sigma * nodes)) / sqrt(pi)
+
+    for x ~ N(mu, sigma²).
     """
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")

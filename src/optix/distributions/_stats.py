@@ -116,7 +116,7 @@ def _safe_log(x: Tensor) -> Tensor:
 class SuffStats:
     """Weighted sufficient statistics of samples from one family.
 
-    Holds ∑ wₙ T(xₙ) and the total weight n = ∑ wₙ over a set of samples
+    Holds ∑ₙ wₙ T(xₙ) and the total weight n = ∑ₙ wₙ over a set of samples
     (observed values, or expectations of latent ones). This is what models
     accumulate over batches and what
     [`posterior`][optix.distributions.posterior] and the `fit`
@@ -204,7 +204,7 @@ class SuffStats:
     # -- accessors -------------------------------------------------------
     @property
     def n(self) -> Tensor:
-        """Total weight ∑ wₙ, shape broadcastable to the batch."""
+        """Total weight ∑ₙ wₙ, shape broadcastable to the batch."""
         return self._values[0]
 
     @property
@@ -460,11 +460,11 @@ class GammaStats(SuffStats):
         Parameters
         ----------
         n : Tensor
-            Total weight ∑ w.
+            Total weight ∑ₙ wₙ.
         sum_x : Tensor
-            ∑ w x.
+            ∑ₙ wₙ xₙ.
         sum_log_x : Tensor
-            ∑ w ln x.
+            ∑ₙ wₙ log xₙ.
         """
         self._setup(n, sum_x, sum_log_x)
 
@@ -494,7 +494,7 @@ class GammaStats(SuffStats):
         Returns
         -------
         GammaStats
-            ln x uses max(x, tiny), so zero samples of zero
+            log x uses `max(x, tiny)`, so zero samples of zero
             weight contribute nothing.
         """
         x, w, dims, batch = _prepare(cls.__name__, x, 0, weight, dim)
@@ -515,7 +515,7 @@ class GammaStats(SuffStats):
         dim: int | Sequence[int] | None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Statistics of latent samples given E[ln x] and E[x].
+        """Statistics of latent samples given E[log x] and E[x].
 
         The arguments are the fields of `Gamma.expected_stats()`;
         `weight`, `dim` and `dtype` as in
@@ -545,9 +545,9 @@ class DirichletStats(SuffStats):
         Parameters
         ----------
         n : Tensor
-            Total weight ∑ w, shape `(*batch)`.
+            Total weight ∑ₙ wₙ, shape `(*batch)`.
         sum_log_x : (*batch, K) Tensor
-            ∑ w ln x.
+            ∑ₙ wₙ log xₙ.
         """
         self._setup(n, sum_log_x)
 
@@ -582,7 +582,7 @@ class DirichletStats(SuffStats):
         dim: int | Sequence[int] | None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Statistics of latent probability vectors given E[ln x].
+        """Statistics of latent probability vectors given E[log x].
 
         `log_x` is `Dirichlet.expected_stats().log_x` (or
         `Dirichlet.mean_log`), shape `(..., K)`.
@@ -606,7 +606,7 @@ class CategoricalStats(SuffStats):
         Parameters
         ----------
         counts : (*batch, K) Tensor
-            Weighted counts ∑ w onehot(z) (or ∑ w p for soft
+            Weighted counts ∑ₙ wₙ onehot(zₙ) (or ∑ₙ wₙ pₙ for soft
             assignments). `n = counts.sum(-1)`. Stored as int64 when
             integral (unweighted labels), else float64, whatever
             `dtype=` says (see
@@ -710,17 +710,21 @@ class CategoricalStats(SuffStats):
 class NormalStats(SuffStats):
     """Statistics of a Normal likelihood, central form `(n, mean, scatter)`.
 
-    mean = ∑ w x / n and scatter = ∑ w (x − mean)², the same state as
-    `optix.stats.Moments(order=2)`. Raw power sums are never formed, so
-    large offsets do not destroy the scatter in float32.
+    `mean` = ∑ₙ wₙ xₙ / n and `scatter` = ∑ₙ wₙ (xₙ − `mean`)², the same
+    state as `optix.stats.Moments(order=2)`. Raw power sums are never
+    formed, so large offsets do not destroy the scatter in float32.
 
     !!! references "References"
-        1. Pebay P. 2008.
+        1. Pebay P. Formulas for robust, one-pass parallel computation of
+           covariances and arbitrary-order statistical moments. 2008.
 
         ??? quote "BibTeX"
             ```bibtex
             @misc{pebay2008,
               author = {Pebay, P.},
+              title = {Formulas for robust, one-pass parallel
+                       computation of covariances and arbitrary-order
+                       statistical moments},
               year = {2008}
             }
             ```
@@ -751,12 +755,12 @@ class NormalStats(SuffStats):
 
     @property
     def sum_x(self) -> Tensor:
-        """∑ w x = n · mean (in the fields' dtype)."""
+        """∑ₙ wₙ xₙ = n · `mean` (in the fields' dtype)."""
         return self.n.to(self.dtype) * self.mean
 
     @property
     def sum_x_sq(self) -> Tensor:
-        """∑ w x² = scatter + n · mean² (in the fields' dtype)."""
+        """∑ₙ wₙ xₙ² = `scatter` + n · `mean`² (in the fields' dtype)."""
         return self.scatter + self.n.to(self.dtype) * self.mean.square()
 
     @classmethod
@@ -839,7 +843,7 @@ class NormalStats(SuffStats):
     ) -> Self:
         """Statistics of latent samples given E[x] and E[x²].
 
-        scatter = ∑ w (E[x²] − E[x]²) + ∑ w (E[x] − mean)².
+        `scatter` = ∑ₙ wₙ (E[x²] − E[x]²) + ∑ₙ wₙ (E[x] − `mean`)².
         """
         x, x_sq = torch.broadcast_tensors(
             torch.as_tensor(x), torch.as_tensor(x_sq)

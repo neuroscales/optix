@@ -10,7 +10,7 @@ Each family has one canonical signature:
 
 - Gamma: shape `a` and rate `b`;
 - Dirichlet: concentration `alpha` of shape `(..., K)`;
-- Categorical: normalised logits `l` = ln p of shape `(..., K)`;
+- Categorical: normalised logits `l` = log p of shape `(..., K)`;
 - Normal: mean `m` and precision `lam` (plus
   [`normal_log_prob_var`][optix.distributions.functional.normal_log_prob_var]
   in variance form, for likelihood kernels).
@@ -106,7 +106,7 @@ def gamma_variance(a: Tensor, b: Tensor) -> Tensor:
 
 
 def gamma_mean_log(a: Tensor, b: Tensor) -> Tensor:
-    """E[ln x] = ψ(a) − ln b under Gamma(a, b).
+    """E[log x] = ψ(a) − log b under Gamma(a, b).
 
     Parameters
     ----------
@@ -117,7 +117,7 @@ def gamma_mean_log(a: Tensor, b: Tensor) -> Tensor:
     -------
     Tensor
         Broadcast shape of the inputs. Computed as
-        ln(a / b) − lmd(a), with lmd =
+        log(a / b) − lmd(a), with lmd =
         [`log_minus_digamma`][optix.special.log_minus_digamma] (no
         cancellation for large a and b).
     """
@@ -125,10 +125,10 @@ def gamma_mean_log(a: Tensor, b: Tensor) -> Tensor:
 
 
 def gamma_mean_log_ms(mean: Tensor, shape: Tensor) -> Tensor:
-    """E[ln x] of a Gamma given its mean μ and shape ν.
+    """E[log x] of a Gamma given its mean μ and shape ν.
 
-    E[ln x] = ln μ − (ln ν − ψ(ν)), which avoids the cancellation between
-    ψ(ν) and ln(rate) for large ν (see
+    E[log x] = log μ − (log ν − ψ(ν)), which avoids the cancellation between
+    ψ(ν) and log(rate) for large ν (see
     [`log_minus_digamma`][optix.special.log_minus_digamma]).
 
     Parameters
@@ -166,11 +166,11 @@ def gamma_mean_inv(a: Tensor, b: Tensor) -> Tensor:
 def gamma_entropy(a: Tensor, b: Tensor) -> Tensor:
     """Entropy of Gamma(a, b).
 
-    H = a − ln b + ln Γ(a) + (1 − a) ψ(a), computed as
-    ½ ln(2π a) + r(a) + (a − 1) lmd(a) − ln b with
+    H = a − log b + log Γ(a) + (1 − a) ψ(a), computed as
+    ½ log(2π a) + r(a) + (a − 1) lmd(a) − log b with
     [`stirling_residual`][optix.special.stirling_residual] r and
     [`log_minus_digamma`][optix.special.log_minus_digamma] lmd, so that
-    the large ln Γ and ψ terms do not cancel at large a.
+    the large log Γ and ψ terms do not cancel at large a.
 
     Parameters
     ----------
@@ -194,11 +194,11 @@ def gamma_entropy(a: Tensor, b: Tensor) -> Tensor:
 def gamma_log_prob(x: Tensor, a: Tensor, b: Tensor) -> Tensor:
     """Log-density of Gamma(a, b) at x > 0.
 
-    ln p(x) = a ln b − ln Γ(a) + (a − 1) ln x − b x, computed for x > 0 as
-    −a g(b x / a) + ½ ln a − ln x − ½ ln(2π) − r(a) with
+    log p(x) = a log b − log Γ(a) + (a − 1) log x − b x, computed for x > 0 as
+    −a g(b x / a) + ½ log a − log x − ½ log(2π) − r(a) with
     [`ratio_minus_log`][optix.special.ratio_minus_log] g and
     [`stirling_residual`][optix.special.stirling_residual] r (no
-    cancellation between a ln(b x), ln Γ(a) and b x at large a); the
+    cancellation between a log(b x), log Γ(a) and b x at large a); the
     direct formula is used at x = 0.
 
     Parameters
@@ -227,9 +227,9 @@ def gamma_log_prob(x: Tensor, a: Tensor, b: Tensor) -> Tensor:
 
 
 def gamma_log_normalizer(a: Tensor, b: Tensor) -> Tensor:
-    """Log-normalizer A = ln Γ(a) − a ln b of Gamma(a, b).
+    """Log-normalizer A = log Γ(a) − a log b of Gamma(a, b).
 
-    With sufficient statistics T(x) = (ln x, x) and natural parameters
+    With sufficient statistics T(x) = (log x, x) and natural parameters
     η = (a − 1, −b), ∂A/∂η = E[T].
 
     Parameters
@@ -248,8 +248,10 @@ def gamma_log_normalizer(a: Tensor, b: Tensor) -> Tensor:
 gamma_kl = kl_gamma
 """KL(Gamma(aq, bq) ‖ Gamma(ap, bp)), elementwise.
 
-KL = (aq − ap) ψ(aq) − ln Γ(aq) + ln Γ(ap)
-+ ap (ln bq − ln bp) + aq (bp − bq) / bq.
+```text
+KL = (aq − ap) ψ(aq) − log Γ(aq) + log Γ(ap)
+     + ap (log bq − log bp) + aq (bp − bq) / bq
+```
 
 The same function object as [`kl_gamma`][optix.special.kl_gamma].
 """
@@ -258,7 +260,7 @@ The same function object as [`kl_gamma`][optix.special.kl_gamma].
 
 
 def dirichlet_mean(alpha: Tensor) -> Tensor:
-    """Mean E[π] = α / α₀ of Dir(α), α₀ = ∑ αₖ.
+    """Mean E[π] = α / α₀ of Dir(α), α₀ = ∑ₖ αₖ.
 
     Parameters
     ----------
@@ -291,7 +293,7 @@ def dirichlet_variance(alpha: Tensor) -> Tensor:
 
 
 dirichlet_mean_log = dirichlet_elog
-"""E[ln πₖ] = ψ(αₖ) − ψ(α₀) under Dir(α).
+"""E[log πₖ] = ψ(αₖ) − ψ(α₀) under Dir(α).
 
 The same function object as
 [`dirichlet_elog`][optix.special.dirichlet_elog].
@@ -301,11 +303,15 @@ The same function object as
 def dirichlet_entropy(alpha: Tensor) -> Tensor:
     """Entropy of Dir(α).
 
-    H = ∑ ln Γ(αₖ) − ln Γ(α₀) + (α₀ − K) ψ(α₀) − ∑ (αₖ − 1) ψ(αₖ),
-    computed with [`stirling_residual`][optix.special.stirling_residual] r and
-    [`log_minus_digamma`][optix.special.log_minus_digamma] lmd as
-    ½ ∑ ln(αₖ/α₀) − ½ (K − 1) ln(α₀/(2π)) + ∑ r(αₖ) − r(α₀)
-    + ∑ (αₖ − 1) lmd(αₖ) − (α₀ − K) lmd(α₀)
+    H = ∑ₖ log Γ(αₖ) − log Γ(α₀) + (α₀ − K) ψ(α₀) − ∑ₖ (αₖ − 1) ψ(αₖ),
+    computed with [`stirling_residual`][optix.special.stirling_residual] r
+    and [`log_minus_digamma`][optix.special.log_minus_digamma] lmd as
+
+    ```text
+    ½ ∑ₖ log(αₖ/α₀) − ½ (K − 1) log(α₀/(2π)) + ∑ₖ r(αₖ) − r(α₀)
+    + ∑ₖ (αₖ − 1) lmd(αₖ) − (α₀ − K) lmd(α₀)
+    ```
+
     (no cancellation at large concentrations).
 
     Parameters
@@ -330,10 +336,10 @@ def dirichlet_entropy(alpha: Tensor) -> Tensor:
 
 
 def _dirichlet_log_norm(alpha: Tensor) -> Tensor:
-    """ln Γ(α₀) − ∑ ln Γ(αₖ), without the Stirling terms.
+    """log Γ(α₀) − ∑ₖ log Γ(αₖ), without the Stirling terms.
 
-    Equal to −∑ (αₖ − ½) ln(αₖ/α₀) + ½ (K − 1) ln(α₀/(2π)) + r(α₀)
-    − ∑ r(αₖ), whose terms grow like α ln(α/α₀) instead of α ln α.
+    Equal to −∑ₖ (αₖ − ½) log(αₖ/α₀) + ½ (K − 1) log(α₀/(2π)) + r(α₀)
+    − ∑ₖ r(αₖ), whose terms grow like α log(α/α₀) instead of α log α.
     """
     a0 = alpha.sum(-1)
     k = alpha.shape[-1]
@@ -348,7 +354,7 @@ def _dirichlet_log_norm(alpha: Tensor) -> Tensor:
 def dirichlet_log_prob(x: Tensor, alpha: Tensor) -> Tensor:
     """Log-density of Dir(α) at a point `x` of the simplex.
 
-    ln p(x) = ln Γ(α₀) − ∑ ln Γ(αₖ) + ∑ (αₖ − 1) ln xₖ.
+    log p(x) = log Γ(α₀) − ∑ₖ log Γ(αₖ) + ∑ₖ (αₖ − 1) log xₖ.
 
     Parameters
     ----------
@@ -362,8 +368,8 @@ def dirichlet_log_prob(x: Tensor, alpha: Tensor) -> Tensor:
     (...) Tensor
         Computed with the mean m = α / α₀ and
         [`stirling_residual`][optix.special.stirling_residual] r as
-        ∑ (αₖ − 1) ln(xₖ/mₖ) − ½ ∑ ln mₖ + ½ (K − 1) ln(α₀/(2π)) + r(α₀)
-        − ∑ r(αₖ): the ln Γ terms and α ln x do not cancel at large
+        ∑ₖ (αₖ − 1) log(xₖ/mₖ) − ½ ∑ₖ log mₖ + ½ (K − 1) log(α₀/(2π))
+        + r(α₀) − ∑ₖ r(αₖ): the log Γ terms and α log x do not cancel at large
         concentrations.
     """
     a0 = alpha.sum(-1, keepdim=True)
@@ -379,9 +385,9 @@ def dirichlet_log_prob(x: Tensor, alpha: Tensor) -> Tensor:
 
 
 def dirichlet_log_normalizer(alpha: Tensor) -> Tensor:
-    """Log-normalizer A = ∑ ln Γ(αₖ) − ln Γ(α₀).
+    """Log-normalizer A = ∑ₖ log Γ(αₖ) − log Γ(α₀).
 
-    With T(x) = ln x and η = α − 1, ∂A/∂η = E[T].
+    With T(x) = log x and η = α − 1, ∂A/∂η = E[T].
 
     Parameters
     ----------
@@ -391,7 +397,7 @@ def dirichlet_log_normalizer(alpha: Tensor) -> Tensor:
     Returns
     -------
     (...) Tensor
-        Computed without the cancellation of the ln Γ terms at large
+        Computed without the cancellation of the log Γ terms at large
         concentrations (Stirling residuals, as in
         [`dirichlet_log_prob`][optix.distributions.functional.dirichlet_log_prob]).
     """
@@ -401,8 +407,10 @@ def dirichlet_log_normalizer(alpha: Tensor) -> Tensor:
 dirichlet_kl = kl_dirichlet
 """KL(Dir(a) ‖ Dir(b)), summed over the last dim.
 
-KL = ln Γ(a₀) − ln Γ(b₀) − ∑ (ln Γ(aₖ) − ln Γ(bₖ))
-+ ∑ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀)).
+```text
+KL = log Γ(a₀) − log Γ(b₀) − ∑ₖ (log Γ(aₖ) − log Γ(bₖ))
+     + ∑ₖ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀))
+```
 
 The same function object as [`kl_dirichlet`][optix.special.kl_dirichlet].
 """
@@ -421,13 +429,13 @@ def categorical_normalize(logits: Tensor) -> Tensor:
     Returns
     -------
     (..., K) Tensor
-        `l` with logsumexp(l) = 0.
+        `l` with `logsumexp(l, -1) == 0`.
     """
     return torch.log_softmax(logits, -1)
 
 
 def categorical_logits_from_probs(probs: Tensor) -> Tensor:
-    """Normalised logits ln(p / ∑ p) of non-negative weights.
+    """Normalised logits log(p / ∑ₖ pₖ) of non-negative weights.
 
     Zero weights give `-inf` with a zero (finite) gradient, thanks to a
     double `where`.
@@ -448,12 +456,12 @@ def categorical_logits_from_probs(probs: Tensor) -> Tensor:
 
 
 def categorical_entropy(logits: Tensor) -> Tensor:
-    """Entropy H = −∑ p ln p, with p = exp(l), 0 ln 0 = 0.
+    """Entropy H = −∑ₖ pₖ log pₖ, with p = exp(l), 0 log 0 = 0.
 
     Parameters
     ----------
     logits : (..., K) Tensor
-        Normalised logits `l` = ln p.
+        Normalised logits `l` = log p.
 
     Returns
     -------
@@ -506,7 +514,7 @@ def categorical_log_normalizer(eta: Tensor) -> Tensor:
 
 
 def categorical_kl(lq: Tensor, lp: Tensor) -> Tensor:
-    """KL(Cat(q) ‖ Cat(p)) = ∑ q (ln q − ln p), 0 ln 0 = 0.
+    """KL(Cat(q) ‖ Cat(p)) = ∑ₖ qₖ (log qₖ − log pₖ), 0 log 0 = 0.
 
     Parameters
     ----------
@@ -561,7 +569,7 @@ def normal_mean_sq(m: Tensor, lam: Tensor) -> Tensor:
 
 
 def normal_entropy(lam: Tensor) -> Tensor:
-    """Entropy H = (1 + ln(2π) − ln λ) / 2.
+    """Entropy H = (1 + log(2π) − log λ) / 2.
 
     Parameters
     ----------
@@ -576,7 +584,7 @@ def normal_entropy(lam: Tensor) -> Tensor:
 
 
 def normal_log_prob(x: Tensor, m: Tensor, lam: Tensor) -> Tensor:
-    """Log-density (ln λ − ln(2π) − λ (x − μ)²) / 2.
+    """Log-density (log λ − log(2π) − λ (x − μ)²) / 2.
 
     Parameters
     ----------
@@ -596,7 +604,7 @@ def normal_log_prob(x: Tensor, m: Tensor, lam: Tensor) -> Tensor:
 def normal_log_prob_var(x: Tensor, m: Tensor, var: Tensor) -> Tensor:
     """Log-density in variance form.
 
-    ln p(x) = −(ln σ² + ln(2π) + (x − μ)² / σ²) / 2.
+    log p(x) = −(log σ² + log(2π) + (x − μ)² / σ²) / 2.
 
     The form to call inside likelihood kernels whose variance is computed
     per sample (it saves a reciprocal).
@@ -617,10 +625,10 @@ def normal_log_prob_var(x: Tensor, m: Tensor, var: Tensor) -> Tensor:
 
 
 def normal_log_normalizer(m: Tensor, lam: Tensor) -> Tensor:
-    """Log-normalizer A = λμ² / 2 − ½ ln λ.
+    """Log-normalizer A = λμ² / 2 − ½ log λ.
 
     With T(x) = (x, x²), η = (λμ, −λ/2) and base measure
-    ln h = −½ ln(2π), ∂A/∂η = E[T] = (μ, μ² + 1/λ).
+    log h = −½ log(2π), ∂A/∂η = E[T] = (μ, μ² + 1/λ).
 
     Parameters
     ----------
@@ -638,7 +646,7 @@ def normal_log_normalizer(m: Tensor, lam: Tensor) -> Tensor:
 def normal_kl(mq: Tensor, lq: Tensor, mp: Tensor, lp: Tensor) -> Tensor:
     """KL(N(mq, 1/lq) ‖ N(mp, 1/lp)), elementwise, in precision form.
 
-    KL = (ln lq − ln lp + lp / lq + lp (mq − mp)² − 1) / 2.
+    KL = (log lq − log lp + lp / lq + lp (mq − mp)² − 1) / 2.
 
     !!! note
         [`kl_normal`][optix.special.kl_normal] takes variances.

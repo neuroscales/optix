@@ -23,7 +23,7 @@ class GammaExpectations(NamedTuple):
 class Gamma(Distribution):
     """Gamma distribution over x > 0, elementwise (event shape `()`).
 
-    p(x) = bᵃ xᵃ⁻¹ exp(−b x) / Γ(a) with shape a and rate b.
+    p(x) = b^a x^(a − 1) exp(−b x) / Γ(a) with shape a and rate b.
 
     Notes
     -----
@@ -32,8 +32,8 @@ class Gamma(Distribution):
     canonical parameters of
     [`functional`][optix.distributions.functional] are `(shape, rate)`.
 
-    Exponential family: T(x) = (ln x, x), η = (a − 1, −b),
-    A = ln Γ(a) − a ln b, h(x) = 1.
+    Exponential family: T(x) = (log x, x), η = (a − 1, −b),
+    A = log Γ(a) − a log b, h(x) = 1.
     """
 
     _forms = {
@@ -152,10 +152,10 @@ class Gamma(Distribution):
 
     @property
     def mean_log(self) -> Tensor:
-        """E[ln x] = ψ(a) − ln b.
+        """E[log x] = ψ(a) − log b.
 
         In the mean / shape parameterisation it is computed as
-        ln μ − (ln ν − ψ(ν)), without cancellation.
+        log μ − (log ν − ψ(ν)), without cancellation.
         """
         if "mean" in self._form:
             mu, nu = self._raw
@@ -168,11 +168,11 @@ class Gamma(Distribution):
         return self._out(F.gamma_mean_inv(*self.params()))
 
     def entropy(self) -> Tensor:
-        """H = a − ln b + ln Γ(a) + (1 − a) ψ(a)."""
+        """H = a − log b + log Γ(a) + (1 − a) ψ(a)."""
         return self._out(F.gamma_entropy(*self.params()))
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """a ln b − ln Γ(a) + (a − 1) ln x − b x."""
+        """a log b − log Γ(a) + (a − 1) log x − b x."""
         value = torch.as_tensor(value, dtype=self.dtype, device=self.device)
         shape = self._check_value_shape(value)
         return F.gamma_log_prob(value, *self.params()).expand(shape)
@@ -183,11 +183,11 @@ class Gamma(Distribution):
         return self._out(a - 1), self._out(-b)
 
     def log_normalizer(self) -> Tensor:
-        """A = ln Γ(a) − a ln b."""
+        """A = log Γ(a) − a log b."""
         return self._out(F.gamma_log_normalizer(*self.params()))
 
     def expected_stats(self) -> GammaExpectations:
-        """(E[ln x], E[x])."""
+        """(E[log x], E[x])."""
         return GammaExpectations(self.mean_log, self.mean)
 
     @classmethod
@@ -213,13 +213,13 @@ class Gamma(Distribution):
     ) -> Self:
         """Maximum-likelihood Gamma from accumulated statistics.
 
-        With x̄ = ∑x / n and l̄ = ∑ln x / n, the shape ν solves
-        ln ν − ψ(ν) = c (see
+        With x̄ = `sum_x` / n and l̄ = `sum_log_x` / n, the shape ν solves
+        log ν − ψ(ν) = c (see
         [`fit_gamma_shape`][optix.special.fit_gamma_shape]) with
 
-        - `mean` free: μ = x̄ and c = ln x̄ − l̄;
+        - `mean` free: μ = x̄ and c = log x̄ − l̄;
         - `mean` fixed: μ = `mean`, ρ = x̄ / μ and
-          c = (ρ − 1 − ln ρ) + (ln x̄ − l̄).
+          c = (ρ − 1 − log ρ) + (log x̄ − l̄).
 
         Parameters
         ----------

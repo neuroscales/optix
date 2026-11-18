@@ -44,7 +44,7 @@ def _dirichlet_categorical(
 def _gamma_rate(prior: Gamma, stats: GammaStats, *, shape: Tensor) -> Gamma:
     """Rate of a Gamma likelihood with known `shape`.
 
-    aₙ = a₀ + shape · n and bₙ = b₀ + ∑x.
+    aₙ = a₀ + `shape` · n and bₙ = b₀ + `sum_x`.
     """
     a, b = prior.params()
     n, sx, _ = _like(stats.astuple(), a)
@@ -58,7 +58,7 @@ def _gamma_precision(
 ) -> Gamma:
     """Precision of a Normal likelihood with known `mean`.
 
-    aₙ = a₀ + n / 2 and bₙ = b₀ + (scatter + n (x̄ − mean)²) / 2.
+    aₙ = a₀ + n / 2 and bₙ = b₀ + (`scatter` + n (x̄ − `mean`)²) / 2.
     """
     a, b = prior.params()
     n, xbar, scatter = _like(stats.astuple(), a)

@@ -32,7 +32,7 @@ class Categorical(Distribution):
 
     - integer dtype: labels in `[0, K)`, shape `(*batch,)`;
     - floating or boolean dtype: one-hot or soft assignments `r`, shape
-      `(*batch, K)`; `log_prob(r)` = ∑ₖ rₖ ln pₖ is the expected
+      `(*batch, K)`; `log_prob(r)` = ∑ₖ rₖ log pₖ is the expected
       log-likelihood used by variational Bayes.
 
     Integers always mean labels, including the int64 output of
@@ -45,7 +45,7 @@ class Categorical(Distribution):
     reparameterised sampling (as in torch,
     [`rsample`][optix.distributions.Distribution.rsample] raises).
 
-    Exponential family: T(z) = onehot(z), η = ln p (up to an additive
+    Exponential family: T(z) = onehot(z), η = log p (up to an additive
     constant), A = logsumexp(η), E[T] = p.
     """
 
@@ -123,7 +123,7 @@ class Categorical(Distribution):
         return super()._derive(name)
 
     def params(self) -> tuple[Tensor]:
-        """Normalised logits (ln p,), unexpanded."""
+        """Normalised logits (log p,), unexpanded."""
         return (self._get("norm_logits"),)
 
     @property
@@ -133,7 +133,7 @@ class Categorical(Distribution):
 
     @property
     def logits(self) -> Tensor:
-        """Normalised logits ln p, `(*batch, K)`."""
+        """Normalised logits log p, `(*batch, K)`."""
         return self._view("norm_logits")
 
     @property
@@ -148,12 +148,12 @@ class Categorical(Distribution):
 
     @property
     def variance(self) -> Tensor:
-        """Var[onehot(z)ₖ] = pₖ (1 − pₖ), `(*batch, K)`."""
+        """Var[zₖ] = pₖ (1 − pₖ) for one-hot z, `(*batch, K)`."""
         p = self._get("norm_probs")
         return self._out(p * (1 - p), 1)
 
     def entropy(self) -> Tensor:
-        """H = −∑ pₖ ln pₖ (0 ln 0 = 0, finite gradients)."""
+        """H = −∑ₖ pₖ log pₖ (0 log 0 = 0, finite gradients)."""
         return self._out(F.categorical_entropy(*self.params()))
 
     def log_prob(self, value: Tensor) -> Tensor:
@@ -162,9 +162,9 @@ class Categorical(Distribution):
         Parameters
         ----------
         value : Tensor
-            Integer labels `(*sample, *batch)`: ln p[value]. Or
+            Integer labels `(*sample, *batch)`: log p[value]. Or
             floating / boolean one-hot or soft assignments
-            `(*sample, *batch, K)`: ∑ₖ rₖ ln pₖ (with 0 ln 0 = 0).
+            `(*sample, *batch, K)`: ∑ₖ rₖ log pₖ (with 0 log 0 = 0).
 
         Returns
         -------

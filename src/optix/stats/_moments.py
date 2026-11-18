@@ -73,12 +73,16 @@ class Moments(Reducer):
     state, and their accessors return NaN.
 
     !!! references "References"
-        1. Pebay P. 2008.
+        1. Pebay P. Formulas for robust, one-pass parallel computation of
+           covariances and arbitrary-order statistical moments. 2008.
 
         ??? quote "BibTeX"
             ```bibtex
             @misc{pebay2008,
               author = {Pebay, P.},
+              title = {Formulas for robust, one-pass parallel
+                       computation of covariances and arbitrary-order
+                       statistical moments},
               year = {2008}
             }
             ```
@@ -211,7 +215,7 @@ class Moments(Reducer):
         return torch.where(ok, self.m2 / safe, torch.nan)
 
     def std(self, ddof: int = 1) -> Tensor:
-        """Square root of [`var`][optix.stats.Moments.var]."""
+        """Standard deviation: the square root of `var(ddof)`."""
         return self.var(ddof).sqrt()
 
     def skewness(self) -> Tensor:

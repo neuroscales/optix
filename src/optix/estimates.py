@@ -201,7 +201,7 @@ def _need(estimate: Estimate, *names: str) -> None:
 class SensorEstimate(Estimate):
     """Camera model `y = offset + gain * n + e`.
 
-    `n ∼ Poisson(electrons)` and `e ∼ N(0, variance)`. The Foi
+    `n ~ Poisson(electrons)` and `e ~ N(0, variance)`. The Foi
     parametrisation is derived, not stored: `a = gain`,
     `b = variance - gain * offset`.
 

@@ -12,7 +12,7 @@ _EULER = 0.5772156649015329
 
 
 def log_minus_digamma(a: Tensor) -> Tensor:
-    """ln a − ψ(a), elementwise, without cancellation.
+    """log a − ψ(a), elementwise, without cancellation.
 
     Parameters
     ----------
@@ -22,7 +22,7 @@ def log_minus_digamma(a: Tensor) -> Tensor:
     Returns
     -------
     Tensor
-        ln a − ψ(a). For a > 10 the asymptotic series
+        log a − ψ(a). For a > 10 the asymptotic series
         1/(2a) + 1/(12a²) − 1/(120a⁴) + 1/(252a⁶) is used, which keeps
         full relative precision where the direct difference loses its
         digits.
@@ -48,10 +48,10 @@ def _inv_minus_trigamma(a: Tensor) -> Tensor:
 
 
 def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
-    """Solve ln ν − ψ(ν) = c for ν > 0, elementwise.
+    """Solve log ν − ψ(ν) = c for ν > 0, elementwise.
 
     This is the maximum-likelihood equation of the Gamma shape, with
-    c = ln x̄ − mean(ln x) > 0 (the Jensen gap).
+    c = log(mean(x)) − mean(log x) > 0 (the Jensen gap).
 
     Parameters
     ----------
@@ -74,7 +74,7 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     Uses Minka's initialisation
     ν = (3 − c + √((c − 3)² + 24c)) / (12c) and Newton's method on 1/ν.
     For ν > 10 the residual and its derivative use asymptotic series,
-    which avoids the cancellation in ln ν − ψ(ν).
+    which avoids the cancellation in log ν − ψ(ν).
 
     !!! references "References"
         1. Minka T. *Estimating a Gamma distribution.* 2002.
@@ -146,8 +146,8 @@ def dirichlet_elog(alpha: Tensor) -> Tensor:
     Returns
     -------
     (..., K) Tensor
-        E[ln π] = ψ(α) − ψ(α₀) with α₀ = ∑ αₖ, computed as
-        ln(α / α₀) − lmd(α) + lmd(α₀) with lmd =
+        E[log π] = ψ(α) − ψ(α₀) with α₀ = ∑ₖ αₖ, computed as
+        log(α / α₀) − lmd(α) + lmd(α₀) with lmd =
         [`log_minus_digamma`][optix.special.log_minus_digamma], which does
         not cancel for large concentrations.
     """
@@ -160,7 +160,7 @@ def dirichlet_elog(alpha: Tensor) -> Tensor:
 def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     """Dirichlet maximum likelihood given expected log-probabilities.
 
-    Maximises ln Γ(∑ aₖ) − ∑ ln Γ(aₖ) + ∑ (aₖ − 1) `elogpi`ₖ over a > 0
+    Maximises log Γ(∑ₖ aₖ) − ∑ₖ log Γ(aₖ) + ∑ₖ (aₖ − 1) `elogpi`ₖ over a > 0
     with Newton's method, using the diagonal-plus-rank-one structure of
     the Hessian.
 
@@ -183,7 +183,7 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     -----
     Whenever a Newton step would make any component of a vector
     non-positive, that vector takes the fixed-point update
-    a = ψ⁻¹(ψ(∑ aₖ) + `elogpi`) instead, which always stays positive
+    a = ψ⁻¹(ψ(∑ₖ aₖ) + `elogpi`) instead, which always stays positive
     (and is also taken when the Newton step is not finite).
 
     Convergence is only local: Newton's method needs a warm start (for
