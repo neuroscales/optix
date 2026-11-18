@@ -7,7 +7,9 @@ from ._solvers import (
     fit_dirichlet,
     fit_gamma_shape,
     inv_digamma,
+    log_minus_digamma,
 )
+from ._stable import ratio_minus_log, stirling_residual
 
 __all__ = [
     "dirichlet_elog",
@@ -18,4 +20,7 @@ __all__ = [
     "kl_dirichlet",
     "kl_gamma",
     "kl_normal",
+    "log_minus_digamma",
+    "ratio_minus_log",
+    "stirling_residual",
 ]
