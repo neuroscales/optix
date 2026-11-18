@@ -29,7 +29,9 @@ def _compile_supported() -> bool:
         return False
     python = sys.version_info[:2]
     version = _torch_version()
-    # minimum torch version supporting torch.compile on a Python version
+    # minimum torch version supporting torch.compile on a Python version.
+    # The Python 3.14 threshold is unverified; a wrong value only costs a
+    # fallback warning (the first compile fails and the wrapper goes eager).
     minimum = {(3, 12): (2, 4), (3, 13): (2, 6), (3, 14): (2, 9)}
     for py, required in minimum.items():
         if python >= py and version < required:
