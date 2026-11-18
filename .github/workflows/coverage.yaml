@@ -32,12 +32,12 @@ on:
         type: string
       python-version:
         description: Python version
-        required: true
+        required: false
         default: "3.11"
         type: string
       pytorch-version:
         description: PyTorch version (or "latest")
-        required: true
+        required: false
         default: "2.3.1"
         type: string
       optix-compile:
