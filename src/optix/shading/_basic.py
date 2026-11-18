@@ -52,7 +52,8 @@ _PRESET: dict[str, object] = {
     "sampling": "stride",
     "seed": 0,
     "baseline_method": "median",
-    "sort_intensity": False,
+    "sort_intensity": True,
+    "baseline_norm": 0.0,
 }
 
 
@@ -69,14 +70,20 @@ class BaSiC(Estimator):
     with a smooth flat field :math:`S` (mean 1), a smooth dark field
     :math:`D` (optional), and, for time-lapse data, a per-frame baseline
     :math:`b_i` (in units of the flat-corrected signal, i.e. scaled by
-    :math:`S`, as in BaSiC). The correction is
+    :math:`S`, as in the paper's equation (2)). The correction is
 
     .. math::
 
-        \hat I^0_i = (I_i - D) / S - b_i .
+        \hat I^0_i = (I_i - D) / S - b_i + b_\mathrm{norm}
 
-    **Fit.** A subsample of frames, resized to the working size, forms
-    the matrix :math:`\mathbf D` (one frame per row). BaSiC decomposes it
+    with :math:`b_\mathrm{norm}` an arbitrary background: 0 removes the
+    background (fluorescence), :math:`\mathrm{mean}_i\, b_i` keeps the raw
+    intensity range (bright field).
+
+    **Fit.** A subsample of frames, resized to the working size, is
+    sorted at each pixel over the frames (the paper; ``sort_intensity``)
+    and forms the matrix :math:`\mathbf D` (one frame per row). BaSiC
+    decomposes it
     as :math:`\mathbf D = \mathbf B \mathbf S^T + \mathbf 1 \mathbf D^T +
     \mathbf E` with the low-rank (rank one, plus dark field) part smooth,
     i.e. sparse in the DCT domain, and the residual :math:`\mathbf E`
@@ -101,9 +108,14 @@ class BaSiC(Estimator):
     / 400` and :math:`\lambda_D = 0.1 \lambda_S`. The profiles are then
     resized back (bilinear) to the image size.
 
-    **Baseline** (``timelapse=True``): with :math:`S` and :math:`D` fixed,
-    :math:`b_i` is fitted on every frame (at the working size), batch by
-    batch over the whole stack, by the exact L1 fit
+    :math:`S` starts at zero, as in the paper.
+
+    **Baseline** (``timelapse=True``): after sorting, the fitted
+    :math:`B_i` are not the baselines of the frames, so (the paper's
+    two-step strategy) :math:`b_i` is fitted on the *unsorted* frames
+    with :math:`S` and :math:`D` fixed: here on every frame (at the
+    working size), batch by batch over the whole stack, by the exact L1
+    fit
     :math:`\arg\min_b \|I_i - bS - D\|_1` (a median of
     :math:`(I_i - D)/S` weighted by :math:`S`). :meth:`apply` subtracts the
     fitted baseline when the data have the fitted sample shape, and
@@ -141,10 +153,16 @@ class BaSiC(Estimator):
     baseline_method : {"median", "basicpy"}
         Baseline estimator used by :meth:`fit` (``timelapse=True``).
     sort_intensity : bool
-        Extension, see below.
+        Sort each pixel over the fitting frames before the fit (the
+        paper). False is BaSiCPy's default (``recommended`` preset).
+    baseline_norm : float or "mean"
+        Background :math:`b_\mathrm{norm}` added back by :meth:`apply`
+        with ``timelapse`` ("mean": the mean fitted baseline of the
+        group).
     faithful : bool
-        ``True``: the reference defaults (``paper`` preset). ``False``:
-        ``recommended`` preset (currently identical).
+        ``True``: the ``paper`` preset. ``False``: the ``recommended``
+        preset (``sort_intensity=False``, more accurate on sparse
+        foregrounds in our tests).
     dtype, device, layout : optional
         See :class:`optix.Estimator`. The layout must have two spatial
         axes; a group axis (e.g. channels) gets its own profiles.
@@ -159,21 +177,30 @@ class BaSiC(Estimator):
         before resizing), ``meta["baseline_units"] == "signal"``.
     fit_frames_ : (k,) Tensor
         Flat sample indices (storage order) of the fitting frames.
-    fit_baseline_ : (*group, k) Tensor
-        Baseline of the fitting frames from the shading fit itself,
-        ``B_i mean(shading)`` (BaSiCPy's ``baseline``).
+    fit_baseline_ : (*group, k) Tensor or None
+        Without ``sort_intensity``: baseline of the fitting frames from
+        the shading fit itself, ``B_i mean(shading)`` (BaSiCPy's
+        ``baseline``). None after sorting.
 
     Notes
     -----
-    **Faithful mode.** The paper (Peng et al., Nat Commun 8:14836, 2017)
-    could not be consulted when this was written: the algorithm and the
-    defaults follow the MIT-licensed reference implementation BaSiCPy
-    2.0.0, ``fitting_mode="approximate"`` (BaSiCPy's inexact-ALM port of
-    the original BaSiC, which it validated against it), with
-    ``working_size=128``, ``tol=1e-3`` and ``reweight_tol=1e-2``. These
-    defaults may differ from the published ones and must be checked
-    against the paper. The default per-frame baseline (weighted median)
-    is optix's: BaSiCPy's own estimator is the ``"basicpy"`` extension.
+    **Faithful mode.** Follows the Methods of the paper (Peng et al., Nat
+    Commun 8:14836, 2017): the model, the per-pixel sorting, the zero
+    initialisation, the reweighted-L1 low-rank + sparse decomposition
+    with DCT-sparse :math:`S` and :math:`D = D_Z + D_R`, the two-step
+    baseline and the correction with :math:`b_\mathrm{norm}`. The
+    update equations, the weights :math:`W`, the automatic
+    :math:`\lambda_S, \lambda_D` and the stopping rules are given in the
+    paper's Supplementary Notes 3 and 4, which could not be consulted:
+    those follow the MIT-licensed BaSiCPy 2.0.0,
+    ``fitting_mode="approximate"`` (BaSiCPy's port of the original
+    BaSiC, checked against it), with ``working_size=128``, ``tol=1e-3``
+    and ``reweight_tol=1e-2``, and must be checked against the
+    Supplementary Information. The paper solves the problem with the
+    linearised ALM of Lin et al. (2011); BaSiCPy's "approximate" scheme
+    is its inexact-ALM variant. The per-frame baseline solver
+    (weighted median) is optix's: BaSiCPy's own is the ``"basicpy"``
+    extension.
 
     **Streaming.** :meth:`fit` reads only the ``max_frames`` fitting
     frames per group, one at a time (frames beyond ``max_frames`` are not
@@ -183,10 +210,8 @@ class BaSiC(Estimator):
 
     **Extensions** (off by default):
 
-    - ``sort_intensity=True``: sort each pixel's values over the fitting
-      frames before fitting (BaSiCPy's option). The per-frame
-      coefficients then lose their meaning: ``fit_baseline_`` is not
-      meaningful, use ``timelapse`` for the baseline.
+    - ``sort_intensity=False``: fit the unsorted frames (BaSiCPy's
+      default); ``fit_baseline_`` then holds the fitted baselines.
     - ``baseline_method="basicpy"``: BaSiCPy's ``fit_only_baseline``, a
       reweighted-L1 ALM trusting only the pixels below each frame's 10 %
       quantile, run per batch (so its penalty, stopping and weight
@@ -228,7 +253,7 @@ class BaSiC(Estimator):
         reference="doi:10.1038/ncomms14836",
     )
     paper = dict(_PRESET)
-    recommended = dict(_PRESET)
+    recommended = {**_PRESET, "sort_intensity": False}
 
     def __init__(
         self,
@@ -251,6 +276,7 @@ class BaSiC(Estimator):
         seed: int | None = None,
         baseline_method: str | None = None,
         sort_intensity: bool | None = None,
+        baseline_norm: float | str | None = None,
         faithful: bool = True,
         dtype: torch.dtype | str | None = None,
         device: torch.device | str | None = None,
@@ -267,6 +293,11 @@ class BaSiC(Estimator):
                 raise ValueError(
                     f"{name} must be one of {allowed}, got {opt[name]!r}"
                 )
+        norm = opt["baseline_norm"]
+        if isinstance(norm, str) and norm != "mean":
+            raise ValueError(
+                f"baseline_norm must be a number or 'mean': {norm}"
+            )
         if opt["max_frames"] is not None and opt["max_frames"] < 1:
             raise ValueError(f"max_frames must be >= 1: {opt['max_frames']}")
         self.fit_frames_: Tensor | None = None
@@ -443,8 +474,10 @@ class BaSiC(Estimator):
         flat = torch.stack(flats).reshape(*group_shape, *spatial)
         dark = torch.stack(darks).reshape(*group_shape, *spatial)
         self.fit_frames_ = frames
-        self.fit_baseline_ = torch.stack(fit_base).reshape(
-            *group_shape, len(frames)
+        self.fit_baseline_ = (
+            None
+            if opt["sort_intensity"]
+            else torch.stack(fit_base).reshape(*group_shape, len(frames))
         )
         baseline = None
         if opt["timelapse"]:
@@ -519,6 +552,17 @@ class BaSiC(Estimator):
         if timelapse and stored is None:
             small_flat = self._small(flat, size)
             small_dark = self._small(dark, size)
+        norm = self.options["baseline_norm"]
+        if timelapse and norm == "mean":
+            if est.baseline is None:
+                raise ValueError(
+                    "baseline_norm='mean' needs the fitted baseline"
+                )
+            ng = len(group_shape)
+            dims = tuple(range(ng, est.baseline.ndim))
+            norm = est.baseline.mean(dims) if dims else est.baseline
+        elif timelapse:
+            norm = torch.full(group_shape, float(norm), dtype=flat.dtype)
 
         def fn(chunk: object, batch: Tensor) -> Tensor:
             f = flat[chunk.group].to(batch)
@@ -534,6 +578,7 @@ class BaSiC(Estimator):
                         small_dark[chunk.group].to(batch),
                     )
                 x = x - b.to(batch)[:, None, None]
+                x = x + norm[chunk.group].to(batch)
             return x
 
         return self._apply_frames(Y, out, fn, overhead=3.0)

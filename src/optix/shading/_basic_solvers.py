@@ -232,6 +232,7 @@ def _approximate_solve(
     mu: Tensor,
     rho: float,
     max_mu: Tensor,
+    flat_init: str,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, float]:
     """One inexact-ALM solve for fixed weights (``ApproximateFit``).
 
@@ -241,7 +242,14 @@ def _approximate_solve(
     ent1, ent2 = 1.0, 10.0
     D_Z_max = D.min()
     image_norm = torch.linalg.vector_norm(D)
-    S_hat = dct.forward(torch.ones(h, w, dtype=D.dtype, device=D.device))
+    if flat_init == "zeros":
+        # the paper: S, D and B start at zero (with S = 0 the start of B
+        # has no effect)
+        S_hat = torch.zeros(h, w, dtype=D.dtype, device=D.device)
+    elif flat_init == "ones":
+        S_hat = dct.forward(torch.ones(h, w, dtype=D.dtype, device=D.device))
+    else:
+        raise ValueError(f"flat_init must be 'zeros' or 'ones': {flat_init}")
     S = dct.inverse(S_hat)
     D_R = torch.zeros(h, w, dtype=D.dtype, device=D.device)
     D_Z = torch.zeros((), dtype=D.dtype, device=D.device)
@@ -290,6 +298,7 @@ def basic_approximate(
     mu_coef: float = 12.5,
     rho: float = 1.5,
     max_mu_coef: float = 1e7,
+    flat_init: str = "zeros",
 ) -> BaSiCResult:
     """BaSiC on a working stack: reweighted L1 + inexact ALM.
 
@@ -321,6 +330,8 @@ def basic_approximate(
     mu_coef, rho, max_mu_coef : float
         Penalty schedule ``mu_0 = mu_coef / |D|_2``,
         ``mu <- min(rho mu, max_mu_coef mu_0)``.
+    flat_init : {"zeros", "ones"}
+        Start of ``S`` in each solve: zeros (the paper) or ones (BaSiCPy).
 
     Returns
     -------
@@ -350,6 +361,7 @@ def basic_approximate(
             mu=mu0,
             rho=rho,
             max_mu=mu0 * max_mu_coef,
+            flat_init=flat_init,
         )
         dark = D_R + D_Z * S
         shading = I_B.mean(0) - dark

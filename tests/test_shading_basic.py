@@ -88,15 +88,16 @@ def test_recovers_flat():
 
 def test_recovers_flat_with_resizing():
     Y, truth, _ = make_stack(n=30, shape=(96, 80))
-    est = BaSiC(working_size=48).fit(Y).estimates["shading"]
+    est = BaSiC(working_size=48, faithful=False).fit(Y).estimates["shading"]
     assert est.flat.shape == (96, 80)
     assert (est.flat - truth.flat).abs().max() < 0.02
 
 
 def test_recovers_dark():
     Y, truth, _ = make_stack(dark=50.0)
-    plain = BaSiC(working_size=64).fit(Y).estimates["shading"]
-    est = BaSiC(working_size=64, darkfield=True).fit(Y).estimates["shading"]
+    opts = dict(working_size=64, faithful=False)
+    plain = BaSiC(**opts).fit(Y).estimates["shading"]
+    est = BaSiC(darkfield=True, **opts).fit(Y).estimates["shading"]
     err = (est.flat - truth.flat).abs().max()
     assert err < 0.06 < (plain.flat - truth.flat).abs().max()
     assert abs(float(est.dark.mean()) - 50.0) < 1.0
@@ -120,8 +121,13 @@ def test_timelapse_baseline_and_apply():
     assert est.baseline.shape == (40,)
     assert est.meta["baseline_units"] == "signal"
     assert ((est.baseline - level) / level).abs().max() < 0.01
+    assert b.fit_baseline_ is None  # sorted fit: B_i are not baselines
+    unsorted = BaSiC(working_size=64, faithful=False).fit(Y)
     torch.testing.assert_close(
-        b.fit_baseline_[b.fit_frames_].double(), level, rtol=1e-3, atol=0
+        unsorted.fit_baseline_[unsorted.fit_frames_].double(),
+        level,
+        rtol=1e-3,
+        atol=0,
     )
     x = b.apply(Y)
     # background pixels become ~0 once the baseline is removed
@@ -145,7 +151,13 @@ def test_apply_without_timelapse():
 @pytest.mark.parametrize("sampling", ["stride", "reservoir"])
 def test_frame_subsample(sampling):
     Y, truth, _ = make_stack(n=50)
-    b = BaSiC(working_size=64, max_frames=20, sampling=sampling, seed=3)
+    b = BaSiC(
+        working_size=64,
+        max_frames=20,
+        sampling=sampling,
+        seed=3,
+        faithful=False,
+    )
     b.fit(Y.numpy())
     frames = b.fit_frames_
     assert len(frames) == 20 and len(set(frames.tolist())) == 20
@@ -170,7 +182,8 @@ def test_layout_groups_and_spatial_order():
     )
     Z[:] = y
     layout = Layout("tcyx", spatial="xy", group="c")
-    b = BaSiC(working_size=32, timelapse=True).fit(labeled(Z, layout))
+    b = BaSiC(working_size=32, timelapse=True, faithful=False)
+    b.fit(labeled(Z, layout))
     est = b.estimates["shading"]
     assert est.flat.shape == (2, 40, 32)
     assert est.baseline.shape == (2, 24)
@@ -194,8 +207,11 @@ def test_needs_two_spatial_axes():
 
 def test_options():
     assert BaSiC().is_faithful
-    assert BaSiC(faithful=False).is_faithful  # presets currently identical
-    assert not BaSiC(sort_intensity=True).is_faithful
+    assert BaSiC(faithful=False, sort_intensity=True).is_faithful
+    assert not BaSiC(faithful=False).is_faithful
+    assert BaSiC().options["sort_intensity"]
+    with pytest.raises(ValueError, match="baseline_norm"):
+        BaSiC(baseline_norm="median")
     with pytest.raises(ValueError, match="baseline_method"):
         BaSiC(baseline_method="nope")
     with pytest.raises(ValueError, match="sampling"):
@@ -204,12 +220,22 @@ def test_options():
         BaSiC().apply(np.zeros((2, 8, 8)))
 
 
-def test_sort_intensity_runs():
+def test_unsorted_extension():
     Y, truth, _ = make_stack()
-    est = BaSiC(working_size=64, sort_intensity=True).fit(Y)
+    est = BaSiC(working_size=64, sort_intensity=False).fit(Y)
     flat = est.estimates["shading"].flat
-    assert torch.isfinite(flat).all()
-    assert (flat - truth.flat).abs().max() < 0.05
+    assert (flat - truth.flat).abs().max() < 0.01
+
+
+def test_baseline_norm():
+    Y, truth, level = make_stack()
+    b = BaSiC(working_size=64, timelapse=True, baseline_norm="mean").fit(Y)
+    x = b.apply(Y)
+    spots = (Y / truth.flat - level[:, None, None]) > 100
+    base = b.estimates["shading"].baseline.mean()
+    assert (x[~spots] - base).abs().max() < 0.05 * level.min()
+    b2 = BaSiC(working_size=64, timelapse=True, baseline_norm=10.0).fit(Y)
+    assert (b2.apply(Y)[~spots] - 10).abs().max() < 0.05 * level.min()
 
 
 # -- interop ---------------------------------------------------------------
@@ -252,7 +278,10 @@ def test_fixture_provenance(ref):
     "case,dark", [("approx", False), ("approx_dark", True)]
 )
 def test_matches_basicpy(ref, case, dark):
-    b = BaSiC(working_size=64, darkfield=dark).fit(ref["stack"])
+    # BaSiCPy defaults: unsorted (and S starts at ones, which makes no
+    # measurable difference to the zero start of the paper)
+    b = BaSiC(working_size=64, darkfield=dark, sort_intensity=False)
+    b.fit(ref["stack"])
     est = b.estimates["shading"]
     flat = est.flat.double().numpy()
     np.testing.assert_allclose(flat, ref[f"{case}_flat"], rtol=1e-4)
