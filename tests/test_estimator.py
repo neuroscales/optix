@@ -107,6 +107,20 @@ def test_fit_apply_round_trip(data, kind, tmp_path):
     assert isinstance(default, torch.Tensor) and default.device.type == "cpu"
 
 
+def test_history_reset_on_each_fit(data):
+    e = MeanDark().fit(data)
+    first = e.history
+    assert first.objective == [1.0, 1.0] and first.converged
+    e.fit(data)
+    assert e.history.objective == [1.0, 1.0] and e.history.converged
+    assert e.history is not first
+    # a fit that fails does not keep the previous trace either
+    e.history.record(5.0)
+    with pytest.raises(ValueError, match="fewer than"):
+        e.fit(np.zeros((2,), dtype="f4"))
+    assert 5.0 not in e.history.objective
+
+
 def test_apply_frames_in_place(data):
     y = data.copy()
     e = MeanDark().fit(y)

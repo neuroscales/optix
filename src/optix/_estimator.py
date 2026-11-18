@@ -275,8 +275,10 @@ class Estimator:
         Returns
         -------
         Estimator
-            self, with ``estimates`` and ``history`` filled.
+            self, with ``estimates`` and ``history`` filled. ``history``
+            is reset at the start of each call.
         """
+        self.history = History()
         with torch.no_grad():
             self._fit(Y, init=init, callback=callback, verbose=verbose)
         meta = {
