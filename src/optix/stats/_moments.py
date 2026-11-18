@@ -144,16 +144,20 @@ class Moments(Reducer):
             dev = x - mean
             sums = [dev.pow(p).sum(dims) for p in range(2, self.order + 1)]
         else:
-            w = weight.detach().to(device=x.device, dtype=x.dtype)
-            w = w.expand_as(x)
-            wsum = w.sum(dims, keepdim=True)
+            weight = weight.detach().to(device=x.device).expand_as(x)
+            w = weight.to(x.dtype)
+            # zero-weight entries (e.g. masked NaN / inf) must not leak
+            # into the sums: 0 * nan is nan
+            x = torch.where(w > 0, x, 0)
+            # count in the state dtype: float32 is not exact beyond 2^24
+            wsum = weight.to(sdt).sum(dims, keepdim=True)
             safe = torch.where(wsum > 0, wsum, torch.ones_like(wsum))
-            mean = (w * x).sum(dims, keepdim=True) / safe
+            mean = (w * x).sum(dims, keepdim=True) / safe.to(x.dtype)
             dev = x - mean
             sums = [
                 (w * dev.pow(p)).sum(dims) for p in range(2, self.order + 1)
             ]
-            count = wsum.squeeze(dims).to(sdt)
+            count = wsum.squeeze(dims)
         mean = mean.squeeze(dims)
         chunk = (count, mean.to(sdt), *(s.to(sdt) for s in sums))
         if self.count is None:

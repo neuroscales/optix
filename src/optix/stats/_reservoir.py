@@ -9,7 +9,11 @@ from ._base import Reducer
 
 __all__ = ["Reservoir"]
 
-_KEYS = 2**62
+_KEY_BITS = 62
+_KEYS = 2**_KEY_BITS
+# torch.rand(float32) returns multiples of 2^-24: ``rand < 2^-e`` holds
+# with probability exactly 2^-e for 0 <= e <= 24.
+_RAND_BITS = 24
 
 
 class Reservoir(Reducer):
@@ -38,13 +42,20 @@ class Reservoir(Reducer):
     Notes
     -----
     Once the reservoir is full, with ``kmax`` its largest key, a value is
-    only kept if its key is below ``kmax``: a float32 Bernoulli mask with
-    probability ``kmax / 2^62`` selects the candidates, and int64 keys are
-    drawn (uniformly in ``[0, kmax)``) for those only. This avoids a
-    chunk-sized int64 temporary.
+    only kept if its key is below ``kmax``. A float32 Bernoulli mask with
+    probability ``q``, the smallest power of two ``>= kmax / 2^62`` (and
+    ``>= 2^-24``, so that it is exact in float32), selects candidates, and
+    int64 keys are drawn uniformly in ``[0, q 2^62)`` for those only; keys
+    ``>= kmax`` are then discarded. Each value thus gets a key uniform in
+    ``[0, kmax)`` with probability exactly ``kmax / 2^62``, as if a key had
+    been drawn for every value, without a chunk-sized int64 temporary.
 
     Each update synchronises with the host (boolean indexing and reading
-    ``kmax``). The random generator is not part of ``state_dict``.
+    ``kmax``). The random generator is not part of ``state_dict``: a
+    reservoir restored with ``from_state_dict`` starts again from ``seed``,
+    and reservoirs (e.g. parallel workers) built with the same ``seed``
+    draw the same key stream. Give each worker its own seed (or none) for
+    independent samples.
     """
 
     _state = ("values", "keys", "count")
@@ -107,9 +118,17 @@ class Reservoir(Reducer):
             keys = torch.randint(_KEYS, v.shape, generator=gen, device=device)
         else:
             kmax = max(int(self.keys.max()), 1)
-            keep = torch.rand(v.shape, generator=gen, device=device)
-            v = v[keep < kmax / _KEYS]
-            keys = torch.randint(kmax, v.shape, generator=gen, device=device)
+            # q = 2^-e >= kmax / 2^62, exact in float32 (e <= 24)
+            e = min(_RAND_BITS, _KEY_BITS - (kmax - 1).bit_length())
+            u = torch.rand(
+                v.shape, generator=gen, device=device, dtype=torch.float32
+            )
+            v = v[u < 2.0**-e]
+            keys = torch.randint(
+                2 ** (_KEY_BITS - e), v.shape, generator=gen, device=device
+            )
+            below = keys < kmax
+            v, keys = v[below], keys[below]
         self._keep(
             torch.cat([self.values, v.to(self.values.dtype)]),
             torch.cat([self.keys, keys]),

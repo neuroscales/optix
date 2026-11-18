@@ -27,7 +27,9 @@ class Histogram(Reducer):
     dim : int or tuple of int or None
         Reduced dims of each chunk (see :class:`Reducer`).
     count_dtype : torch.dtype
-        Integer dtype of the counts.
+        Integer dtype of the counts (default int64, which cannot
+        overflow in practice; int32 halves the memory but overflows past
+        ``2^31 - 1`` counts in one bin).
 
     Attributes
     ----------
@@ -43,8 +45,8 @@ class Histogram(Reducer):
     equal to ``lo`` into the first regular bin.
 
     The state holds ``(bins + 2) * prod(item)`` counts: 64 bins on a
-    2048 x 2048 image is about 1.1 GB in int32. A warning is emitted when
-    it exceeds the configured chunk ``memory``.
+    2048 x 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
+    warning is emitted when it exceeds the configured chunk ``memory``.
     """
 
     _state = ("counts", "lo", "hi")
@@ -56,7 +58,7 @@ class Histogram(Reducer):
         bins: int = 64,
         *,
         dim: int | Sequence[int] | None = 0,
-        count_dtype: torch.dtype = torch.int32,
+        count_dtype: torch.dtype = torch.int64,
     ) -> None:
         if bins < 1:
             raise ValueError(f"bins must be >= 1, got {bins}")
