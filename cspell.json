@@ -1,10 +1,22 @@
 {
   "version": "0.2",
   "words": [
+    "balbastre",
     "balbasty",
+    "fontawesome",
+    "javascripts",
+    "mathjax",
+    "mkdocstrings",
     "neuroscales",
+    "numpy",
     "optix",
+    "pytest",
+    "pythonpath",
     "pytorch",
+    "setuptools",
+    "testpaths",
+    "versioningit",
+    "yael",
     "zensical"
   ]
 }
