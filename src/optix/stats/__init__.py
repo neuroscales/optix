@@ -1,6 +1,6 @@
 """Streaming, mergeable statistics and per-pixel order statistics."""
 
-from ._base import Reducer, reduce
+from ._base import Reducer, reduce, reduce_groups
 from ._histogram import Histogram
 from ._minmax import MinMax
 from ._moments import Moments
@@ -16,5 +16,6 @@ __all__ = [
     "median_mad",
     "order_statistics",
     "reduce",
+    "reduce_groups",
     "tile_reduce",
 ]

@@ -17,13 +17,16 @@ from ._version import __version__
 from .estimates import Estimate
 from .io import (
     ArrayLike,
+    Chunk,
+    Labeled,
+    Layout,
     WritableArrayLike,
     blocks,
     chunks_of,
     flush,
     frame_batches,
+    labeled,
     prepare_out,
-    store,
 )
 from .stats import Reducer
 
@@ -129,7 +132,15 @@ class History:
 
 
 _REGISTRY: dict[str, type["Estimator"]] = {}
-_RESERVED = {"self", "faithful", "dtype", "device", "__class__", "kwargs"}
+_RESERVED = {
+    "self",
+    "faithful",
+    "dtype",
+    "device",
+    "layout",
+    "__class__",
+    "kwargs",
+}
 
 
 def _same(a: object, b: object) -> bool:
@@ -197,6 +208,10 @@ class Estimator:
     dtype, device : optional
         Working backend (default: configuration; the device follows a
         Tensor input when unset).
+    layout : Layout, optional
+        Axis roles of the data (see :class:`optix.io.Layout`); can also be
+        given to :meth:`fit`, or carried by a labelled array. Default:
+        ``(*samples, H, W)``.
     **options
         Hyper-parameters (the base's view of the subclass's options).
 
@@ -208,7 +223,19 @@ class Estimator:
         Whether the resolved options equal the paper preset.
     estimates : dict of str to Estimate
         Results of :meth:`fit`, e.g. ``{"sensor": ..., "shading": ...}``.
+        Parameter maps are shaped ``(*group, *spatial)``, spatial axes in
+        layout order.
+    layout : Layout or None
+        Layout used by the last :meth:`fit` (or given at construction);
+        :meth:`apply` uses it for plain arrays.
     history : History
+
+    Notes
+    -----
+    Subclasses receive a :class:`optix.io.Labeled` array in ``_fit`` /
+    ``_apply`` whenever a layout is set, so that the io and stats helpers
+    pick it up; :meth:`_layout_of` and :meth:`_map_shape` give the layout
+    (default included) and the shape of the parameter maps.
     """
 
     tags: ClassVar[Tags]
@@ -226,10 +253,14 @@ class Estimator:
         faithful: bool = True,
         dtype: torch.dtype | str | None = None,
         device: torch.device | str | None = None,
+        layout: Layout | None = None,
         **options: object,
     ) -> None:
+        if layout is not None and not isinstance(layout, Layout):
+            raise TypeError(f"layout must be a Layout, got {layout!r}")
         self.dtype = _parse_dtype(dtype)
         self.device = _parse_device(device)
+        self.layout = layout
         self.estimates: dict[str, Estimate] = {}
         self.history = History()
         self._resolve(faithful, options)
@@ -250,6 +281,8 @@ class Estimator:
         )
 
     def _backend(self, like: object = None) -> dict:
+        if isinstance(like, Labeled):
+            like = like.array
         return resolve_backend(self.dtype, self.device, like=like)
 
     # -- public API ------------------------------------------------------
@@ -257,6 +290,7 @@ class Estimator:
         self,
         Y: ArrayLike,
         *,
+        layout: Layout | None = None,
         init: object = None,
         callback: Callable[["Estimator"], object] | None = None,
         verbose: bool = False,
@@ -265,7 +299,11 @@ class Estimator:
 
         Parameters
         ----------
-        Y : (*batch, frames, *spatial) array-like
+        Y : array-like or Labeled
+            Data; ``(*samples, H, W)`` without a layout.
+        layout : Layout, optional
+            Axis roles (default: that of a labelled ``Y``, else the one
+            given at construction). Stored in ``self.layout``.
         init : Estimate, sequence of Estimate, or Estimator, optional
             Initial values (cloned; the caller's objects are not modified).
         callback : callable, optional
@@ -279,6 +317,16 @@ class Estimator:
             is reset at the start of each call.
         """
         self.history = History()
+        if isinstance(Y, Labeled):
+            if layout is not None and layout != Y.layout:
+                raise ValueError(
+                    f"layout={layout!r} conflicts with the layout of the "
+                    f"labelled array, {Y.layout!r}"
+                )
+            layout = Y.layout
+        layout = self.layout if layout is None else layout
+        Y = self._labeled(Y, layout)
+        self.layout = layout
         with torch.no_grad():
             self._fit(Y, init=init, callback=callback, verbose=verbose)
         meta = {
@@ -298,7 +346,8 @@ class Estimator:
 
         Parameters
         ----------
-        Y : array-like
+        Y : array-like or Labeled
+            Data, in the layout of the fit (unless labelled otherwise).
         out : writable array-like, optional
             Output (tensor, numpy, zarr, memmap...). Default: a new tensor
             on the device of ``Y`` if it is a Tensor, else on the CPU.
@@ -308,6 +357,8 @@ class Estimator:
         writable array-like
             ``out``.
         """
+        if not isinstance(Y, Labeled):
+            Y = self._labeled(Y, self.layout)
         with torch.no_grad():
             return self._apply(Y, out)
 
@@ -327,6 +378,26 @@ class Estimator:
         raise NotImplementedError
 
     # -- helpers for subclasses ------------------------------------------
+    @staticmethod
+    def _labeled(Y: ArrayLike, layout: Layout | None) -> ArrayLike:
+        """``Y`` labelled with ``layout`` (unchanged when None)."""
+        if layout is None:
+            return Y
+        if isinstance(Y, Labeled):
+            return Y if Y.layout == layout else labeled(Y, layout)
+        return labeled(Y, layout)
+
+    @staticmethod
+    def _layout_of(Y: ArrayLike, ndim: int = 2) -> Layout:
+        """Layout of ``Y`` (the default one with ``ndim`` spatial dims)."""
+        if isinstance(Y, Labeled):
+            return Y.layout
+        return Layout.default(len(Y.shape), ndim)
+
+    def _map_shape(self, Y: ArrayLike, ndim: int = 2) -> tuple[int, ...]:
+        """Shape ``(*group, *spatial)`` of the parameter maps for ``Y``."""
+        return self._layout_of(Y, ndim).map_shape(Y)
+
     @staticmethod
     def _init_estimates(init: object) -> list[Estimate]:
         if init is None:
@@ -386,26 +457,30 @@ class Estimator:
         self,
         Y: ArrayLike,
         out: WritableArrayLike | None,
-        fn: Callable[[tuple, Tensor], Tensor],
+        fn: Callable[[Chunk, Tensor], Tensor],
         *,
         ndim: int = 2,
         overhead: float = 2.0,
     ) -> WritableArrayLike:
-        """Apply ``fn(index, batch)`` to frame batches and store the results.
+        """Apply ``fn(chunk, batch)`` to frame batches and store the results.
 
+        ``batch`` is ``(n, *spatial)``; ``chunk.group`` selects the
+        parameters of a ``(*group, *spatial)`` map. ``fn`` returns a tensor
+        of the shape of ``batch``, written back with ``chunk.store``.
         In-place use (``out is Y``) is safe: chunks are owned.
         """
-        out = prepare_out(out, tuple(Y.shape), like=Y, dtype=self.dtype)
+        raw = Y.array if isinstance(Y, Labeled) else Y
+        out = prepare_out(out, tuple(Y.shape), like=raw, dtype=self.dtype)
         chunks = frame_batches(
             Y,
-            ndim=ndim,
+            ndim=None if isinstance(Y, Labeled) else ndim,
             overhead=overhead,
             align=chunks_of(out),
             dtype=self.dtype,
             device=self.device,
         )
-        for index, data in chunks:
-            store(out, index, fn(index, data))
+        for chunk in chunks:
+            chunk.store(out, fn(chunk, chunk.data))
         flush(out)
         return out
 
@@ -427,13 +502,15 @@ class Estimator:
             If ``out`` is (or shares memory with) ``Y`` while the halo is
             nonzero: halos would read already-processed neighbours.
         """
+        raw = Y.array if isinstance(Y, Labeled) else Y
         halos = [halo] if isinstance(halo, int) else list(halo)
-        if any(halos) and out is not None and _shares_memory(out, Y):
+        target = out.array if isinstance(out, Labeled) else out
+        if any(halos) and out is not None and _shares_memory(target, raw):
             raise ValueError(
                 "In-place processing with a halo is not possible: use a "
                 "separate output."
             )
-        out = prepare_out(out, tuple(Y.shape), like=Y, dtype=self.dtype)
+        out = prepare_out(out, tuple(Y.shape), like=raw, dtype=self.dtype)
         chunks = blocks(
             Y,
             block,
@@ -443,8 +520,8 @@ class Estimator:
             dtype=self.dtype,
             device=self.device,
         )
-        for index, data, inner in chunks:
-            store(out, index, fn(data)[inner])
+        for chunk in chunks:
+            chunk.store(out, fn(chunk.data)[chunk.inner])
         flush(out)
         return out
 
@@ -456,7 +533,7 @@ class Estimator:
     ) -> Self:
         """Move estimates and any tensor state (in place)."""
         device, dtype = _parse_device(device), _parse_dtype(dtype)
-        skip = {"options", "history", "dtype", "device"}
+        skip = {"options", "history", "dtype", "device", "layout"}
         for name, value in vars(self).items():
             if name not in skip:
                 setattr(self, name, _move(value, device, dtype))
@@ -482,6 +559,7 @@ class Estimator:
             "options": dict(self.options),
             "estimates": {k: e._payload() for k, e in self.estimates.items()},
             "history": asdict(self.history),
+            "layout": None if self.layout is None else self.layout.to_dict(),
             "extra": self._extra_state(),
         }
 
@@ -493,6 +571,8 @@ class Estimator:
             k: Estimate._from_payload(p) for k, p in state["estimates"].items()
         }
         self.history = History(**state["history"])
+        layout = state.get("layout")
+        self.layout = None if layout is None else Layout(**layout)
         self._load_extra_state(state["extra"])
         return self
 

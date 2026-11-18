@@ -5,7 +5,8 @@ import torch
 import optix
 from optix import Estimator, History, Tags
 from optix.estimates import SensorEstimate, ShadingEstimate
-from optix.stats import Moments, reduce
+from optix.io import Layout, labeled
+from optix.stats import Moments, reduce, reduce_groups
 
 
 class MeanDark(Estimator):
@@ -200,3 +201,101 @@ def test_history_convergence_and_monotone():
     h.record(-60.0 + 1e-9)
     assert h.check(1e-6)
     assert h.converged and "tol" in h.reason
+
+
+# --- layouts ----------------------------------------------------------------
+
+
+class GroupDark(Estimator):
+    """Toy estimator: per-group mean image, shared over the samples."""
+
+    tags = Tags(targets=("shading",), streaming="per-pixel-stats")
+
+    def __init__(self, *, faithful=True, dtype=None, device=None, layout=None):
+        super().__init__(dtype=dtype, device=device, layout=layout)
+        self._resolve(faithful, locals())
+
+    def _fit(self, Y, *, init, callback, verbose):
+        shape = self._map_shape(Y)
+        dark = torch.zeros(shape, **self._backend(Y))
+        groups = reduce_groups(
+            Y, Moments(1), batch=3, dtype=self.dtype, device=self.device
+        )
+        for key, (m,) in groups.items():
+            dark[key] = m.mean.to(dark)
+        self.estimates = {"shading": ShadingEstimate(dark=dark)}
+
+    def _apply(self, Y, out):
+        dark = self.estimates["shading"].dark
+
+        def fn(chunk, data):
+            return data - dark[chunk.group].to(data)
+
+        return self._apply_frames(Y, out, fn)
+
+
+def test_estimator_with_layout_end_to_end(tmp_path):
+    zarr = pytest.importorskip("zarr")
+    g = np.random.default_rng(1)
+    y = (100 + g.normal(size=(2, 3, 4, 5, 6))).astype("f4")  # t c z y x
+    Y = zarr.create_array(
+        store={}, shape=y.shape, chunks=(1, 1, 2, 5, 6), dtype="f4"
+    )
+    Y[:] = y
+    layout = Layout("tczyx", spatial="xy", group="c")
+    ref = y.mean((0, 2)).transpose(0, 2, 1)  # (C, X, Y)
+    for e in (
+        GroupDark(layout=layout).fit(Y),
+        GroupDark().fit(Y, layout=layout),
+        GroupDark().fit(labeled(Y, layout)),
+    ):
+        assert e.layout == layout
+        dark = e.estimates["shading"].dark
+        assert dark.shape == (3, 6, 5)
+        np.testing.assert_allclose(dark.numpy(), ref, rtol=1e-5)
+    # apply uses the fitted layout for a plain array; zarr out round trip
+    out = zarr.create_array(
+        store={}, shape=y.shape, chunks=(2, 1, 4, 5, 3), dtype="f4"
+    )
+    assert e.apply(Y, out=out) is out
+    expected = y - y.mean((0, 2), keepdims=True)
+    np.testing.assert_allclose(out[:], expected, atol=1e-4)
+    # the layout survives save / load
+    e.save(tmp_path / "e.pt")
+    loaded = optix.load(tmp_path / "e.pt")
+    assert loaded.layout == layout
+    res = loaded.apply(y)
+    np.testing.assert_allclose(res.numpy(), expected, atol=1e-4)
+    with pytest.raises(ValueError, match="conflicts"):
+        GroupDark().fit(labeled(Y, layout), layout=Layout.default(5, 2))
+    with pytest.raises(TypeError):
+        GroupDark(layout="tczyx")
+
+
+def test_estimator_light_sheet_layout():
+    """(z, y, x) stack whose pictures are the (y, z) planes, one per x."""
+    g = np.random.default_rng(2)
+    y = (10 + g.normal(size=(6, 5, 20))).astype("f4")
+    layout = Layout("zyx", spatial="yz", sample="x")
+    e = GroupDark(layout=layout).fit(y)
+    dark = e.estimates["shading"].dark
+    assert dark.shape == (5, 6)
+    np.testing.assert_allclose(dark.numpy(), y.mean(2).T, rtol=1e-5)
+    res = e.apply(torch.from_numpy(y))
+    np.testing.assert_allclose(
+        res.numpy(), y - y.mean(2, keepdims=True), atol=1e-4
+    )
+    # without a layout, nothing changes
+    d = MeanDark().fit(y[None])
+    assert d.layout is None
+    assert d.estimates["shading"].dark.shape == (5, 20)
+
+
+def test_labeled_tensor_keeps_device_and_blocks_layout():
+    y = torch.randn(4, 3, 5)
+    e = GroupDark(layout=Layout("zyx", spatial="yx")).fit(y)
+    assert e._backend(labeled(y, e.layout))["device"] == y.device
+    Y = labeled(y, axes="zyx", spatial="xz")
+    with pytest.raises(ValueError, match="In-place"):
+        Blur().apply(Y, out=Y)
+    torch.testing.assert_close(Blur().apply(Y, out=torch.empty(4, 3, 5)), y)
