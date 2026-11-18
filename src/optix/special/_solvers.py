@@ -40,7 +40,8 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     c : Tensor
         Right-hand side. Values ``<= 0`` (which round-off can produce) are
         clamped to ``eps / 2``, which caps ``nu`` at about ``1 / eps`` of
-        the dtype.
+        the dtype. Values above ``1 / eps`` (including ``inf``) are clamped
+        to ``1 / eps``, which keeps ``nu >= ~eps`` and the result finite.
     niter : int
         Number of Newton iterations.
 
@@ -61,7 +62,7 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     if not c.is_floating_point():
         c = c.to(torch.get_default_dtype())
     eps = torch.finfo(c.dtype).eps
-    c = c.clamp_min(eps / 2)
+    c = c.clamp(min=eps / 2, max=1 / eps)
     nu = (3 - c + ((c - 3).square() + 24 * c).sqrt()) / (12 * c)
     cap = 1 / eps
     for _ in range(niter):
@@ -147,7 +148,12 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     Whenever a Newton step would make any component of a vector
     non-positive, that vector takes the fixed-point update
     ``a = inv_digamma(digamma(sum a) + elogpi)`` instead, which always
-    stays positive.
+    stays positive (and is also taken when the Newton step is not finite).
+
+    Convergence is only local: Newton's method needs a warm start (for
+    example the previous estimate) to converge in a few iterations, and
+    from a poor initial guess it may need many iterations or settle on
+    the slower fixed-point steps.
     """
     elogpi, alpha = torch.broadcast_tensors(elogpi, alpha)
     alpha = alpha.to(elogpi.dtype)
@@ -162,7 +168,8 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
             1 / z + (1 / q).sum(-1, keepdim=True)
         )
         newton = alpha - (grad - b) / q
-        ok = (newton > 0).all(-1, keepdim=True)
+        # A float32 cancellation can make the Newton step non-finite.
+        ok = (torch.isfinite(newton) & (newton > 0)).all(-1, keepdim=True)
         fixed = inv_digamma(psi0 + elogpi)
         alpha = torch.where(ok, newton, fixed).clamp_min(tiny)
     return alpha

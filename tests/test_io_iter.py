@@ -181,8 +181,9 @@ def test_row_tiles_reassemble(batch):
 
 def test_row_tiles_budget():
     y = np.zeros((4, 10, 8), dtype=np.float32)
-    # each row holds 4 * 8 elements = 128 bytes
-    tiles = row_tiles(y, memory=128 * 3)
+    # each row holds 4 * 8 float32 elements = 128 bytes
+    with optix.config(dtype="float32"):
+        tiles = row_tiles(y, memory=128 * 3)
     assert [d.shape[1] for _, d in tiles] == [3, 3, 3, 1]
     # batch = 1 frame of 10 * 8 elements -> 2 rows of 32 elements
     tiles = row_tiles(y, batch=1)

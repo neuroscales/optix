@@ -32,8 +32,8 @@ def test_project_reconstruct_round_trip():
 
 
 def test_project_truncated_shape():
-    x = torch.randn(4, 10, 8)
     bases = [dct_basis(10, 3), dct_basis(8, 2)]
+    x = torch.randn(4, 10, 8, dtype=bases[0].dtype)
     assert project(x, bases).shape == (4, 3, 2)
     assert reconstruct(project(x, bases), bases).shape == x.shape
 
@@ -97,3 +97,17 @@ def test_bending_close_to_continuous_at_low_frequency():
     w = dct_bending([64], [4], order=2, dtype=torch.float64)
     for j in range(1, 4):
         assert w[j].item() == pytest.approx((math.pi * j / 64) ** 4, rel=0.01)
+
+
+def test_bending_2d_matches_prototype_formula():
+    # weight = (ly[:, None] + lx[None, :]) ** 2: the square of the sum,
+    # not ly**2 + lx**2.
+    ny, nx = 12, 9
+    ky = torch.arange(ny, dtype=torch.float64)
+    kx = torch.arange(nx, dtype=torch.float64)
+    ly = 2 - 2 * torch.cos(math.pi * ky / ny)
+    lx = 2 - 2 * torch.cos(math.pi * kx / nx)
+    ref = (ly[:, None] + lx[None, :]) ** 2
+    w = dct_bending([ny, nx], [ny, nx], dtype=torch.float64)
+    torch.testing.assert_close(w, ref, rtol=1e-12, atol=1e-12)
+    assert not torch.allclose(w, ly[:, None] ** 2 + lx[None, :] ** 2)

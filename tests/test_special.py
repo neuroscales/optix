@@ -87,6 +87,14 @@ def test_fit_gamma_shape_extremes():
     assert torch.isfinite(nu).all() and (nu > 0).all()
 
 
+@pytest.mark.parametrize("dt", [torch.float32, torch.float64])
+def test_fit_gamma_shape_huge_c_finite(dt):
+    c = torch.tensor([1e8, 1e10, 1e12, 1e20, 1e30, float("inf")], dtype=dt)
+    nu = fit_gamma_shape(c)
+    assert nu.dtype == dt
+    assert torch.isfinite(nu).all() and (nu > 0).all()
+
+
 def test_fit_gamma_shape_from_samples():
     g = torch.Generator().manual_seed(1)
     x = torch._standard_gamma(
@@ -111,6 +119,16 @@ def test_fit_dirichlet_recovers_alpha(dt):
     fit = fit_dirichlet(dirichlet_elog(alpha), torch.ones_like(alpha))
     assert (fit > 0).all()
     torch.testing.assert_close(fit, alpha, rtol=2e-3, atol=0)
+
+
+@pytest.mark.parametrize("niter", [16, 64, 500])
+def test_fit_dirichlet_float32_cancellation_stays_finite(niter):
+    # Regression: a float32 cancellation in the Newton step used to give NaN.
+    alpha = torch.tensor([[2e7, 3e4]], dtype=torch.float64)
+    elogpi = dirichlet_elog(alpha).float()
+    fit = fit_dirichlet(elogpi, torch.ones(2), niter=niter)
+    assert fit.dtype == torch.float32
+    assert torch.isfinite(fit).all() and (fit > 0).all()
 
 
 def test_fit_dirichlet_broadcast_init():

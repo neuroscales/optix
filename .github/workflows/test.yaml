@@ -15,6 +15,14 @@ on:
         description: PyTorch version (or "latest")
         required: true
         default: "2.3.1"
+      optix-compile:
+        description: Value of OPTIX_COMPILE ("" = unset)
+        required: false
+        default: ""
+      optix-dtype:
+        description: Value of OPTIX_DTYPE ("" = unset)
+        required: false
+        default: ""
   workflow_call:
     inputs:
       tag:
@@ -32,6 +40,21 @@ on:
         required: true
         default: "2.3.1"
         type: string
+      optix-compile:
+        description: Value of OPTIX_COMPILE ("" = unset)
+        required: false
+        default: ""
+        type: string
+      optix-dtype:
+        description: Value of OPTIX_DTYPE ("" = unset)
+        required: false
+        default: ""
+        type: string
+      allow-failure:
+        description: Do not fail the calling workflow if the tests fail
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -39,6 +62,7 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    continue-on-error: ${{ inputs.allow-failure == true }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -58,9 +82,15 @@ jobs:
           else
             pip install "torch==${PYTORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
           fi
-          # torch < 2.4 wheels are built against numpy 1.x
-          case "${PYTORCH_VERSION}" in 2.3.*) pip install "numpy<2" ;; esac
-          pip install -e .[test]
+          # torch < 2.4 wheels are built against numpy 1.x: pin it in the
+          # same install so the resolver cannot upgrade it again
+          case "${PYTORCH_VERSION}" in
+            2.3.*) pip install -e .[test] "numpy<2" ;;
+            *) pip install -e .[test] ;;
+          esac
       - name: Test with pytest
         shell: bash
+        env:
+          OPTIX_COMPILE: ${{ inputs.optix-compile }}
+          OPTIX_DTYPE: ${{ inputs.optix-dtype }}
         run: pytest

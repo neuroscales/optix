@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import optix
+from optix._config import resolve_backend
 from optix.stats import (
     Histogram,
     MinMax,
@@ -108,6 +109,33 @@ def test_moments_masked_empty_pixels():
     var = m.var()
     assert torch.isnan(var[1]) and torch.isnan(var[2])
     assert not torch.isnan(var[0])
+
+
+@pytest.mark.parametrize("dt", [torch.float32, torch.float64])
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_moments_masked_nan_frame(dt, bad):
+    # Regression: 0 * nan = nan leaked masked frames into the sums.
+    g = torch.Generator().manual_seed(5)
+    x = torch.randn(6, 3, generator=g, dtype=torch.float64).to(dt)
+    x[2] = bad
+    x[4, 1] = bad
+    mask = torch.ones(6, 3, dtype=torch.bool)
+    mask[2] = False
+    mask[4, 1] = False
+    m = (
+        Moments(4)
+        .update(x[:3], weight=mask[:3])
+        .update(x[3:], weight=mask[3:])
+    )
+    for attr in ("count", "mean", "m2", "m3", "m4"):
+        assert torch.isfinite(getattr(m, attr)).all()
+    assert m.count.tolist() == [5, 4, 5]
+    for j in range(3):
+        ref = x[:, j][mask[:, j]].double()
+        dev = ref - ref.mean()
+        torch.testing.assert_close(m.mean[j], ref.mean())
+        torch.testing.assert_close(m.m2[j], dev.square().sum())
+        torch.testing.assert_close(m.m4[j], dev.pow(4).sum())
 
 
 def test_moments_large_offset_stability():
@@ -245,6 +273,11 @@ def test_histogram_memory_warning():
         h.update(torch.rand(2, 20, 20))
 
 
+def test_histogram_default_count_dtype_is_int64():
+    h = Histogram(0.0, 1.0, 4).update(torch.rand(3, 2, 2))
+    assert h.count_dtype == torch.int64 and h.counts.dtype == torch.int64
+
+
 # --- Reservoir --------------------------------------------------------------
 
 
@@ -297,6 +330,37 @@ def test_reservoir_uniform(mode):
     assert hits.sum() == size * trials
 
 
+@pytest.mark.parametrize("ratio", [1.5 / 16, 0.3 / 16, 13.7 / 16])
+def test_reservoir_thinning_is_exact(monkeypatch, ratio):
+    # Regression: the Bernoulli thinning compared float32 draws (multiples
+    # of 2^-24) with kmax / 2^62, which over-includes values once that
+    # ratio is not a multiple of 2^-24. Simulate a 4-bit uniform generator
+    # so that the effect is visible with few draws.
+    from optix.stats import _reservoir
+
+    rand = torch.rand
+
+    def coarse(*args, **kwargs):
+        return (rand(*args, **kwargs) * 16).floor() / 16
+
+    monkeypatch.setattr(_reservoir, "_RAND_BITS", 4, raising=False)
+    monkeypatch.setattr(torch, "rand", coarse)
+    size, n = 200_000, 200_000
+    kmax = int(ratio * 2**62)
+    r = Reservoir(size, seed=0)
+    r.values = torch.full((size,), -1.0)
+    r.keys = torch.full((size,), kmax, dtype=torch.int64)
+    r.count = torch.tensor(size)
+    r.update(torch.zeros(n))
+    new = r.keys[r.values == 0]
+    expected = n * kmax / 2**62
+    assert abs(new.numel() - expected) < 5 * expected**0.5
+    # the new keys are uniform in [0, kmax)
+    assert int(new.max()) < kmax
+    mean = new.double().mean().item() / kmax
+    assert abs(mean - 0.5) < 5 * (1 / 12 / new.numel()) ** 0.5
+
+
 def test_reservoir_state_and_copy():
     r = Reservoir(5, seed=0).update(torch.arange(50.0))
     c = r.copy()
@@ -334,6 +398,7 @@ def test_reduce_zarr():
 def test_order_statistics_vs_sort(batch):
     y = np.random.default_rng(2).normal(size=(2, 9, 7, 5)).astype("f4")
     s = torch.from_numpy(y).reshape(18, 7, 5).sort(0).values
+    s = s.to(resolve_backend()["dtype"])
     torch.testing.assert_close(order_statistics(y, 4, batch=batch), s[3])
     ks = [1, 5, 18]
     torch.testing.assert_close(
@@ -357,7 +422,7 @@ def test_median_mad():
 
 
 def test_tile_reduce_3d_and_amplification_warning():
-    y = torch.randn(5, 3, 4, 6)
+    y = torch.randn(5, 3, 4, 6, dtype=resolve_backend()["dtype"])
     out = tile_reduce(y, lambda t: t.mean(-1), ndim=3, batch=1)
     torch.testing.assert_close(out, y.mean(0))
     zarr = pytest.importorskip("zarr")
