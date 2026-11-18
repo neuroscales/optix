@@ -241,9 +241,33 @@ def kappa_mad(n: Tensor) -> Tensor:
     return torch.where(n <= 20, table[idx], 1 / (5 * n) + MAD_LIMIT)
 
 
-def kappa_mad_variance(n: Tensor) -> Tensor:
-    """(κ̌ᵐᵃᵈₙ)² ~ 1 + 1/(5n) (Section VI-A.2)."""
+def kappa_mad_variance(n: Tensor, exact: bool = False) -> Tensor:
+    """(κ̌ᵐᵃᵈₙ)², the factor of the variance estimate (κ̌ᵐᵃᵈ σ̂ᵐᵃᵈ)².
+
+    Section VI-A.2: (κ̌ᵐᵃᵈₙ)² ≈ 1 + 1/(5n), as printed in the paper
+    (the default). The estimate is meant to be unbiased: E{(κ̌ᵐᵃᵈ σ̂ᵐᵃᵈ)²}
+    = σ². Since E{σ̂ᵐᵃᵈ} = σ (Table II) and var{σ̂ᵐᵃᵈ} = σ² dᵐᵃᵈₙ
+    (Eq. 58), E{(σ̂ᵐᵃᵈ)²} = σ²(1 + dᵐᵃᵈₙ), so the factor must be
+    1/(1 + dᵐᵃᵈₙ) < 1 (`exact=True`).
+
+    !!! warning "The printed factor has the wrong sign"
+        A Monte Carlo of 200 000 samples of n i.i.d. 𝒩(0, 1) gives the
+        unbiasing factor 1/E{(σ̂ᵐᵃᵈ)²} = 0.79, 0.89, 0.975 and 0.993 for
+        n = 5, 11, 51 and 201, against 1/(1 + dᵐᵃᵈₙ) = 0.83, 0.90, 0.974
+        and 0.993, and 1 + 1/(5n) = 1.04, 1.02, 1.004 and 1.001. The
+        factor only weights the least-squares initialisation (26), so
+        either value leads to the same ML estimate.
+
+    Parameters
+    ----------
+    n : Tensor
+        Number of samples.
+    exact : bool
+        1/(1 + dᵐᵃᵈₙ) instead of the paper's 1 + 1/(5n).
+    """
     n = torch.as_tensor(n, dtype=torch.float64)
+    if exact:
+        return 1 / (1 + d_mad_factor(n))
     return 1 + 1 / (5 * n)
 
 

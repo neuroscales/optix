@@ -6,13 +6,15 @@ import pytest
 import torch
 
 from optix.sensor._foi_clip import E_m, E_r, S_m, S_r, clipped_curve
-from optix.sensor._foi_fit import nelder_mead
+from optix.sensor._foi_fit import Pairs, _curve, log_likelihood, nelder_mead
 from optix.sensor._foi_local import (
     d_factor,
     d_mad_factor,
     daubechies3,
+    edge_kernels,
     kappa,
     kappa_mad,
+    kappa_mad_variance,
     level_labels,
     local_pairs,
     wavelet_coefficients,
@@ -212,3 +214,224 @@ def test_nelder_mead_quadratic():
     )
     assert ok
     torch.testing.assert_close(x, target, atol=1e-5, rtol=0)
+
+
+# -- Tables I and III: estimators on clipped data, finite samples ----------
+# Footnote 8: Monte Carlo over constant images clipped from below, with
+# the n samples of z^wdet contiguous in the level set (here: along rows).
+TABLE_I = {  # E{sigma_hat} / sigma for mu = -1, 0, 1
+    2: (0.226, 0.572, 0.868),
+    10: (0.247, 0.580, 0.867),
+}
+TABLE_III = {  # E{sigma_hat^mad} / sigma for mu = -1, 0, 1
+    2: (0.215, 0.566, 0.869),
+    10: (0.168, 0.543, 0.872),
+}
+
+
+@pytest.mark.parametrize("robust", [False, True], ids=["std", "mad"])
+@pytest.mark.parametrize("n", [2, 10])
+def test_tables_i_iii_finite_samples(n, robust):
+    g = torch.Generator().manual_seed(n)
+    table = (TABLE_III if robust else TABLE_I)[n]
+    for mu, expected in zip((-1.0, 0.0, 1.0), table, strict=True):
+        z = (mu + torch.randn(16, 512, 512, generator=g, dtype=F64)).clamp(0)
+        _, wdet = wavelet_coefficients(z)
+        w = wdet[..., : wdet.shape[-1] // n * n].reshape(-1, n)
+        nn = torch.tensor(float(n), dtype=F64)
+        if robust:
+            x = w.abs().sort(-1).values
+            med = (x[:, (n - 1) // 2] + x[:, n // 2]) / 2
+            s = med / kappa_mad(nn)  # Eq. (59)
+        else:
+            s = w.std(-1) / kappa(nn)  # Eq. (16)
+        # 5 Monte Carlo standard errors plus the rounding of the table
+        tol = 5 * s.std().item() / math.sqrt(s.numel()) + 5e-4
+        assert s.mean().item() == pytest.approx(expected, abs=tol), mu
+
+
+def test_kappa_mad_variance_factor():
+    # E{(kappa_check sigma_hat^mad)^2} = sigma^2 should hold. The paper's
+    # 1 + 1/(5n) (Section VI-A.2) is kept as the faithful default, but
+    # 1/(1 + d^mad) (mad_correction="exact") is the unbiased factor.
+    g = torch.Generator().manual_seed(0)
+    reps = 200_000
+    for n in (5, 11, 51):
+        x = torch.randn(reps, n, generator=g, dtype=F64).abs()
+        nn = torch.tensor(float(n), dtype=F64)
+        s2 = (x.median(-1).values / kappa_mad(nn)) ** 2
+        tol = 5 * s2.std().item() / math.sqrt(reps)
+        paper = kappa_mad_variance(nn).item()
+        exact = kappa_mad_variance(nn, exact=True).item()
+        assert paper == pytest.approx(1 + 1 / (5 * n))
+        assert exact == pytest.approx(1 / (1 + 1.35 / (n + 1.5)))
+        # Eq. (58) is itself an approximation: allow 1 % on top of MC
+        assert exact * s2.mean().item() == pytest.approx(1, abs=tol + 0.01)
+        assert paper * s2.mean().item() > 1 + 0.002  # biased upwards
+
+
+# -- kernels -----------------------------------------------------------------
+def test_daubechies_orthogonality():
+    # psi1 and the scaling filter h = sqrt(2) phi1 (reversed: Eq. (10)
+    # prints phi1 in the opposite order) form an orthonormal pair:
+    # orthogonal at all even shifts; psi1 has 3 vanishing moments
+    psi1, phi1 = daubechies3()
+    h = phi1.flip(0) * math.sqrt(2)
+    assert h.square().sum().item() == pytest.approx(1, abs=1e-15)
+    assert (h @ psi1).item() == pytest.approx(0, abs=1e-15)
+    for k in (2, 4):
+        for u, v in ((psi1, psi1), (h, h), (h, psi1), (psi1, h)):
+            assert (u[k:] @ v[:-k]).item() == pytest.approx(0, abs=1e-15)
+    t = torch.arange(6, dtype=F64)
+    for p in range(3):
+        assert (psi1 @ t**p).item() == pytest.approx(0, abs=1e-12)
+
+
+def test_edge_kernels():
+    lap, d_row, d_col = edge_kernels()
+    assert lap.shape == d_row.shape == d_col.shape == (9, 9)  # Eq. (12)
+    assert lap.sum().item() == pytest.approx(0, abs=1e-15)
+    torch.testing.assert_close(lap, lap.T)
+    torch.testing.assert_close(d_col, d_row.T)
+    torch.testing.assert_close(d_row, -d_row.flip(0))
+    # response at the centre of a 9x9 patch (convolution = flipped dot)
+    t = torch.arange(-4, 5, dtype=F64)
+    r, c = torch.meshgrid(t, t, indexing="ij")
+
+    def conv(k, f):
+        return (k.flip(0, 1) * f).sum().item()
+
+    # first derivatives of a plane are exact up to the kernel's mass
+    gain = conv(d_row, r)
+    assert gain == pytest.approx(1, abs=0.05)
+    assert conv(d_row, c) == pytest.approx(0, abs=1e-14)
+    assert conv(d_col, c) == pytest.approx(gain)
+    # the Laplacian of r^2 + c^2 is 4, and constant/linear terms vanish
+    assert conv(lap, r * r + c * c) / 4 == pytest.approx(1, abs=0.1)
+    assert conv(lap, 3 + r - 2 * c) == pytest.approx(0, abs=1e-12)
+
+
+# -- likelihood (Eqs. 23, 53) against a dense quadrature --------------------
+def _dense_log_integral(a, b, yhat, shat, c, d, clipped, robust, eps=1e-6):
+    """log of the integral of Eq. (22)/(52) by zoomed trapezoid rules."""
+    if clipped:
+        upper = 1.0
+        for _ in range(8):
+            upper = 1 + 10 * math.sqrt(max(eps * eps, a * upper + b))
+    else:
+        upper = 1.0
+    lo, hi = 0.0, upper
+    for _ in range(4):
+        y = torch.linspace(lo, hi, 100_001, dtype=F64)
+        yt, st = _curve(a, b, y, eps, clipped, robust)
+        var = (st * st).clamp_min(torch.finfo(F64).tiny)
+        lp = (
+            -math.log(2 * math.pi)
+            - 0.5 * math.log(c * d)
+            - torch.log(var)
+            - (yhat - yt) ** 2 / (2 * var * c)
+            - (shat - st) ** 2 / (2 * var * d)
+        )
+        h = (hi - lo) / 100_000
+        w = torch.zeros_like(lp)
+        w[0] = w[-1] = math.log(0.5)
+        value = (torch.logsumexp(lp + w, 0) + math.log(h)).item()
+        k = torch.nonzero(lp > lp.max() - 80).squeeze(-1)
+        lo = max(lo, y[k[0]].item() - 2 * h)
+        hi = min(hi, y[k[-1]].item() + 2 * h)
+    return value
+
+
+@pytest.mark.parametrize(
+    "clipped, robust",
+    [(True, False), (False, False), (True, True)],
+    ids=["clipped", "basic", "clipped-mad"],
+)
+def test_likelihood_against_dense_quadrature(clipped, robust):
+    # level sets from barely to heavily clipped (mu = (1 - y)/sigma down
+    # to -3.5), small to large n, estimates off their expectation, and
+    # parameters off the truth
+    a, b = 0.01, 0.04**2  # Fig. 2
+    s1 = math.sqrt(a + b)
+    if not clipped:
+        ys = (0.02, 0.3, 0.98)
+    elif robust:  # S_m^mad (Table V) vanishes below mu = -2.5
+        ys = (0.02, 0.5, 1.0, 1 + 1.5 * s1, 1 + 2.0 * s1)
+    else:
+        ys = (0.0, 0.5, 1.0, 1 + 1.5 * s1, 1 + 2.5 * s1, 1 + 3.5 * s1)
+    worst = 0.0
+    for n in (20, 2000, 200_000):
+        nn = torch.tensor([float(n)], dtype=F64)
+        c = 0.25 / nn
+        d = d_mad_factor(nn) if robust else d_factor(nn)
+        for y in ys:
+            yt, st = _curve(
+                a, b, torch.tensor([y], dtype=F64), 1e-6, clipped, robust
+            )
+            for dy, ds in ((0.0, 0.0), (1.0, -1.0), (-2.0, 1.5)):
+                pairs = Pairs(
+                    yhat=yt + dy * st * c.sqrt(),
+                    shat=st * (1 + ds * d.sqrt()),
+                    vhat=st**2,
+                    c=c,
+                    d=d,
+                    count=nn,
+                )
+                for fa, fb in ((1.0, 1.0), (1.03, 0.95)):
+                    kw = {"clipped": clipped, "robust": robust, "eps": 1e-6}
+                    got = log_likelihood(a * fa, b * fb, pairs, **kw)
+                    ref = _dense_log_integral(
+                        a * fa,
+                        b * fb,
+                        pairs.yhat.item(),
+                        pairs.shat.item(),
+                        c.item(),
+                        d.item(),
+                        clipped,
+                        robust,
+                    )
+                    worst = max(worst, abs(got - ref))
+    assert worst < 1e-6
+
+
+# -- Fig. 12: the clipped test case of the paper ------------------------------
+def _fig2_like(seed, size=512):
+    """A piecewise smooth image in [0, 1] clipped at both ends, as Fig. 2.
+
+    The image of Fig. 2 is not available; this one has the same size,
+    noise (chi = 100, so a = 0.01, and b = 0.04^2) and clipping: smooth
+    background, a saturated disc, a dark ramp clipped at 0 and a bright
+    ramp across 1.
+    """
+    t = torch.linspace(0, 1, size, dtype=F64)
+    r, c = torch.meshgrid(t, t, indexing="ij")
+    y = 0.15 + 0.55 * c + 0.1 * torch.sin(3 * r)
+    disc = (r - 0.3) ** 2 + (c - 0.3) ** 2
+    y = torch.where(disc < 0.15**2, 1.1 - 0.4 * disc / 0.15**2, y)
+    dark = (r > 0.6) & (r < 0.9) & (c > 0.1) & (c < 0.4)
+    y = torch.where(dark, 0.02 + 0.1 * (c - 0.1), y)
+    bright = (r > 0.55) & (r < 0.85) & (c > 0.6) & (c < 0.9)
+    y = torch.where(bright, 0.95 + 0.5 * (r - 0.55), y)
+    g = torch.Generator().manual_seed(seed)
+    chi = 100.0  # Eq. (2): z = chi^-1 P(chi y) + N(0, b)
+    z = torch.poisson(chi * y, generator=g) / chi
+    z = z + 0.04 * torch.randn(y.shape, generator=g, dtype=F64)
+    return z.clamp(0, 1)[None]
+
+
+def test_fig12_clipped_single_image():
+    # faithful defaults on a 512 x 512 image clipped on both sides: the
+    # data range is [0, 1] by itself. Fig. 12 reports a = 0.00995 and
+    # b = 0.001552 for a = 0.01, b = 0.0016 (errors of 0.5 % and 3 %).
+    from optix.sensor import PoissonGaussian
+
+    z = _fig2_like(0)
+    assert z.min() == 0 and z.max() == 1
+    est = PoissonGaussian().fit(z)
+    assert est.is_faithful and est.history.converged
+    s = est.estimates["sensor"]
+    se = est.covariance[()].diagonal().sqrt()
+    # the single image measures a to about 1.5 % and b to about 4 %
+    assert se[0] < 0.02 * 0.01 and se[1] < 0.05 * 0.0016
+    assert abs(s.gain.item() - 0.01) < 3 * se[0]
+    assert abs(s.variance.item() - 0.0016) < 3 * se[1]

@@ -1,8 +1,10 @@
 """`PoissonGaussian`: the noise-model fit of Foi et al. (2008)."""
 
 import math
+import warnings
 from collections.abc import Callable, Iterator
 
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -18,10 +20,10 @@ from ._foi import (
 )
 from ._foi_fit import (
     Pairs,
+    covariance,
     least_squares_init,
     log_likelihood,
     nelder_mead,
-    observed_information,
 )
 from ._foi_local import (
     d_factor,
@@ -44,6 +46,33 @@ PHI_NORM2 = 0.25
 _TAU_RETRIES = 8
 
 
+def _is_integer(dtype: object) -> bool:
+    """Whether `dtype` (torch or numpy-like) is an integer type."""
+    if dtype is None:
+        return False
+    if isinstance(dtype, torch.dtype):
+        return not (
+            dtype.is_floating_point or dtype.is_complex or dtype == torch.bool
+        )
+    try:
+        return np.issubdtype(np.dtype(dtype), np.integer)
+    except TypeError:
+        return False
+
+
+def bit_depth_range(maximum: float | Tensor) -> int:
+    """2ᵏ − 1 for the smallest k ≥ 1 with 2ᵏ − 1 ≥ `maximum`.
+
+    The largest value of the smallest unsigned bit depth that holds the
+    data, for example 4095 for 12-bit data with maximum 4000.
+    """
+    m = max(float(maximum), 1.0)
+    k = max(1, math.ceil(math.log2(m + 1)))
+    while 2**k - 1 < m:  # guard against round-off of log2
+        k += 1
+    return 2**k - 1
+
+
 class PoissonGaussian(Estimator):
     """Poisson–Gaussian noise model σ²(y) = a·y + b fitted from data.
 
@@ -58,7 +87,9 @@ class PoissonGaussian(Estimator):
     [`SensorEstimate`][optix.estimates.SensorEstimate] with `gain = a`
     and `variance = b` (the variance extrapolated to 0 ADU) and
     `offset = None`: (a, b) alone do not determine the camera offset.
-    Fields are shaped `(*group, 1, 1)`.
+    Fields are shaped `(*group, 1, 1)`. Its `meta` holds, per group,
+    the `data_range`, the final edge threshold `tau` and
+    `covariance_ok`.
 
     Attributes
     ----------
@@ -66,8 +97,11 @@ class PoissonGaussian(Estimator):
         `{"sensor": SensorEstimate}` after [`fit`][optix.Estimator.fit].
     covariance : dict of tuple to Tensor
         Per group, the 2×2 large-sample covariance of (a, b) in ADU: the
-        inverse Hessian of −log L at the estimate (not part of the
-        paper).
+        inverse Hessian of −log L at the estimate, by central
+        differences with steps of half a standard error (not part of
+        the paper). All NaN, with a `RuntimeWarning` and
+        `meta["covariance_ok"]` False, when no positive-definite
+        Hessian is found.
     pairs : dict of tuple to Pairs
         Per group, the level-set estimates (ŷᵢ, σ̂ᵢ) in normalised units
         and their variance factors cᵢ, dᵢ.
@@ -90,7 +124,7 @@ class PoissonGaussian(Estimator):
            [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
 
            ??? quote "BibTeX"
-               ``bibtex
+               ```bibtex
                @article{foi2008practical,
                  author  = {Foi, Alessandro and Trimeche, Mejdi and
                             Katkovnik, Vladimir and Egiazarian, Karen},
@@ -103,7 +137,7 @@ class PoissonGaussian(Estimator):
                  year    = {2008},
                  doi     = {10.1109/TIP.2008.2001399}
                }
-               ``
+               ```
     """
 
     tags = Tags(
@@ -116,6 +150,7 @@ class PoissonGaussian(Estimator):
         "data_range": None,
         "clipped": True,
         "robust": False,
+        "mad_correction": "paper",
         "delta": 1 / 300,
         "tau": 0.25,
         "eps_reg": 1e-6,
@@ -130,9 +165,10 @@ class PoissonGaussian(Estimator):
     def __init__(
         self,
         *,
-        data_range: tuple[float, float] | None = None,
+        data_range: tuple[float, float] | str | None = None,
         clipped: bool | None = None,
         robust: bool | None = None,
+        mad_correction: str | None = None,
         delta: float | None = None,
         tau: float | None = None,
         eps_reg: float | None = None,
@@ -150,14 +186,22 @@ class PoissonGaussian(Estimator):
 
         Parameters
         ----------
-        data_range : (float, float), optional
-            Data values (ADU) mapped to 0 and 1, the normalised range of
-            the paper (Section IV-A); with `clipped`, also the clipping
-            bounds. Default: the range of an integer dtype (the paper's
-            "range of the data format"). For floating-point data the
-            minimum and maximum of the first loaded frames of each group
-            are used (not specified in the paper): pass the range when
-            the data are clipped.
+        data_range : (float, float) or "auto", optional
+            Data values (ADU) mapped to 0 and 1: the normalised range of
+            Section IV-A, whose extremes are "the maximum and minimum
+            pixel values for the considered noisy image format"; with
+            `clipped`, also the clipping bounds.
+
+            - Integer data: required, because the dtype rarely is the
+              format (12-bit data are stored in `uint16`, and sensors
+              saturate below the format maximum). Pass the bounds, for
+              example `(0, 4095)`, or `"auto"`.
+            - `"auto"` (integer data, opt-in): `(0, 2ᵏ − 1)` for the
+              smallest k with 2ᵏ − 1 ≥ max of the first loaded frames of
+              each group; a warning reports the inferred range.
+            - Floating-point data, by default: the minimum and maximum
+              of the first loaded frames of each group (not specified in
+              the paper). Pass the range when the data are clipped.
         clipped : bool
             Use the clipped observation model z̃ = max(0, min(z, 1))
             (Sections IV–V). It reduces to the basic model away from the
@@ -166,6 +210,15 @@ class PoissonGaussian(Estimator):
             MAD estimates σ̂ᵐᵃᵈ (Section VI) instead of sample standard
             deviations. Default False. Incompatible with `pooled` (the
             median does not merge across frames).
+        mad_correction : {"paper", "exact"}
+            Factor (κ̌ᵐᵃᵈ)² of the unbiased variance estimate (κ̌ᵐᵃᵈ σ̂ᵐᵃᵈ)²
+            that the robust least-squares initialisation uses (Section
+            VI-A.2). `"paper"` (default): 1 + 1/(5n), as printed.
+            `"exact"` (extension): 1/(1 + dᵐᵃᵈₙ), which follows from
+            E{σ̂ᵐᵃᵈ} = σ and Eq. (58): E{(σ̂ᵐᵃᵈ)²} = σ²(1 + dᵐᵃᵈ). Only
+            the initial point changes, not the ML estimate. A Monte Carlo
+            check of both factors is in the docstring of
+            `optix.sensor._foi_local.kappa_mad_variance`.
         delta : float
             Width Δ of the level sets, Eq. (13). Default 1/300, the value
             of the paper's example (Fig. 4).
@@ -207,6 +260,16 @@ class PoissonGaussian(Estimator):
         self._resolve(faithful, locals())
         if self.options["robust"] and self.options["pooled"]:
             raise ValueError("robust=True is incompatible with pooled=True")
+        if self.options["mad_correction"] not in ("paper", "exact"):
+            raise ValueError(
+                "mad_correction must be 'paper' or 'exact', got "
+                f"{self.options['mad_correction']!r}"
+            )
+        rng = self.options["data_range"]
+        if isinstance(rng, str) and rng != "auto":
+            raise ValueError(
+                f"data_range must be (low, high) or 'auto', got {rng!r}"
+            )
         self.pairs: dict[tuple[int, ...], Pairs] = {}
         self.covariance: dict[tuple[int, ...], Tensor] = {}
 
@@ -232,18 +295,18 @@ class PoissonGaussian(Estimator):
         backend = self._backend(data)
         a_map = torch.zeros(group_shape, dtype=torch.float64)
         b_map = torch.zeros(group_shape, dtype=torch.float64)
-        ranges = {}
+        ranges, taus, cov_ok = {}, {}, {}
         self.pairs = {}
         self.covariance = {}
-        for g, (pairs, low, high) in groups.items():
-            # the ML problem is made of many tiny tensor operations, for
-            # which intra-op threads are pure overhead
-            threads = torch.get_num_threads()
-            torch.set_num_threads(1)
-            try:
-                an, bn, cov = self._ml(pairs, callback)
-            finally:
-                torch.set_num_threads(threads)
+        for g, (pairs, low, high, tau) in groups.items():
+            an, bn, cov, ok = self._ml(pairs, callback)
+            if not ok:
+                warnings.warn(
+                    f"group {g}: the observed information is not positive "
+                    "definite; covariance set to NaN",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
             scale = high - low
             a_map[g], b_map[g] = from_normalized(an, bn, low, scale)
             jac = torch.tensor(
@@ -251,14 +314,22 @@ class PoissonGaussian(Estimator):
             )
             self.covariance[g] = jac @ cov @ jac.T
             self.pairs[g] = pairs
-            ranges[str(list(g))] = [low, high]
+            key = str(list(g))
+            ranges[key] = [low, high]
+            taus[key] = tau
+            cov_ok[key] = ok
             if verbose:
                 print(
                     f"group {g}: a={float(a_map[g]):.6g} "
                     f"b={float(b_map[g]):.6g} ({len(pairs.yhat)} sets)"
                 )
         shape = (*group_shape, 1, 1)
-        meta = {"units": "ADU", "data_range": ranges}
+        meta = {
+            "units": "ADU",
+            "data_range": ranges,
+            "tau": taus,
+            "covariance_ok": cov_ok,
+        }
         self.estimates = {
             "sensor": sensor_estimate(
                 a_map.reshape(shape).to(**backend),
@@ -268,7 +339,10 @@ class PoissonGaussian(Estimator):
         }
 
     def _ml(self, pairs: Pairs, callback: Callable | None) -> tuple:
-        """LS initialisation, then ML by Nelder–Mead (Section III-D.1)."""
+        """LS initialisation, then ML by Nelder–Mead (Section III-D.1).
+
+        Returns (a, b, covariance, covariance_ok) in normalised units.
+        """
         opt = self.options
         kw = {
             "clipped": opt["clipped"],
@@ -303,24 +377,41 @@ class PoissonGaussian(Estimator):
         )
         if first or not converged:
             self.history.reason = reason
-        info = observed_information(objective, x, 1e-3 * step / 0.05)
-        try:
-            cov = torch.linalg.inv(info)
-        except RuntimeError:
-            cov = torch.full((2, 2), torch.nan, dtype=torch.float64)
-        return float(x[0]), float(x[1]), cov
+        cov, ok = covariance(objective, x, 1e-3 * step / 0.05)
+        return float(x[0]), float(x[1]), cov, ok
 
     # -- local estimates -------------------------------------------------
     def _range(self, data: ArrayLike, first: Tensor) -> tuple[float, float]:
-        if self.options["data_range"] is not None:
-            low, high = self.options["data_range"]
+        """Data range of a group, from its first loaded frames `first`."""
+        rng = self.options["data_range"]
+        if rng is not None and not isinstance(rng, str):
+            low, high = rng
             return float(low), float(high)
         raw = data.array if isinstance(data, Labeled) else data
-        dtype = getattr(raw, "dtype", None)
-        try:
-            return integer_range(dtype)
-        except (TypeError, ValueError):
-            pass
+        integer = _is_integer(getattr(raw, "dtype", None))
+        if rng == "auto":
+            if not integer:
+                raise ValueError("data_range='auto' needs integer data")
+            low, high = 0.0, float(bit_depth_range(first.max()))
+            if float(first.min()) < 0:
+                raise ValueError(
+                    "data_range='auto' infers an unsigned bit depth, but "
+                    "the data are negative: pass data_range=(low, high)"
+                )
+            warnings.warn(
+                f"data_range='auto': using (0, {high:.0f}) from the "
+                "maximum of the data; pass data_range to set it",
+                stacklevel=5,
+            )
+            return low, high
+        if integer:
+            fmt = integer_range(raw.dtype)
+            raise ValueError(
+                "integer data need an explicit data_range: the clipping "
+                "bounds of the format, for example data_range=(0, 4095) "
+                f"for 12-bit data (the dtype range is {fmt}), or "
+                "data_range='auto' to infer the bit depth from the data"
+            )
         return float(first.min()), float(first.max())
 
     def _frames(
@@ -356,10 +447,40 @@ class PoissonGaussian(Estimator):
                 tau *= 2  # footnote 2
             else:
                 raise ValueError(f"group {g}: fewer than two level sets")
-            out[g] = (pairs, low, high)
+            out[g] = (pairs, low, high, tau)
         return out
 
     def _pooled_pairs(self, data: ArrayLike) -> dict:
+        """Pooled pairs, doubling τ for groups with < 2 sets (footnote 2)."""
+        tau = self.options["tau"]
+        out: dict = {}
+        todo = None  # all groups
+        for _ in range(_TAU_RETRIES):
+            stats, ranges, working = self._pooled_stats(data, tau, todo)
+            failed = set()
+            for g, st in stats.items():
+                pairs = self._pairs(st.result(), self._jframes, working)
+                if len(pairs.yhat) >= 2:
+                    out[g] = (pairs, *ranges[g], tau)
+                else:
+                    failed.add(g)
+            if not failed:
+                return out
+            todo = failed
+            tau *= 2
+        raise ValueError(f"groups {sorted(failed)}: fewer than two level sets")
+
+    @property
+    def _jframes(self) -> int:
+        return 2 if self.options["differencing"] else 1
+
+    def _pooled_stats(
+        self, data: ArrayLike, tau: float, todo: set | None
+    ) -> tuple[dict, dict, torch.dtype | None]:
+        """One streamed pass: merged level-set statistics per group.
+
+        Only the groups in `todo` (all if None) are processed.
+        """
         opt = self.options
         segments = nlevels(opt["delta"])
         stats: dict[tuple[int, ...], SegmentStats] = {}
@@ -371,10 +492,12 @@ class PoissonGaussian(Estimator):
             dtype=self.dtype,
             device=self.device,
         )
-        jframes = 2 if opt["differencing"] else 1
+        jframes = self._jframes
         working = None
         for chunk in chunks:
             g = chunk.group
+            if todo is not None and g not in todo:
+                continue
             frames = chunk.data
             if g not in ranges:
                 ranges[g] = self._range(data, frames)
@@ -389,17 +512,12 @@ class PoissonGaussian(Estimator):
             z = self._normalise(frames[:usable], *ranges[g])
             working = z.dtype
             z = z.reshape(-1, jframes, *z.shape[1:]).transpose(0, 1)
-            labels, wapp, wdet = self._coefficients(z, opt["tau"])
+            labels, wapp, wdet = self._coefficients(z, tau)
             stats[g].update(labels, wapp, wdet)
-        out = {}
         for g, st in stats.items():
             if st.empty:
                 raise ValueError(f"group {g}: no complete frame pair")
-            pairs = self._pairs(st.result(), jframes, working)
-            if len(pairs.yhat) < 2:
-                raise ValueError(f"group {g}: fewer than two level sets")
-            out[g] = (pairs, *ranges[g])
-        return out
+        return stats, ranges, working
 
     @staticmethod
     def _normalise(x: Tensor, low: float, high: float) -> Tensor:
@@ -441,7 +559,8 @@ class PoissonGaussian(Estimator):
         c = PHI_NORM2 / (jframes * n)
         if self.options["robust"]:
             shat = stats["mad"].cpu() / kappa_mad(n)  # Eq. (57)
-            vhat = kappa_mad_variance(n) * shat**2  # Section VI-A.2
+            exact = self.options["mad_correction"] == "exact"
+            vhat = kappa_mad_variance(n, exact) * shat**2  # Section VI-A.2
             d = d_mad_factor(n)  # Eq. (58)
         else:
             s = stats["std"].cpu()

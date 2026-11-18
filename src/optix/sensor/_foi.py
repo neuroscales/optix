@@ -49,15 +49,10 @@ class SegmentStats:
     """Mergeable per-segment statistics of `(value, noise)` pairs.
 
     For each segment `i` (for example a level set), this accumulates
-    the count `n_i`, the mean of `value` (for example approximation
+    the count `nᵢ`, the mean of `value` (for example approximation
     coefficients, giving the local mean) and the mean and variance of
     `noise` (for example detail coefficients, giving the local standard
     deviation).
-
-    Parameters
-    ----------
-    segments : int
-        Number of segments; labels are in `[0, segments)`.
 
     Attributes
     ----------
@@ -71,15 +66,22 @@ class SegmentStats:
     Each update computes the segment sums in float64 (temporaries the
     size of the selected entries only) and centres the noise on its
     segment mean before squaring. It then merges them with Pebay's
-    pairwise formulas ([`Moments`][optix.stats.Moments]). The result does not
-    depend on chunking, up to round-off, and is the same for float32 and
-    float64 inputs, up to their precision.
+    pairwise formulas ([`Moments`][optix.stats.Moments]). The result
+    does not depend on chunking, up to round-off, and is the same for
+    float32 and float64 inputs, up to their precision.
 
     Only sufficient statistics of the sample standard deviation are kept.
     Median-based estimators (such as the MAD) are not mergeable.
     """
 
     def __init__(self, segments: int) -> None:
+        """Empty statistics.
+
+        Parameters
+        ----------
+        segments : int
+            Number of segments; labels are in `[0, segments)`.
+        """
         if segments < 1:
             raise ValueError(f"segments must be >= 1, got {segments}")
         self.segments = int(segments)

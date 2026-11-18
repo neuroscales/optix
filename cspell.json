@@ -297,7 +297,15 @@
     "κᵐᵃᵈₙ",
     "κᵐᵃᵈₙᵢ",
     "σ̂ᵐᵃᵈ",
-    "σ̂ᵐᵃᵈᵢ"
+    "σ̂ᵐᵃᵈᵢ",
+    "erfcx",
+    "leggauss",
+    "issubdtype",
+    "κ̌ᵐᵃᵈ",
+    "dᵐᵃᵈ",
+    "Mills",
+    "nan_to_num",
+    "masked_scatter"
   ],
   "language": "en,en-GB"
 }
