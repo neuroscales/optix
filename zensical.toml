@@ -11,6 +11,10 @@ edit_uri = "blob/main/docs"
 site_dir = "site"
 docs_dir = "docs"
 watch = ["src", "docs"]
+extra_javascript = [
+  "javascripts/mathjax.js",
+  "https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js",
+]
 
 [project.theme]
 features = [
@@ -41,6 +45,8 @@ show_source = false
 show_root_heading = true
 
 [project.markdown_extensions.admonition]
+[project.markdown_extensions.pymdownx.arithmatex]
+generic = true
 [project.markdown_extensions.toc]
 toc_depth = 2
 [project.markdown_extensions.markdown_grid_tables]
