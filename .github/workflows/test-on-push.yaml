@@ -18,3 +18,9 @@ permissions:
 jobs:
   tests:
     uses: ./.github/workflows/test.yaml
+
+  tests-newest:
+    uses: ./.github/workflows/test.yaml
+    with:
+      python-version: "3.14"
+      pytorch-version: latest
