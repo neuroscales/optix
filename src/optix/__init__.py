@@ -1,6 +1,6 @@
 """Processing algorithms for microscopy."""
 
-from . import basis, io, special
+from . import basis, io, special, stats
 from ._config import config, get_config, set_config
 from ._version import __version__
 
@@ -12,4 +12,5 @@ __all__ = [
     "io",
     "set_config",
     "special",
+    "stats",
 ]
