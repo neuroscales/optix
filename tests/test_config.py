@@ -192,7 +192,7 @@ def test_resolve_backend_precedence():
     cpu = torch.device("cpu")
     meta = torch.device("meta")
     like = torch.empty(0, device=meta)
-    default = torch.get_default_dtype()
+    default = optix.get_config().dtype or torch.get_default_dtype()
     # torch default
     assert resolve_backend() == {"dtype": default, "device": cpu}
     # like (device only, never dtype)
