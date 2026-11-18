@@ -4,15 +4,22 @@ import numpy as np
 import pytest
 import torch
 
+import optix
+from optix._config import resolve_backend
 from optix.io import as_tensor, chunks_of, flush, prepare_out, store
 
 
+def _working() -> torch.dtype:
+    """Working dtype of the active configuration."""
+    return resolve_backend()["dtype"]
+
+
 def test_tensor_input(device):
-    x = torch.randn(3, 4, device=device, requires_grad=True)
+    x = torch.randn(3, 4, device=device, dtype=_working(), requires_grad=True)
     t = as_tensor(x)
     assert not t.requires_grad
     assert t.device == x.device
-    assert t.dtype == torch.get_default_dtype()
+    assert t.dtype == _working()
     # no-op conversion aliases unless copy=True
     assert t.data_ptr() == x.data_ptr()
     c = as_tensor(x, copy=True)
@@ -33,13 +40,15 @@ def test_tensor_dtype_cast():
 def test_numpy_to_working_float(npdt):
     a = (np.arange(12) % 3).astype(npdt).reshape(3, 4)
     t = as_tensor(a)
-    assert t.dtype == torch.get_default_dtype()
-    np.testing.assert_array_equal(t.numpy(), a.astype(np.float32))
+    assert t.dtype == _working()
+    ref = a.astype(torch.empty(0, dtype=_working()).numpy().dtype)
+    np.testing.assert_array_equal(t.numpy(), ref)
 
 
 def test_complex_maps_to_matching_precision():
     a = (np.arange(4) + 1j).astype(np.complex128)
-    assert as_tensor(a).dtype == torch.complex64
+    with optix.config(dtype="float32"):
+        assert as_tensor(a).dtype == torch.complex64
     assert as_tensor(a, dtype=torch.float64).dtype == torch.complex128
 
 
@@ -110,6 +119,38 @@ def test_store_extreme_integer_no_wraparound(npdt):
         assert out[1] < info.min // 2
 
 
+@pytest.mark.parametrize("low", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("npdt", ["uint16", "int32", "int64"])
+def test_store_half_precision_into_integers(low, npdt):
+    value = torch.tensor(
+        [-float("inf"), -3e4, -1.5, 2.6, 6e4, float("inf"), float("nan")]
+    ).to(low)
+    out = np.zeros(7, dtype=npdt)
+    store(out, (slice(None),), value)
+    info = np.iinfo(npdt)
+    ref = value.double().nan_to_num(0.0).round()
+    ref = ref.clamp(int(info.min), int(info.max))
+    # +-inf map to (about) the extreme integers, without wrap-around
+    assert out[0] == 0 if info.min == 0 else out[0] < info.min // 2
+    assert out[5] > info.max // 2
+    assert out[1:5].tolist() == ref[1:5].long().tolist()
+    assert out[6] == 0
+
+
+@pytest.mark.parametrize("tensor_out", [False, True])
+def test_store_integer_into_narrower_integer_clamps(tensor_out):
+    value = torch.tensor([-(2**40), -300, -5, 7, 300, 70000, 2**40])
+    if tensor_out:
+        out = torch.zeros(7, dtype=torch.int16)
+    else:
+        out = np.zeros(7, dtype=np.uint8)
+    store(out, (slice(None),), value)
+    if tensor_out:
+        assert out.tolist() == [-32768, -300, -5, 7, 300, 32767, 32767]
+    else:
+        assert out.tolist() == [0, 0, 0, 7, 255, 255, 255]
+
+
 def test_store_bool():
     out = np.zeros(3, dtype=bool)
     store(out, (slice(None),), torch.tensor([0.0, 0.2, -1.0]))
@@ -143,7 +184,7 @@ def test_prepare_out():
     y = np.zeros((2, 3), dtype=np.uint16)
     out = prepare_out(None, (2, 3), like=y)
     assert isinstance(out, torch.Tensor) and out.device.type == "cpu"
-    assert out.dtype == torch.get_default_dtype()
+    assert out.dtype == _working()
     t = torch.zeros(2, 3, device="meta")
     assert prepare_out(None, (2, 3), like=t).device.type == "meta"
     assert prepare_out(None, (2,), dtype="float64").dtype == torch.float64
