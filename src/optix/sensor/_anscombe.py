@@ -1,7 +1,7 @@
 """Generalised Anscombe transform and its exact unbiased inverse.
 
-Mäkitalo & Foi, IEEE TIP 2011 (doi:10.1109/TIP.2010.2056693) and IEEE
-TIP 2013 (doi:10.1109/TIP.2012.2202675).
+Implemented from the papers of Mäkitalo & Foi (2011, 2011 letter, 2013);
+the authors' Matlab code, under a non-commercial licence, was not used.
 """
 
 import math
@@ -19,6 +19,7 @@ from ._base import CalibrationEstimator
 __all__ = [
     "GeneralizedAnscombe",
     "anscombe",
+    "closed_form_inverse",
     "exact_inverse_table",
     "inverse_anscombe",
 ]
@@ -30,15 +31,11 @@ def anscombe(
     sigma: Tensor | float = 0.0,
     mu: Tensor | float = 0.0,
 ) -> Tensor:
-    r"""Generalised Anscombe transform (pointwise).
+    """Generalised Anscombe transform (pointwise).
 
-    For :math:`z = \alpha\,\mathrm{Poisson}(y/\alpha) + \mathcal N(\mu,
-    \sigma^2)`:
+    For z = α·Poisson(y/α) + 𝒩(μ, σ²) (Mäkitalo & Foi 2013, Eq. (3)):
 
-    .. math::
-
-        f(z) = \frac{2}{\alpha}\sqrt{\max\left(0,\ \alpha z +
-               \tfrac38 \alpha^2 + \sigma^2 - \alpha\mu\right)},
+        f(z) = (2/α)·√max(0, α·z + 3/8·α² + σ² − α·μ),
 
     whose noise is approximately standard normal.
 
@@ -47,8 +44,8 @@ def anscombe(
     z : Tensor
         Data.
     alpha, sigma, mu : Tensor or float
-        Gain, Gaussian standard deviation and mean; scalars or maps
-        broadcastable to ``z``.
+        Gain α, Gaussian standard deviation σ and mean μ; scalars or maps
+        broadcastable to `z`.
 
     Returns
     -------
@@ -58,16 +55,44 @@ def anscombe(
     return 2 / alpha * arg.clamp_min(0).sqrt()
 
 
-def _asymptotic(d: Tensor, s: Tensor | float) -> Tensor:
-    r"""Asymptotically unbiased inverse (normalised units), clipped at 0.
+def closed_form_inverse(d: Tensor, s2: Tensor | float = 0.0) -> Tensor:
+    """Closed-form approximation of the exact unbiased inverse.
 
-    A second-order expansion of :math:`E[\sqrt{z + c}]` for
-    :math:`z` of mean :math:`y` and variance :math:`y + \sigma^2`,
-    :math:`c = 3/8 + \sigma^2`, gives
-    :math:`E[f(z) | y] = 2\sqrt{y + c} - 1 / (4\sqrt{y + c}) + O(y^{-3/2})`,
-    hence :math:`y = D^2/4 - 1/8 - \sigma^2 + O(D^{-2})`.
+    Mäkitalo & Foi 2011 letter, Eq. (6), generalised in Mäkitalo & Foi
+    2013, Eq. (21) (normalised units, σ = σ̂/α):
+
+        Ĩ_σ(D) = Ĩ_0(D) − σ²,
+        Ĩ_0(D) = D²/4 + (1/4)·√(3/2)·D⁻¹ − (11/8)·D⁻² + (5/8)·√(3/2)·D⁻³ − 1/8,
+
+    with Ĩ_0(D) = 0 for D < 2·√(3/8) (letter, Section II). As published,
+    Ĩ_σ is not clipped further: it equals −σ² below 2·√(3/8).
+
+    Parameters
+    ----------
+    d : Tensor
+        Transformed data D.
+    s2 : Tensor or float
+        Normalised Gaussian variance σ² = σ̂²/α².
+
+    Returns
+    -------
+    Tensor
     """
-    return (0.25 * d * d - 0.125 - s).clamp_min(0)
+    c = math.sqrt(1.5)
+    dd = d.clamp_min(2 * math.sqrt(0.375))
+    inv = dd.reciprocal()
+    i0 = (
+        0.25 * dd * dd
+        + inv * (0.25 * c + inv * (-11 / 8 + inv * (5 / 8 * c)))
+        - 0.125
+    )
+    i0 = torch.where(d < 2 * math.sqrt(0.375), torch.zeros_like(i0), i0)
+    return i0 - s2
+
+
+def _asymptotic(d: Tensor, s2: Tensor | float) -> Tensor:
+    """Asymptotically unbiased inverse D²/4 − 1/8 − σ² (2013, Eq. (22))."""
+    return 0.25 * d * d - 0.125 - s2
 
 
 def exact_inverse_table(
@@ -78,38 +103,35 @@ def exact_inverse_table(
     nd: int = 4096,
     nquad: int = 2001,
 ) -> tuple[Tensor, Tensor]:
-    r"""Lookup table of the exact unbiased inverse, normalised units.
+    """Lookup table of the exact unbiased inverse, normalised units.
 
-    For :math:`z = \mathrm{Poisson}(y) + \mathcal N(0, \sigma^2)` and
-    :math:`f(z) = 2\sqrt{\max(0, z + 3/8 + \sigma^2)}`, computes
+    For z = Poisson(y) + 𝒩(0, σ²) and f_σ(z) = 2·√max(0, z + 3/8 + σ²),
+    computes (Mäkitalo & Foi 2013, Eq. (10))
 
-    .. math::
+        E{f_σ(z) | y, σ} = ∑ₖ yᵏ·e⁻ʸ/k! · ∫ f_σ(k + σ·n)·φ(n) dn
 
-        E[f(z) \mid y] = \sum_k \frac{y^k e^{-y}}{k!}
-            \int f(k + \sigma n)\,\phi(n)\,dn
-
-    on a grid of ``y`` (trapezoidal rule over ``n`` in [-10, 10]) and
-    inverts it on a uniform grid of ``D``.
+    on a grid of y (trapezoidal rule over n ∈ [−10, 10]) and inverts it
+    on a uniform grid of D.
 
     Parameters
     ----------
     s2 : (S,) Tensor
-        Grid of :math:`\sigma^2` (normalised: :math:`\sigma^2/\alpha^2`).
+        Grid of σ² (normalised: σ̂²/α²).
     ymax : float
-        Largest ``y`` of the table; above, the asymptotic inverse is used.
+        Largest y of the table; above, [`inverse_anscombe`][] uses the
+        closed form Ĩ_0(D) − σ².
     ny, nd, nquad : int
-        Sizes of the ``y`` grid, of the ``D`` grid and of the quadrature.
+        Sizes of the y grid, of the D grid and of the quadrature.
 
     Returns
     -------
     dgrid : (nd,) Tensor
-        Uniform grid of ``D`` from 0 to the smallest ``E[f | ymax]``.
+        Uniform grid of D from 0 to the smallest E{f | ymax}.
     table : (S, nd) Tensor
-        ``y`` such that ``E[f(z) | y] = D`` (0 below ``E[f | 0]``).
+        y such that E{f_σ(z) | y} = D (0 below E{f | 0}).
 
-    Notes
-    -----
-    Computed in float64 on the CPU.
+    !!! note
+        Computed in float64 on the CPU.
     """
     f64 = {"dtype": torch.float64, "device": "cpu"}
     s2 = torch.as_tensor(s2).to(**f64).reshape(-1)
@@ -151,7 +173,7 @@ def exact_inverse_table(
 def _lookup(
     d: Tensor, s2: Tensor, sgrid: Tensor, dgrid: Tensor, table: Tensor
 ) -> Tensor:
-    """Bilinear interpolation of ``table`` at ``(s2, d)`` (uniform grids)."""
+    """Bilinear interpolation of `table` at `(s2, d)` (uniform grids)."""
     nd = dgrid.numel()
     dmax = dgrid[-1]
     u = (d / dmax * (nd - 1)).clamp(0, nd - 1)
@@ -186,28 +208,32 @@ def inverse_anscombe(
     method: str = "exact",
     table: tuple[Tensor, Tensor, Tensor] | None = None,
 ) -> Tensor:
-    r"""Inverse of the generalised Anscombe transform.
+    """Inverse of the generalised Anscombe transform.
 
-    Works in normalised units :math:`\tilde\sigma = \sigma / \alpha` and
-    returns :math:`\alpha\,\hat y + \mu`, an estimate of :math:`E[z]`.
+    Works in normalised units σ = σ̂/α (Mäkitalo & Foi 2013, Eq. (4)) and
+    returns α·ŷ + μ, an estimate of E[z].
 
     Parameters
     ----------
     d : Tensor
-        Transformed (typically denoised) data.
+        Transformed (typically denoised) data D.
     alpha, sigma, mu : Tensor or float
-        As in :func:`anscombe`.
-    method : {"exact", "asymptotic", "algebraic"}
-        ``"exact"``: exact unbiased inverse :math:`E[f(z)|y] \mapsto y`
-        from a lookup table (Mäkitalo & Foi 2013), with the asymptotic
-        inverse above the table. ``"asymptotic"``: the closed-form
-        asymptotically unbiased inverse ``D²/4 - 1/8 - σ²`` (not the
-        paper's fitted closed form). ``"algebraic"``: the direct inverse
-        of :func:`anscombe` (biased, but an exact round trip).
+        As in [`anscombe`][].
+    method : {"exact", "closed-form", "asymptotic", "algebraic"}
+        The inverses of Mäkitalo & Foi 2013:
+
+        - `"exact"`: exact unbiased inverse I_σ (Eqs. (9)-(10)),
+          interpolated in a table of E{f_σ(z) | y, σ} and 0 below
+          E{f_σ | 0, σ} (the ML inverse, Eq. (14)); outside the table
+          (y > ymax), the paper's asymptotic form I_0(D) − σ² (Section
+          III-E, Eq. (15)) with the closed form of I_0;
+        - `"closed-form"`: [`closed_form_inverse`][], Eq. (21);
+        - `"asymptotic"`: D²/4 − 1/8 − σ², Eq. (22);
+        - `"algebraic"`: D²/4 − 3/8 − σ² (biased).
     table : tuple, optional
-        ``(sgrid, dgrid, table)`` from :func:`exact_inverse_table`
-        (with ``sgrid`` the uniform grid of normalised ``σ²``), to reuse;
-        default: built for the range of ``sigma / alpha``.
+        `(sgrid, dgrid, table)` from [`exact_inverse_table`][] (with
+        `sgrid` the uniform grid of normalised σ²), to reuse; default:
+        built for the range of σ/α.
 
     Returns
     -------
@@ -218,6 +244,8 @@ def inverse_anscombe(
     s2 = (sigma / alpha).square()
     if method == "algebraic":
         y = 0.25 * d * d - 0.375 - s2
+    elif method == "closed-form":
+        y = closed_form_inverse(d, s2)
     elif method == "asymptotic":
         y = _asymptotic(d, s2)
     elif method == "exact":
@@ -226,7 +254,7 @@ def inverse_anscombe(
         sgrid, dgrid, tab = (t.to(d) for t in table)
         y = torch.where(
             d > dgrid[-1],
-            _asymptotic(d, s2),
+            closed_form_inverse(d, s2),
             _lookup(d, s2, sgrid, dgrid, tab),
         )
     else:
@@ -235,10 +263,10 @@ def inverse_anscombe(
 
 
 def build_table(s2: Tensor, n: int = 33) -> tuple[Tensor, Tensor, Tensor]:
-    """Exact-inverse table for normalised variances in the range of ``s2``.
+    """Exact-inverse table for normalised variances in the range of `s2`.
 
-    Returns ``(sgrid, dgrid, table)``: ``sgrid`` is a uniform grid of
-    ``σ²`` with ``n`` points (one when ``s2`` is constant).
+    Returns `(sgrid, dgrid, table)`: `sgrid` is a uniform grid of σ² with
+    `n` points (one when `s2` is constant).
     """
     lo, hi = float(s2.min()), float(s2.max())
     if hi - lo <= 1e-9 * max(1.0, hi):
@@ -250,32 +278,63 @@ def build_table(s2: Tensor, n: int = 33) -> tuple[Tensor, Tensor, Tensor]:
 
 
 class GeneralizedAnscombe(CalibrationEstimator):
-    r"""Variance-stabilising transform for Poisson-Gaussian data.
+    """Variance-stabilising transform for Poisson-Gaussian data.
 
-    Model (Mäkitalo & Foi): :math:`z = \alpha\,\mathrm{Poisson}(y /
-    \alpha) + \mathcal N(\mu, \sigma^2)`, i.e. a camera with gain
-    :math:`\alpha` (ADU per electron), offset :math:`\mu` and read
-    variance :math:`\sigma^2` (a :class:`SensorEstimate`).
-    :meth:`apply` computes :func:`anscombe`, :meth:`inverse` its
-    inverse.
+    Model (Mäkitalo & Foi 2013, Eq. (1)): z = α·Poisson(y/α) + 𝒩(μ, σ²),
+    i.e. a camera with gain α (ADU per electron), offset μ and read
+    variance σ² (a [`SensorEstimate`][optix.estimates.SensorEstimate]).
+    [`apply`][optix.sensor.GeneralizedAnscombe.apply] computes
+    [`anscombe`][], [`inverse`][optix.sensor.GeneralizedAnscombe.inverse]
+    its inverse.
 
-    Parameters
-    ----------
-    alpha, sigma, mu : float, optional
-        Noise parameters; alternatively ``fit(init=sensor)``.
-    inverse : {"exact", "asymptotic", "algebraic"}
-        Inverse used by :meth:`inverse`. Paper: ``"exact"``.
-    per_pixel : bool
-        Extension: use the per-pixel maps of the sensor estimate. Paper:
-        False (scalar parameters: the means of the maps).
-    faithful, dtype, device, layout
-        See :class:`optix.Estimator`.
+    !!! note
+        `fit(None, init=sensor)` only reads the parameters (no data
+        needed). The exact-inverse table is computed once (float64, CPU)
+        and interpolated on the data device.
 
-    Notes
-    -----
-    ``fit(Y=None, init=sensor)`` only reads the parameters (no data
-    needed). The exact-inverse table is computed once (float64, CPU) and
-    interpolated on the data device.
+    !!! references "References"
+        1. Mäkitalo M, Foi A. *Optimal inversion of the Anscombe
+           transformation in low-count Poisson image denoising.* IEEE Trans
+           Image Process **20**(1):99–109, 2011.
+           [doi:10.1109/TIP.2010.2056693](https://doi.org/10.1109/TIP.2010.2056693)
+        2. Mäkitalo M, Foi A. *A closed-form approximation of the exact
+           unbiased inverse of the Anscombe variance-stabilizing
+           transformation.* IEEE Trans Image Process **20**(9):2697–2698,
+           2011.
+           [doi:10.1109/TIP.2011.2121085](https://doi.org/10.1109/TIP.2011.2121085)
+        3. Mäkitalo M, Foi A. *Optimal inversion of the generalized
+           Anscombe transformation for Poisson-Gaussian noise.* IEEE Trans
+           Image Process **22**(1):91–103, 2013.
+           [doi:10.1109/TIP.2012.2202675](https://doi.org/10.1109/TIP.2012.2202675)
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @article{makitalo2011optimal,
+              author  = {Mäkitalo, Markku and Foi, Alessandro},
+              title   = {Optimal inversion of the {Anscombe} transformation
+                         in low-count {Poisson} image denoising},
+              journal = {IEEE Transactions on Image Processing},
+              volume  = {20}, number = {1}, pages = {99--109}, year = {2011},
+              doi     = {10.1109/TIP.2010.2056693}
+            }
+            @article{makitalo2011closed,
+              author  = {Mäkitalo, Markku and Foi, Alessandro},
+              title   = {A closed-form approximation of the exact unbiased
+                         inverse of the {Anscombe} variance-stabilizing
+                         transformation},
+              journal = {IEEE Transactions on Image Processing},
+              volume  = {20}, number = {9}, pages = {2697--2698},
+              year    = {2011}, doi = {10.1109/TIP.2011.2121085}
+            }
+            @article{makitalo2013optimal,
+              author  = {Mäkitalo, Markku and Foi, Alessandro},
+              title   = {Optimal inversion of the generalized {Anscombe}
+                         transformation for {Poisson-Gaussian} noise},
+              journal = {IEEE Transactions on Image Processing},
+              volume  = {22}, number = {1}, pages = {91--103}, year = {2013},
+              doi     = {10.1109/TIP.2012.2202675}
+            }
+            ```
     """
 
     tags = Tags(
@@ -306,6 +365,21 @@ class GeneralizedAnscombe(CalibrationEstimator):
         device: object = None,
         layout: object = None,
     ) -> None:
+        """Configure the transform.
+
+        Parameters
+        ----------
+        alpha, sigma, mu : float, optional
+            Noise parameters; alternatively `fit(init=sensor)`.
+        inverse : {"exact", "closed-form", "asymptotic", "algebraic"}
+            Inverse used by `inverse` (see [`inverse_anscombe`][]); all
+            four are defined in Mäkitalo & Foi 2013. Paper: `"exact"`.
+        per_pixel : bool
+            Extension: use the per-pixel maps of the sensor estimate.
+            Paper: False (scalar parameters: the means of the maps).
+        faithful, dtype, device, layout
+            See [`Estimator`][optix.Estimator].
+        """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
         self._table: tuple[Tensor, Tensor, Tensor] | None = None
@@ -320,27 +394,27 @@ class GeneralizedAnscombe(CalibrationEstimator):
             }
 
     def fit(
-        self, Y: ArrayLike | None = None, **kwargs: object
+        self, data: ArrayLike | None = None, **kwargs: object
     ) -> "GeneralizedAnscombe":
-        """Read the noise parameters from ``init`` (a SensorEstimate).
+        """Read the noise parameters from `init` (a SensorEstimate).
 
         Parameters
         ----------
-        Y : array-like, optional
+        data : array-like, optional
             Unused.
         **kwargs
-            ``init`` (required), ``layout``, ...
+            `init` (required), `layout`, ...
 
         Returns
         -------
         GeneralizedAnscombe
             self
         """
-        return super().fit(Y, **kwargs)
+        return super().fit(data, **kwargs)
 
     def _fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         init: object,
         callback: Callable | None,
@@ -371,18 +445,18 @@ class GeneralizedAnscombe(CalibrationEstimator):
         return s.gain, s.variance.clamp_min(0).sqrt(), s.offset
 
     def _apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None
+        self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
-        return self._apply_maps(Y, out, anscombe, *self._params())
+        return self._apply_maps(data, out, anscombe, *self._params())
 
     def inverse(
-        self, D: ArrayLike, out: WritableArrayLike | None = None
+        self, data: ArrayLike, out: WritableArrayLike | None = None
     ) -> WritableArrayLike:
-        """Inverse transform (method from the ``inverse`` option).
+        """Inverse transform (method from the `inverse` option).
 
         Parameters
         ----------
-        D : array-like
+        data : array-like
             Transformed data, in the layout of the fit.
         out : writable array-like, optional
 
@@ -400,7 +474,7 @@ class GeneralizedAnscombe(CalibrationEstimator):
         def fn(d: Tensor, a: Tensor, s: Tensor, m: Tensor) -> Tensor:
             return inverse_anscombe(d, a, s, m, method=method, table=table)
 
-        if not hasattr(D, "layout"):
-            D = self._labeled(D, self.layout)
+        if not hasattr(data, "layout"):
+            data = self._labeled(data, self.layout)
         with torch.no_grad():
-            return self._apply_maps(D, out, fn, alpha, sigma, mu)
+            return self._apply_maps(data, out, fn, alpha, sigma, mu)

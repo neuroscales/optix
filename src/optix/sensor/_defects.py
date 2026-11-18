@@ -1,4 +1,7 @@
-"""Defective, hot and random-telegraph-signal (RTS) pixel detection."""
+"""Defective, hot and random-telegraph-signal (RTS) pixel detection.
+
+Optix convention: no single publication defines this detector.
+"""
 
 import itertools
 from collections.abc import Callable
@@ -15,7 +18,7 @@ __all__ = ["DefectivePixels", "bimodality", "replace_defective", "robust_z"]
 
 
 def robust_z(x: Tensor, nspatial: int) -> Tensor:
-    """``(x - median) / (1.4826 MAD)`` over the spatial dims (per group).
+    """(x − median)/(1.4826·MAD) over the spatial dims (per group).
 
     Non-finite values are ignored in the median and MAD.
     """
@@ -29,17 +32,19 @@ def robust_z(x: Tensor, nspatial: int) -> Tensor:
 
 
 def bimodality(skewness: Tensor, kurtosis: Tensor) -> Tensor:
-    r"""Sarle's bimodality coefficient :math:`(g_1^2 + 1) / \beta_2`.
+    """Sarle's bimodality coefficient (g₁² + 1)/β₂.
 
     1/3 for a Gaussian, 5/9 for a uniform distribution and 1 for any
     two-point distribution (a noiseless random telegraph signal).
-    ``kurtosis`` is the non-excess kurtosis :math:`\beta_2`.
+    `kurtosis` is the non-excess kurtosis β₂.
     """
     return (skewness.square() + 1) / kurtosis
 
 
 def replace_defective(y: Tensor, defective: Tensor) -> Tensor:
     """Replace defective pixels by the median of their good neighbours.
+
+    Optix convention (no single publication).
 
     Parameters
     ----------
@@ -50,8 +55,8 @@ def replace_defective(y: Tensor, defective: Tensor) -> Tensor:
     Returns
     -------
     Tensor
-        Copy of ``y`` where every defective pixel is the (lower) median
-        of its ``3^d - 1`` neighbours that are in bounds and not
+        Copy of `y` where every defective pixel is the (lower) median
+        of its 3ᵈ − 1 neighbours that are in bounds and not
         defective; pixels without such neighbours are left unchanged.
     """
     idx = defective.nonzero()
@@ -80,43 +85,38 @@ def replace_defective(y: Tensor, defective: Tensor) -> Tensor:
 
 
 class DefectivePixels(CalibrationEstimator):
-    r"""Defective, hot and RTS pixel detection from a dark stack.
+    """Defective, hot and RTS pixel detection from a dark stack.
+
+    !!! note "optix convention"
+        No single publication defines this detector: the tests, thresholds
+        and replacement rule below are documented optix choices, not a
+        published algorithm (`faithful` refers to these defaults).
 
     Per-pixel temporal moments of a dark stack (one streaming pass) give
-    the dark mean :math:`m`, variance :math:`v`, skewness :math:`g_1` and
-    kurtosis :math:`\beta_2`. A pixel is flagged when
+    the dark mean m, variance v, skewness g₁ and (non-excess) kurtosis β₂.
+    A pixel is flagged when
 
-    * ``"offset"``: :math:`|z(m)| > t` (hot or cold pixel),
-    * ``"variance"``: :math:`z(v) > t` (noisy pixel),
-    * ``"kurtosis"``: :math:`|z(\beta_2)| > t` (non-Gaussian noise),
-    * ``"rts"``: bimodal dark histogram, i.e. Sarle's bimodality
-      coefficient :math:`(g_1^2 + 1)/\beta_2 > b` (random telegraph
-      signal; 1/3 for Gaussian noise, 1 for a two-level signal),
+    - `"offset"`: |z(m)| > t (hot or cold pixel),
+    - `"variance"`: z(v) > t (noisy pixel),
+    - `"kurtosis"`: |z(β₂)| > t (non-Gaussian noise),
+    - `"rts"`: bimodal dark histogram, i.e. Sarle's bimodality coefficient
+      (g₁² + 1)/β₂ > b (random telegraph signal; 1/3 for Gaussian noise,
+      1 for a two-level signal),
 
-    with :math:`z(x) = (x - \mathrm{med}\,x) / (1.4826\,\mathrm{MAD}\,x)`
-    the robust z-score over the pixels of a group.
-
-    Parameters
-    ----------
-    threshold : float
-        Robust z-score threshold ``t``. Default 5.
-    bimodality : float
-        Threshold ``b`` of the bimodality coefficient. Default 5/9 (the
-        value of a uniform distribution).
-    faithful, dtype, device, layout
-        See :class:`optix.Estimator`.
+    with z(x) = (x − med x)/(1.4826·MAD x) the robust z-score over the
+    pixels of a group ([`robust_z`][]).
 
     Attributes
     ----------
     masks : dict of str to Tensor
-        The individual boolean ``(*group, *spatial)`` masks.
+        The individual boolean `(*group, *spatial)` masks.
 
-    Notes
-    -----
-    ``fit(darks)``. Estimates: ``"sensor"`` with ``defective`` (union of
-    the masks), ``offset`` and ``variance`` (dark mean and variance).
-    :meth:`apply` replaces defective pixels with the median of their
-    good neighbours (:func:`replace_defective`).
+    !!! note
+        `fit(darks)`. Estimates: `"sensor"` with `defective` (union of the
+        masks), `offset` and `variance` (dark mean and variance).
+        [`apply`][optix.sensor.DefectivePixels.apply] replaces defective
+        pixels with the median of their good neighbours
+        ([`replace_defective`][]).
     """
 
     tags = Tags(
@@ -124,7 +124,7 @@ class DefectivePixels(CalibrationEstimator):
         streaming="per-pixel-stats",
         noise="gaussian",
         many_frames=True,
-        reference="standard practice",
+        reference="optix convention",
     )
     paper = {"threshold": 5.0, "bimodality": 5 / 9}
     recommended = dict(paper)
@@ -139,21 +139,33 @@ class DefectivePixels(CalibrationEstimator):
         device: object = None,
         layout: object = None,
     ) -> None:
+        """Configure the detector.
+
+        Parameters
+        ----------
+        threshold : float
+            Robust z-score threshold t. Default (optix convention) 5.
+        bimodality : float
+            Threshold b of the bimodality coefficient. Default (optix
+            convention) 5/9, the value of a uniform distribution.
+        faithful, dtype, device, layout
+            See [`Estimator`][optix.Estimator].
+        """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
         self.masks: dict[str, Tensor] = {}
 
     def _fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         init: object,
         callback: Callable | None,
         verbose: bool,
     ) -> None:
-        if isinstance(Y, list):
+        if isinstance(data, list):
             raise TypeError("DefectivePixels takes a single dark stack")
-        st = self._stats(Y, order=4)
+        st = self._stats(data, order=4)
         t = self.options["threshold"]
         nd = st.nspatial
         bc = bimodality(st.skewness, st.kurtosis)
@@ -176,11 +188,11 @@ class DefectivePixels(CalibrationEstimator):
         }
 
     def _apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None
+        self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
         defective = self.estimates["sensor"].defective
         return self._apply_maps(
-            Y,
+            data,
             out,
             lambda y, d: replace_defective(y, d.bool()),
             defective,

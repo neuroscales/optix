@@ -1,8 +1,8 @@
 """Shared helpers of the calibration estimators.
 
 Calibration estimators take several stacks (a dark stack, flat stacks at
-several illumination levels). They are passed as ``fit(Y, dark=...)``,
-where ``Y`` is one stack or a sequence of stacks (one per level), all in
+several illumination levels). They are passed as `fit(data, dark=...)`,
+where `data` is one stack or a sequence of stacks (one per level), all in
 the same layout. Every stack is streamed once.
 """
 
@@ -32,9 +32,9 @@ class PixelStats:
         Number of samples per group.
     mean, var : (*group, *spatial) Tensor
         Per-pixel mean and unbiased variance (or median and squared
-        scaled MAD for ``statistic="median"``).
+        scaled MAD for `statistic="median"`).
     skewness, kurtosis : (*group, *spatial) Tensor or None
-        Biased sample skewness and (non-excess) kurtosis (``order=4``).
+        Biased sample skewness and (non-excess) kurtosis (`order=4`).
     nspatial : int
         Number of spatial dims.
     """
@@ -64,14 +64,14 @@ class PixelStats:
         return x.mean(self.spatial_dims, keepdim=True)
 
 
-def _layout(Y: ArrayLike) -> Layout:
-    if isinstance(Y, Labeled):
-        return Y.layout
-    return Layout.default(len(Y.shape), 2)
+def _layout(data: ArrayLike) -> Layout:
+    if isinstance(data, Labeled):
+        return data.layout
+    return Layout.default(len(data.shape), 2)
 
 
 def pixel_stats(
-    Y: ArrayLike,
+    data: ArrayLike,
     *,
     order: int = 2,
     statistic: str = "mean",
@@ -83,14 +83,14 @@ def pixel_stats(
 
     Parameters
     ----------
-    Y : array-like or Labeled
-        ``(*samples, H, W)`` without a layout.
+    data : array-like or Labeled
+        `(*samples, H, W)` without a layout.
     order : int
-        Highest central moment (2 or 4), for ``statistic="mean"``.
+        Highest central moment (2 or 4), for `statistic="mean"`.
     statistic : {"mean", "median"}
-        ``"mean"``: Welford/Pebay moments over frame batches.
-        ``"median"``: exact per-pixel median and MAD over row tiles; the
-        variance is then ``(1.4826 MAD)^2``.
+        `"mean"`: Welford/Pebay moments over frame batches.
+        `"median"`: exact per-pixel median and MAD over row tiles; the
+        variance is then (1.4826·MAD)².
     dtype, device : optional
         Working backend of the chunks.
     out_dtype : torch.dtype, optional
@@ -100,14 +100,14 @@ def pixel_stats(
     -------
     PixelStats
     """
-    layout = _layout(Y)
-    group_shape, sample_shape, spatial_shape = layout.shape_of(Y.shape)
+    layout = _layout(data)
+    group_shape, sample_shape, spatial_shape = layout.shape_of(data.shape)
     nspatial = len(spatial_shape)
     nsamp = 1
     for s in sample_shape:
         nsamp *= s
     if statistic == "median":
-        med, mad = median_mad(Y, dtype=dtype, device=device)
+        med, mad = median_mad(data, dtype=dtype, device=device)
         out_dtype = out_dtype or med.dtype
         count = torch.full(
             group_shape + (1,) * nspatial,
@@ -119,7 +119,7 @@ def pixel_stats(
         return PixelStats(count, med.to(out_dtype), var, nspatial)
     if statistic != "mean":
         raise ValueError(f"statistic must be 'mean' or 'median': {statistic}")
-    chunks = frame_batches(Y, dtype=dtype, device=device)
+    chunks = frame_batches(data, dtype=dtype, device=device)
     reducers: dict[tuple[int, ...], Moments] = {}
     for chunk in chunks:
         key = chunk.group
@@ -154,7 +154,7 @@ def pixel_stats(
 def as_map(
     value: object, attr: str, backend: dict, *, name: str = "dark"
 ) -> Tensor:
-    """A parameter map from an estimate (its ``attr`` field) or a tensor."""
+    """A parameter map from an estimate (its `attr` field) or a tensor."""
     if isinstance(value, Estimate):
         field = getattr(value, attr, None)
         if field is None:
@@ -164,7 +164,7 @@ def as_map(
 
 
 def per_group(fn: Callable[[Tensor, Tensor], Tensor], *maps: Tensor) -> object:
-    """``fn(chunk, data)`` closure indexing ``(*group, *spatial)`` maps."""
+    """`fn(chunk, data)` closure indexing `(*group, *spatial)` maps."""
 
     def apply(chunk: object, data: Tensor) -> Tensor:
         picked = []
@@ -182,7 +182,7 @@ def per_group(fn: Callable[[Tensor, Tensor], Tensor], *maps: Tensor) -> object:
 class CalibrationEstimator(Estimator):
     """Estimator fitted from one or several stacks plus a dark stack.
 
-    ``fit(Y, dark=...)``: ``Y`` is one array-like, or a sequence of
+    `fit(data, dark=...)`: `data` is one array-like, or a sequence of
     array-likes (one stack per illumination level). Every stack, and the
     dark stack, uses the same layout.
     """
@@ -191,7 +191,7 @@ class CalibrationEstimator(Estimator):
 
     def fit(
         self,
-        Y: ArrayLike | Sequence[ArrayLike] | None,
+        data: ArrayLike | Sequence[ArrayLike] | None,
         *,
         dark: object = None,
         layout: Layout | None = None,
@@ -203,21 +203,21 @@ class CalibrationEstimator(Estimator):
 
         Parameters
         ----------
-        Y : array-like, Labeled or sequence of them
-            Data stack(s), ``(*samples, H, W)`` without a layout.
+        data : array-like, Labeled or sequence of them
+            Data stack(s), `(*samples, H, W)` without a layout.
         dark : array-like, Labeled, Tensor map or Estimate, optional
-            Dark reference: a stack of dark frames (same layout as ``Y``),
+            Dark reference: a stack of dark frames (same layout as `data`),
             or (where documented) a precomputed map or estimate.
         layout, init, callback, verbose
-            See :meth:`optix.Estimator.fit`.
+            See [`Estimator.fit`][optix.Estimator.fit].
 
         Returns
         -------
         Estimator
             self
         """
-        if isinstance(Y, list | tuple) and layout is None:
-            layouts = {y.layout for y in Y if isinstance(y, Labeled)}
+        if isinstance(data, list | tuple) and layout is None:
+            layouts = {y.layout for y in data if isinstance(y, Labeled)}
             if len(layouts) > 1:
                 raise ValueError("Stacks are labelled with different layouts")
             if layouts:
@@ -225,18 +225,22 @@ class CalibrationEstimator(Estimator):
         self._dark_input = dark
         try:
             return super().fit(
-                Y, layout=layout, init=init, callback=callback, verbose=verbose
+                data,
+                layout=layout,
+                init=init,
+                callback=callback,
+                verbose=verbose,
             )
         finally:
             self._dark_input = None
 
     @staticmethod
-    def _labeled(Y: object, layout: Layout | None) -> object:
-        if Y is None:
+    def _labeled(data: object, layout: Layout | None) -> object:
+        if data is None:
             return None
-        if isinstance(Y, list | tuple):
-            return [Estimator._labeled(y, layout) for y in Y]
-        return Estimator._labeled(Y, layout)
+        if isinstance(data, list | tuple):
+            return [Estimator._labeled(y, layout) for y in data]
+        return Estimator._labeled(data, layout)
 
     def _dark_stack(self) -> object:
         """The dark input, labelled with the fit layout if it is a stack."""
@@ -246,11 +250,11 @@ class CalibrationEstimator(Estimator):
         return self._labeled(dark, self.layout)
 
     def _stats(
-        self, Y: ArrayLike, *, order: int = 2, statistic: str = "mean"
+        self, data: ArrayLike, *, order: int = 2, statistic: str = "mean"
     ) -> PixelStats:
-        backend = self._backend(Y)
+        backend = self._backend(data)
         return pixel_stats(
-            Y,
+            data,
             order=order,
             statistic=statistic,
             dtype=self.dtype,
@@ -260,13 +264,13 @@ class CalibrationEstimator(Estimator):
 
     def _apply_maps(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         out: WritableArrayLike | None,
         fn: Callable[..., Tensor],
         *maps: Tensor,
         overhead: float = 2.0,
     ) -> WritableArrayLike:
-        """``_apply_frames`` with per-group parameter maps."""
+        """`_apply_frames` with per-group parameter maps."""
         return self._apply_frames(
-            Y, out, per_group(fn, *maps), overhead=overhead
+            data, out, per_group(fn, *maps), overhead=overhead
         )

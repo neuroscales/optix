@@ -1,4 +1,4 @@
-"""Prospective dark/flat calibration (standard practice)."""
+"""Prospective dark/flat calibration (optix convention: standard practice)."""
 
 from collections.abc import Callable
 
@@ -13,50 +13,37 @@ __all__ = ["DarkFlatCalibration", "correct"]
 
 
 def correct(y: Tensor, dark: Tensor, flat: Tensor) -> Tensor:
-    """``(y - dark) / flat``."""
+    """(y − dark)/flat."""
     return (y - dark) / flat
 
 
 class DarkFlatCalibration(CalibrationEstimator):
-    r"""Prospective flat-field correction from dark and flat references.
+    """Prospective flat-field correction from dark and flat references.
+
+    !!! note "optix convention"
+        Dark/flat correction is standard practice with no single defining
+        publication; the reductions and normalisation below are documented
+        optix choices (`faithful` refers to these defaults).
 
     Model and correction:
 
-    .. math::
+        x = (I − D)/(F − D) · mean(F − D),
 
-        x = \frac{I - D}{F - D} \cdot \overline{F - D}
+    with D the per-pixel dark reference (camera offset plus dark current),
+    F the per-pixel flat reference (uniform sample) and mean(F − D) its
+    spatial mean, which keeps the corrected intensities in ADU.
 
-    with :math:`D` the per-pixel dark reference (camera offset plus dark
-    current), :math:`F` the per-pixel flat reference (uniform sample) and
-    :math:`\overline{F - D}` the spatial mean of the flat, which keeps the
-    corrected intensities in ADU.
+    !!! note
+        `fit(flats, dark=darks)`: both are stacks in the same layout; the
+        dark may also be a precomputed map (a Tensor that broadcasts to the
+        `(*group, *spatial)` maps), a
+        [`ShadingEstimate`][optix.estimates.ShadingEstimate] (its `dark`)
+        or a [`SensorEstimate`][optix.estimates.SensorEstimate] (its
+        `offset`). Without a dark, D = 0.
 
-    Parameters
-    ----------
-    statistic : {"mean", "median"}
-        Per-pixel reduction of the reference stacks. ``"mean"``: streaming
-        Welford/Pebay moments (one pass over frame batches). ``"median"``:
-        exact per-pixel median over row tiles (robust to cosmic rays and
-        dust moving between flat frames). Paper: ``"mean"``.
-    normalize : {"mean", "none"}
-        ``"mean"``: the flat ``F - D`` is divided by its spatial mean (per
-        group), the usual practice. ``"none"``: ``(I - D) / (F - D)`` as
-        is.
-        Paper: ``"mean"``.
-    faithful, dtype, device, layout
-        See :class:`optix.Estimator`.
-
-    Notes
-    -----
-    ``fit(flats, dark=darks)``: both are stacks in the same layout; the
-    dark may also be a precomputed map (a Tensor that broadcasts to the
-    ``(*group, *spatial)`` maps), a :class:`ShadingEstimate` (its
-    ``dark``) or a :class:`SensorEstimate` (its ``offset``). Without a
-    dark, ``D = 0``.
-
-    Estimates: ``"shading"`` (``flat``, ``dark``) and, when a dark stack
-    is given, ``"sensor"`` (``offset = D`` and the per-pixel temporal
-    ``variance`` of the dark stack).
+        Estimates: `"shading"` (`flat`, `dark`) and, when a dark stack is
+        given, `"sensor"` (`offset` = D and the per-pixel temporal
+        `variance` of the dark stack).
     """
 
     tags = Tags(
@@ -64,7 +51,7 @@ class DarkFlatCalibration(CalibrationEstimator):
         streaming="per-pixel-stats",
         noise="none",
         many_frames=True,
-        reference="standard practice",
+        reference="optix convention",
     )
     paper = {"statistic": "mean", "normalize": "mean"}
     recommended = {"statistic": "mean", "normalize": "mean"}
@@ -79,6 +66,23 @@ class DarkFlatCalibration(CalibrationEstimator):
         device: object = None,
         layout: object = None,
     ) -> None:
+        """Configure the calibration.
+
+        Parameters
+        ----------
+        statistic : {"mean", "median"}
+            Per-pixel reduction of the reference stacks. `"mean"`:
+            streaming Welford/Pebay moments (one pass over frame batches).
+            `"median"`: exact per-pixel median over row tiles (robust to
+            cosmic rays and dust moving between flat frames). Default
+            (optix convention): `"mean"`.
+        normalize : {"mean", "none"}
+            `"mean"`: the flat F − D is divided by its spatial mean (per
+            group), the usual practice. `"none"`: (I − D)/(F − D) as is.
+            Default (optix convention): `"mean"`.
+        faithful, dtype, device, layout
+            See [`Estimator`][optix.Estimator].
+        """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
         if self.options["statistic"] not in ("mean", "median"):
@@ -88,17 +92,17 @@ class DarkFlatCalibration(CalibrationEstimator):
 
     def _fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         init: object,
         callback: Callable | None,
         verbose: bool,
     ) -> None:
-        if isinstance(Y, list):
+        if isinstance(data, list):
             raise TypeError("DarkFlatCalibration takes a single flat stack")
         statistic = self.options["statistic"]
-        flat = self._stats(Y, statistic=statistic)
-        backend = self._backend(Y)
+        flat = self._stats(data, statistic=statistic)
+        backend = self._backend(data)
         raw = self._dark_input
         dark = self._dark_stack()
         sensor = None
@@ -134,14 +138,14 @@ class DarkFlatCalibration(CalibrationEstimator):
             self.estimates["sensor"] = sensor
 
     def _apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None
+        self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
         shading = self.estimates["shading"]
-        return self._apply_maps(Y, out, correct, shading.dark, shading.flat)
+        return self._apply_maps(data, out, correct, shading.dark, shading.flat)
 
 
 def _is_map(x: Tensor, like: Tensor) -> bool:
-    """Whether ``x`` is a map (broadcasts to ``like``) rather than a stack."""
+    """Whether `x` is a map (broadcasts to `like`) rather than a stack."""
     return x.ndim <= like.ndim and all(
         a in (1, b)
         for a, b in zip(x.shape[::-1], like.shape[::-1], strict=False)

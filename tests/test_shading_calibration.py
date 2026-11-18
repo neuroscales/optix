@@ -10,6 +10,7 @@ from optix.shading import (
     fit_polynomial,
     gaussian_smooth,
     median_smooth,
+    median_window,
     robust_minimum,
 )
 
@@ -122,7 +123,9 @@ def test_illumination_function_recovers_smooth_flat():
     est = IlluminationFunction(smoothing="polynomial").fit(quad * x)
     f = est.estimates["shading"].flat
     assert (f / f.mean() / (quad / quad.mean()) - 1).abs().max() < 0.03
-    med = IlluminationFunction(statistic="median").fit(y, dark=sensor.offset)
+    med = IlluminationFunction(statistic="median", size=8).fit(
+        y, dark=sensor.offset
+    )
     f = med.estimates["shading"].flat
     assert (f / f.mean() / shading.flat - 1).abs().max() < 0.05
     assert med.is_faithful is False
@@ -156,3 +159,34 @@ def test_smoothers():
     assert median_smooth(z, 1)[4, 4] == 0
     r = robust_minimum(torch.arange(1.0, 101.0))
     assert r.min() == 1
+
+
+def test_median_window_and_singh_preset():
+    """Singh et al. 2014: mean over the batch, 500-pixel median window."""
+    g = torch.Generator().manual_seed(0)
+    x = torch.rand(13, 11, generator=g, dtype=F64)
+    for size in (3, 4, 5):
+        ref = torch.empty_like(x)
+        for i in range(13):
+            for j in range(11):
+                lo_i, lo_j = i - size // 2, j - size // 2
+                w = x[max(0, lo_i) : lo_i + size, max(0, lo_j) : lo_j + size]
+                ref[i, j] = w.reshape(-1).sort().values[(w.numel() - 1) // 2]
+        torch.testing.assert_close(median_window(x, size, budget=50), ref)
+    # a window larger than the image is the global (lower) median
+    big = median_window(x, 500)
+    torch.testing.assert_close(big, torch.full_like(x, x.reshape(-1).median()))
+    est = IlluminationFunction(dtype=F64)
+    assert est.options == {
+        "statistic": "mean",
+        "smoothing": "median",
+        "size": 500.0,
+        "rescale": "none",
+    }
+    imgs = 1 + torch.rand(6, 13, 11, generator=g, dtype=F64)
+    f = est.fit(imgs).estimates["shading"].flat
+    torch.testing.assert_close(f, median_window(imgs.mean(0), 500))
+    assert (
+        IlluminationFunction(smoothing="median-disk", size=4).is_faithful
+        is False
+    )

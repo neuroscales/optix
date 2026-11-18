@@ -31,34 +31,31 @@ def gain_regression(
     robust: str | None = None,
     iterations: int = 20,
 ) -> tuple[Tensor, Tensor]:
-    r"""Per-pixel slope of the variance on the mean, through the origin.
+    """Per-pixel slope of the variance on the mean, through the origin.
 
-    Solves :math:`B = g A` in the least-squares sense for every pixel,
-    with :math:`A_i = \bar D_i - o` and :math:`B_i = v_i - \mathrm{var}`
-    over illumination levels :math:`i`:
+    Solves B = g·A in the least-squares sense for every pixel, with
+    A_i = D̄_i − o and B_i = v_i − var over illumination levels i:
 
-    .. math::
-
-        \hat g = (A^\top A)^{-1} A^\top B.
+        ĝ = (AᵀA)⁻¹·AᵀB.
 
     Parameters
     ----------
     dmean, dvar : (L, ...) Tensor
         Mean minus offset and variance minus read variance, per level.
     robust : {None, "huber", "theil-sen"}
-        None: ordinary least squares (Huang et al.). ``"huber"``:
-        iteratively reweighted least squares with Huber weights
-        (``c = 1.345``, scale from the MAD of the residuals).
-        ``"theil-sen"``: median of the per-level slopes ``B_i / A_i``
-        (the Theil-Sen estimator through the origin).
+        None: ordinary least squares. `"huber"` (extension): iteratively
+        reweighted least squares with Huber weights (c = 1.345, scale from
+        the MAD of the residuals). `"theil-sen"` (extension): median of the
+        per-level slopes B_i/A_i (the Theil-Sen estimator through the
+        origin).
     iterations : int
-        IRLS iterations for ``"huber"``.
+        IRLS iterations for `"huber"`.
 
     Returns
     -------
     gain, stderr : (...) Tensor
-        Slope and its standard error ``sqrt(s^2 / sum w A^2)``, with ``s^2``
-        the residual variance (NaN with a single level).
+        Slope and its standard error √(s²/∑ w·A²), with s² the residual
+        variance (NaN with a single level).
     """
     a, b = dmean, dvar
     nlev = a.shape[0]
@@ -95,49 +92,67 @@ def gain_regression(
 
 
 class SCMOSCalibration(CalibrationEstimator):
-    r"""Pixel-wise sCMOS camera calibration (Huang et al., 2013).
+    """Pixel-wise sCMOS camera calibration (Huang et al., 2013).
 
     Each pixel follows
 
-    .. math::
+        ADU = g·Poisson(λ) + o + 𝒩(0, var),
 
-        \mathrm{ADU} = g \cdot \mathrm{Poisson}(\lambda) + o
-                       + \mathcal N(0, \mathrm{var}),
+    so that E = g·λ + o and Var = g²·λ + var = g·(E − o) + var.
 
-    so that ``E = g λ + o`` and ``Var = g² λ + var = g (E - o) + var``.
-    The offset ``o`` and the read variance ``var`` are the per-pixel
-    temporal mean and variance of a dark stack. The gain is the
-    per-pixel least-squares slope, through the origin, of
-    ``v_i - var`` on ``D_i - o`` over illumination levels ``i``, where
-    ``D_i`` and ``v_i`` are the per-pixel temporal mean and variance of
-    the stack at level ``i``.
+    - Offset o and read variance var: the per-pixel temporal mean and
+      variance of a dark stack (Huang et al., Online Methods, "Camera
+      variance, gain and offset calibration"; the paper used 60,000 dark
+      frames).
+    - Gain g: per-pixel least-squares slope, through the origin, of
+      v_i − var on D_i − o over illumination levels i, D_i and v_i being
+      the per-pixel temporal mean and variance of the stack at level i
+      (the paper used 15 levels of 20,000 frames, ≈ 20 to 200 photons per
+      pixel).
 
-    :meth:`apply` converts data to photoelectrons, ``(ADU - o) / g``.
+    [`apply`][optix.sensor.SCMOSCalibration.apply] converts data to
+    photoelectrons, (ADU − o)/g.
 
-    Parameters
-    ----------
-    robust : {"none", "huber", "theil-sen"}
-        Regression of the gain (extension). Paper: ``"none"`` (ordinary
-        least squares).
-    confidence : float, optional
-        Extension: flag as ``defective`` the pixels whose relative
-        standard error of the gain exceeds ``confidence`` (also those
-        with a non-finite or non-positive gain). Paper: None (no mask).
-    faithful, dtype, device, layout
-        See :class:`optix.Estimator`.
+    !!! warning "Provisional: gain regression"
+        The Online Methods defer the gain estimation to the paper's
+        Supplementary Note, which could not be obtained (the publisher's
+        site is not reachable from this environment; PMC serves it behind a
+        challenge page). The through-origin least-squares regression above
+        is not yet checked against it. The offset and variance procedure
+        is confirmed by the Online Methods.
 
-    Notes
-    -----
-    ``fit(levels, dark=darks)``: ``levels`` is a sequence of stacks, one
-    per illumination level (each with at least two samples per group),
-    ``darks`` a stack of dark frames. Every stack is streamed once
-    (Welford/Pebay moments). Maps are ``(*group, *spatial)``.
+    !!! note
+        `fit(levels, dark=darks)`: `levels` is a sequence of stacks, one
+        per illumination level (each with at least two samples per group),
+        `darks` a stack of dark frames. Every stack is streamed once
+        (Welford/Pebay moments). Maps are `(*group, *spatial)`.
 
-    References
-    ----------
-    Huang F, Hartwich TMP, Rivera-Molina FE, et al. Video-rate
-    nanoscopy using sCMOS camera-specific single-molecule localization
-    algorithms. Nat Methods 10, 653-658 (2013). doi:10.1038/nmeth.2488
+    !!! references "References"
+        1. Huang F, Hartwich TMP, Rivera-Molina FE, Lin Y, Duim WC, Long JJ,
+           Uchil PD, Myers JR, Baird MA, Mothes W, Davidson MW, Toomre D,
+           Bewersdorf J. *Video-rate nanoscopy using sCMOS camera-specific
+           single-molecule localization algorithms.* Nat Methods
+           **10**(7):653–658, 2013.
+           [doi:10.1038/nmeth.2488](https://doi.org/10.1038/nmeth.2488)
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @article{huang2013video,
+              author  = {Huang, Fang and Hartwich, Tobias M. P. and
+                         Rivera-Molina, Felix E. and Lin, Yu and
+                         Duim, Whitney C. and Long, Jane J. and
+                         Uchil, Pradeep D. and Myers, Jordan R. and
+                         Baird, Michelle A. and Mothes, Walther and
+                         Davidson, Michael W. and Toomre, Derek and
+                         Bewersdorf, Joerg},
+              title   = {Video-rate nanoscopy using {sCMOS}
+                         camera-specific single-molecule localization
+                         algorithms},
+              journal = {Nature Methods},
+              volume  = {10}, number = {7}, pages = {653--658},
+              year    = {2013}, doi = {10.1038/nmeth.2488}
+            }
+            ```
     """
 
     tags = Tags(
@@ -161,6 +176,20 @@ class SCMOSCalibration(CalibrationEstimator):
         device: object = None,
         layout: object = None,
     ) -> None:
+        """Configure the calibration.
+
+        Parameters
+        ----------
+        robust : {"none", "huber", "theil-sen"}
+            Regression of the gain (see [`gain_regression`][]). Paper:
+            `"none"` (ordinary least squares, provisional).
+        confidence : float, optional
+            Extension: flag as `defective` the pixels whose relative
+            standard error of the gain exceeds `confidence` (also those with
+            a non-finite or non-positive gain). Paper: None (no mask).
+        faithful, dtype, device, layout
+            See [`Estimator`][optix.Estimator].
+        """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
         if self.options["robust"] not in ("none", "huber", "theil-sen"):
@@ -168,13 +197,13 @@ class SCMOSCalibration(CalibrationEstimator):
 
     def _fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         init: object,
         callback: Callable | None,
         verbose: bool,
     ) -> None:
-        levels = Y if isinstance(Y, list) else [Y]
+        levels = data if isinstance(data, list) else [data]
         if self._dark_input is None:
             raise ValueError("SCMOSCalibration needs a dark stack: dark=")
         dark = self._stats(self._dark_stack())
@@ -209,12 +238,12 @@ class SCMOSCalibration(CalibrationEstimator):
         self.gain_stderr = se
 
     def _apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None
+        self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
-        """Convert ADU to photoelectrons: ``(y - o) / g``."""
+        """Convert ADU to photoelectrons: (y − o)/g."""
         s = self.estimates["sensor"]
         return self._apply_maps(
-            Y, out, lambda y, o, g: (y - o) / g, s.offset, s.gain
+            data, out, lambda y, o, g: (y - o) / g, s.offset, s.gain
         )
 
     def _extra_state(self) -> dict[str, object]:

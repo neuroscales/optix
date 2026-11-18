@@ -1,8 +1,8 @@
-"""Mean/median illumination function (Singh et al., J Microsc 2014).
+"""Retrospective illumination function (Singh et al., J Microsc 2014).
 
-Smoothing and rescaling follow CellProfiler's CorrectIlluminationCalculate
-module ("Regular" intensities, "All" images; BSD-3-Clause), which
-implements the pipeline of the paper.
+Faithful mode follows the paper. The extensions (disk median, Gaussian
+and polynomial smoothing, automatic size, robust-minimum rescaling) follow
+CellProfiler's CorrectIlluminationCalculate module (BSD-3-Clause).
 """
 
 import itertools
@@ -24,6 +24,7 @@ __all__ = [
     "fit_polynomial",
     "gaussian_smooth",
     "median_smooth",
+    "median_window",
     "robust_minimum",
 ]
 
@@ -31,15 +32,15 @@ ROBUST_FACTOR = 0.02  # CellProfiler: 2nd percentile
 
 
 def filter_size(shape: tuple[int, ...]) -> float:
-    """CellProfiler's automatic filter size: ``min(30, max(shape) / 40)``."""
+    """CellProfiler's automatic filter size: min(30, max(shape)/40)."""
     return min(30.0, max(shape) / 40.0)
 
 
 def gaussian_smooth(x: Tensor, sigma: float) -> Tensor:
-    """Normalised Gaussian convolution over all dims of ``x``.
+    """Normalised Gaussian convolution over all dims of `x`.
 
-    ``conv(x) / conv(1)`` with zero padding (CellProfiler's
-    ``smooth_with_function_and_mask`` without a mask), so that borders are
+    conv(x)/conv(1) with zero padding (CellProfiler's
+    `smooth_with_function_and_mask` without a mask), so that borders are
     not darkened. The kernel is truncated at 4 sigma.
     """
     r = max(1, int(math.ceil(4 * sigma)))
@@ -61,10 +62,10 @@ def _conv1d(x: Tensor, k: Tensor, dim: int) -> Tensor:
 
 
 def median_smooth(x: Tensor, radius: int, *, rows: int = 64) -> Tensor:
-    """Median filter with a disk of ``radius`` (2D).
+    """Median filter with a disk of `radius` (2D; CellProfiler extension).
 
     Pixels outside the image are ignored (as a rank filter). Computed in
-    strips of ``rows`` rows. Lower median (``torch.nanmedian``).
+    strips of `rows` rows. Lower median (`torch.nanmedian`).
     """
     if x.ndim != 2:
         raise ValueError("median smoothing needs 2 spatial dims")
@@ -86,10 +87,44 @@ def median_smooth(x: Tensor, radius: int, *, rows: int = 64) -> Tensor:
     return out
 
 
+def median_window(x: Tensor, size: int, *, budget: int = 1 << 24) -> Tensor:
+    """Exact median filter with a square window of side `size` (2D).
+
+    The window of pixel (i, j) spans rows i − ⌊size/2⌋ … i + ⌈size/2⌉ − 1
+    (likewise for columns); pixels outside the image are ignored. Lower
+    median (`torch.nanmedian`). Computed in blocks of at most `budget`
+    window values. A side larger than 2·n − 1 along a dim of length n is
+    equivalent to 2·n − 1 there (every window then spans the whole dim).
+    """
+    if x.ndim != 2:
+        raise ValueError("median smoothing needs 2 spatial dims")
+    h, w = x.shape
+    sh, sw = min(size, 2 * h - 1), min(size, 2 * w - 1)
+    th, tw = sh // 2, sw // 2
+    pad = F.pad(
+        x[None, None], (tw, sw - tw - 1, th, sh - th - 1), value=math.nan
+    )
+    pad = pad[0, 0]
+    out = torch.empty_like(x)
+    per = max(1, budget // (sh * sw))
+    cols = min(w, per)
+    rows = max(1, per // cols)
+    for r in range(0, h, rows):
+        re = min(h, r + rows)
+        for c in range(0, w, cols):
+            ce = min(w, c + cols)
+            win = pad[r : re + sh - 1, c : ce + sw - 1].unfold(0, sh, 1)
+            win = win.unfold(1, sw, 1)  # (rows, cols, sh, sw)
+            out[r:re, c:ce] = (
+                win.reshape(re - r, ce - c, -1).nanmedian(-1).values
+            )
+    return out
+
+
 def fit_polynomial(x: Tensor, degree: int = 2) -> Tensor:
     """Least-squares polynomial of the coordinates (total degree <= 2).
 
-    In 2D: ``A x² + B y² + C xy + D x + E y + F`` (CellProfiler's "Fit
+    In 2D: A·x² + B·y² + C·xy + D·x + E·y + F (CellProfiler's "Fit
     Polynomial"). Coordinates are scaled to [-1, 1].
     """
     grids = torch.meshgrid(
@@ -114,7 +149,7 @@ def fit_polynomial(x: Tensor, degree: int = 2) -> Tensor:
 
 
 def robust_minimum(x: Tensor) -> Tensor:
-    """CellProfiler rescaling: divide by the 2nd percentile of ``x > 0``.
+    """CellProfiler rescaling: divide by the 2nd percentile of `x > 0`.
 
     Values below that robust minimum are clipped to it first, so the
     result is >= 1.
@@ -127,55 +162,61 @@ def robust_minimum(x: Tensor) -> Tensor:
 
 
 class IlluminationFunction(CalibrationEstimator):
-    r"""Retrospective multi-image illumination function (Singh et al.).
+    """Retrospective multi-image illumination function (Singh et al., 2014).
 
-    .. math::
+    The illumination correction function (ICF) is
 
-        F = \mathcal S\left(\operatorname{avg}_t\,(I_t - D)\right),
-        \qquad x = (I - D) / F,
+        F = S(mean_t (I_t − D)),   x = (I − D)/F,
 
-    where the average is the per-pixel mean (or median) over all images
-    and :math:`\mathcal S` a smoothing operator.
+    the per-pixel average of all images of a batch (e.g. a plate and
+    channel) smoothed by S; each image is corrected by dividing it by F.
 
-    Parameters
-    ----------
-    statistic : {"mean", "median"}
-        Per-pixel average. ``"mean"``: streaming moments (CellProfiler's
-        accumulated sum). ``"median"``: exact per-pixel median over row
-        tiles. Paper preset: ``"mean"``.
-    smoothing : {"none", "median", "gaussian", "polynomial"}
-        ``"median"``: disk median filter of radius ``max(1, round(σ))``;
-        ``"gaussian"``: normalised Gaussian filter of standard deviation
-        ``σ``; ``"polynomial"``: least-squares quadratic surface. With
-        ``σ = size / 2.35`` (``size`` is a FWHM). Paper preset:
-        ``"median"`` (provisional, see Notes).
-    size : float, optional
-        Filter size in pixels (FWHM); None: CellProfiler's automatic
-        ``min(30, max(shape) / 40)``.
-    rescale : {"none", "robust-min"}
-        Extension: ``"robust-min"`` divides by the 2nd percentile after
-        clipping below it (CellProfiler "Yes"), so ``F >= 1``.
-        Paper preset: ``"none"``.
-    faithful, dtype, device, layout
-        See :class:`optix.Estimator`.
+    Faithful mode follows the paper: per-pixel **mean** over all images,
+    then a **median filter with a window of 500 pixels** (Singh et al.,
+    "Computing illumination correction functions", Fig. 1), then division.
+    The paper does not rescale the ICF and does not subtract a dark image.
 
-    Notes
-    -----
-    ``fit(images, dark=None)``. ``dark`` (extension) is subtracted from
-    the average before smoothing: a stack, a map, or an estimate
-    (``ShadingEstimate.dark`` / ``SensorEstimate.offset``).
+    !!! note "Interpretation"
+        The paper's "median filter with window size = 500 pixels" is
+        implemented as a square window of side `size` ([`median_window`][]),
+        pixels outside the image being ignored. The paper implements the
+        method in CellProfiler; CellProfiler's own conventions (a disk
+        median of radius ≈ size/2.35, Gaussian and polynomial smoothing,
+        the automatic filter size, the robust-minimum rescaling) are
+        extensions here, ported from CellProfiler's
+        CorrectIlluminationCalculate (BSD-3-Clause) where the paper defers
+        to it, and are off by default.
 
-    The paper's recommended smoothing method and filter size could not be
-    checked against the publication: the preset is provisional.
+    !!! warning "Cost"
+        The exact square median costs O(size²) per pixel: the paper's
+        500-pixel window on a 1280×1024 image is very slow. A
+        constant-time (histogram) median is planned.
 
-    Estimates: ``"shading"`` with ``flat`` (``meta["flat_norm"]``:
-    ``"none"`` or ``"robust-min"``) and ``dark`` when given.
+    !!! note
+        `fit(images, dark=None)`. `dark` (extension) is subtracted from the
+        average before smoothing: a stack, a map, or an estimate
+        (`ShadingEstimate.dark` / `SensorEstimate.offset`). Estimates:
+        `"shading"` with `flat` (`meta["flat_norm"]`: `"none"` or
+        `"robust-min"`) and `dark` when given.
 
-    References
-    ----------
-    Singh S, Bray M-A, Jones TR, Carpenter AE. Pipeline for illumination
-    correction of images for high-throughput microscopy. J Microsc 256,
-    231-236 (2014). doi:10.1111/jmi.12178
+    !!! references "References"
+        1. Singh S, Bray M-A, Jones TR, Carpenter AE. *Pipeline for
+           illumination correction of images for high-throughput
+           microscopy.* J Microsc **256**(3):231–236, 2014.
+           [doi:10.1111/jmi.12178](https://doi.org/10.1111/jmi.12178)
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @article{singh2014pipeline,
+              author  = {Singh, S. and Bray, M.-A. and Jones, T. R. and
+                         Carpenter, A. E.},
+              title   = {Pipeline for illumination correction of images for
+                         high-throughput microscopy},
+              journal = {Journal of Microscopy},
+              volume  = {256}, number = {3}, pages = {231--236},
+              year    = {2014}, doi = {10.1111/jmi.12178}
+            }
+            ```
     """
 
     tags = Tags(
@@ -188,7 +229,7 @@ class IlluminationFunction(CalibrationEstimator):
     paper = {
         "statistic": "mean",
         "smoothing": "median",
-        "size": None,
+        "size": 500.0,
         "rescale": "none",
     }
     recommended = dict(paper)
@@ -198,17 +239,46 @@ class IlluminationFunction(CalibrationEstimator):
         *,
         statistic: str | None = None,
         smoothing: str | None = None,
-        size: float | None = None,
+        size: float | str | None = None,
         rescale: str | None = None,
         faithful: bool = True,
         dtype: object = None,
         device: object = None,
         layout: object = None,
     ) -> None:
+        """Configure the illumination function.
+
+        Parameters
+        ----------
+        statistic : {"mean", "median"}
+            Per-pixel average. `"mean"`: streaming moments (paper).
+            `"median"` (extension): exact per-pixel median over row tiles.
+        smoothing : {"median", "median-disk", "gaussian", "polynomial", "none"}
+            `"median"` (paper): square median window of side `size`.
+            Extensions (CellProfiler): `"median-disk"`, a disk median of
+            radius max(1, round(σ)); `"gaussian"`, a normalised Gaussian
+            filter of standard deviation σ; `"polynomial"`, a
+            least-squares quadratic surface; with σ = size/2.35.
+        size : float
+            Window side in pixels (`"median"`), or CellProfiler's filter
+            size (FWHM) for the extensions; `"auto"` gives CellProfiler's
+            min(30, max(shape)/40). Paper: 500.
+        rescale : {"none", "robust-min"}
+            Extension: `"robust-min"` divides by the 2nd percentile after
+            clipping below it (CellProfiler), so F ≥ 1. Paper: `"none"`.
+        faithful, dtype, device, layout
+            See [`Estimator`][optix.Estimator].
+        """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
         o = self.options
-        if o["smoothing"] not in ("none", "median", "gaussian", "polynomial"):
+        if o["smoothing"] not in (
+            "none",
+            "median",
+            "median-disk",
+            "gaussian",
+            "polynomial",
+        ):
             raise ValueError(f"Unknown smoothing {o['smoothing']!r}")
         if o["rescale"] not in ("none", "robust-min"):
             raise ValueError(f"Unknown rescale {o['rescale']!r}")
@@ -222,7 +292,11 @@ class IlluminationFunction(CalibrationEstimator):
             return x
         if method == "polynomial":
             return fit_polynomial(x)
-        size = o["size"] if o["size"] is not None else filter_size(x.shape)
+        size = (
+            filter_size(x.shape) if o["size"] == "auto" else float(o["size"])
+        )
+        if method == "median":
+            return median_window(x, int(round(size)))
         sigma = size / 2.35
         if method == "gaussian":
             return gaussian_smooth(x, sigma)
@@ -230,17 +304,17 @@ class IlluminationFunction(CalibrationEstimator):
 
     def _fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         init: object,
         callback: Callable | None,
         verbose: bool,
     ) -> None:
-        if isinstance(Y, list):
+        if isinstance(data, list):
             raise TypeError("IlluminationFunction takes a single stack")
-        st = self._stats(Y, statistic=self.options["statistic"])
+        st = self._stats(data, statistic=self.options["statistic"])
         avg = st.mean
-        backend = self._backend(Y)
+        backend = self._backend(data)
         raw = self._dark_input
         dmap = None
         if isinstance(raw, ShadingEstimate):
@@ -273,8 +347,8 @@ class IlluminationFunction(CalibrationEstimator):
         }
 
     def _apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None
+        self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
         s = self.estimates["shading"]
         dark = s.dark if s.dark is not None else torch.zeros(())
-        return self._apply_maps(Y, out, correct, dark, s.flat)
+        return self._apply_maps(data, out, correct, dark, s.flat)

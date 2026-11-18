@@ -15,6 +15,7 @@ from optix.sensor import (
     SCMOSCalibration,
     anscombe,
     bimodality,
+    closed_form_inverse,
     gain_regression,
     inverse_anscombe,
     pixel_stats,
@@ -190,10 +191,164 @@ def test_ptc_prnu_and_per_pixel():
     levels = [_stack(sensor, e, 20, shape, seed=e) for e in (500, 1000, 2000)]
     est = PhotonTransferCurve(quantization=0.0, per_pixel=True)
     est.fit(levels, dark=dark)
+    # PRNU from the highpass-filtered 20-image mean (white PRNU: ~ unbiased)
     s = est.estimates["sensor"]
     assert s.gain.shape == shape
     assert abs(s.meta["prnu"] - 0.02 / 0.5) < 0.006
     assert not est.is_faithful
+
+
+def test_pair_stats_emva_equations():
+    """EMVA 1288 R4.0 Eqs. (16), (18), (32) on two explicit images."""
+    from optix.sensor import pair_stats
+
+    g = torch.Generator().manual_seed(0)
+    y0 = torch.randint(0, 50, (20, 30), generator=g).to(F64)
+    y1 = torch.randint(0, 50, (20, 30), generator=g).to(F64) + 7.0
+    st = pair_stats(torch.stack([y0, y1, y0]), dtype=F64)
+    nm = y0.numel()
+    m0, m1 = y0.mean(), y1.mean()
+    torch.testing.assert_close(st.mean.reshape(()), (m0 + m1) / 2)
+    var = ((y0 - y1) ** 2).sum() / (2 * nm) - 0.5 * (m0 - m1) ** 2
+    torch.testing.assert_close(st.temporal.reshape(()), var)
+    s2 = (y0 * y1).sum() / nm - m0 * m1
+    torch.testing.assert_close(st.spatial.reshape(()), s2)
+    # the mean-difference correction makes the variance blind to a global
+    # shift of one image (Section 2.5)
+    st2 = pair_stats(torch.stack([y0, y1 + 100.0]), dtype=F64)
+    torch.testing.assert_close(st2.temporal, st.temporal)
+    assert st.stack.count.item() == 3
+
+
+def test_emva_highpass():
+    from optix.sensor import emva_highpass
+
+    yy, xx = torch.meshgrid(
+        torch.arange(40, dtype=F64), torch.arange(50, dtype=F64), indexing="ij"
+    )
+    ramp = 3.0 + 0.5 * yy - 0.25 * xx
+    hp = emva_highpass(ramp)
+    assert hp.shape == (22, 32)  # 9 pixels cropped at each border
+    torch.testing.assert_close(hp, torch.zeros_like(hp))
+    # white noise passes almost unchanged (Fig. 19b: gain ~ 1 at high k)
+    noise = torch.randn(
+        400, 400, dtype=F64, generator=torch.Generator().manual_seed(0)
+    )
+    assert abs(emva_highpass(noise).var().item() - 1) < 0.05
+
+
+def test_bspline_slopes_and_linearity_error():
+    from optix.sensor import bspline_slopes, linearity_error
+
+    x = torch.linspace(0, 100, 50, dtype=F64)
+    torch.testing.assert_close(
+        bspline_slopes(x, 3 + 0.7 * x, 100.0), torch.full_like(x, 0.7)
+    )
+    # a cubic B-spline reproduces any cubic exactly: y = x^2 -> 2x
+    torch.testing.assert_close(bspline_slopes(x, x * x, 100.0), 2 * x)
+    h = torch.linspace(10, 1000, 40, dtype=F64)
+    le, d, (a0, a1) = linearity_error(2.0 + 0.5 * h, h, 0.5 * 1000)
+    assert le < 1e-10 and abs(a0 - 2) < 1e-9 and abs(a1 - 0.5) < 1e-12
+    # only 5-95 % of saturation is used
+    y = 2 + 0.5 * h
+    assert d.isnan().sum() == ((y < 25) | (y > 475)).sum()
+    # weights 1/y^2: a constant relative error gives LE = that error
+    le, _, _ = linearity_error(0.5 * h * 1.01, h, 500.0)
+    assert le < 1e-9  # pure scale: still a line through the origin
+
+
+def _emva_levels(sensor, shape, electrons, n=2, top=None, seed=10):
+    out = []
+    for i, e in enumerate(electrons):
+        y = _stack(
+            sensor, float(e), n, shape, seed=seed + i, quantize=torch.int32
+        )
+        if top is not None:
+            y = y.clamp(max=top)
+        out.append(y.to(F64))
+    return out
+
+
+def test_ptc_saturation_and_offset_fit():
+    """Saturation from the histogram (Section 6.6) and a fit with offset."""
+    shape = (256, 256)  # SE of each two-image variance: sqrt(2/NM)
+    k = 0.5
+    sensor = random_sensor(
+        shape,
+        offset=100.0,
+        offset_sd=2.0,
+        read_sd=3.0,
+        gain=k,
+        gain_sd=0.0,
+        seed=0,
+        dtype=F64,
+    )
+    top = 4095.0  # 12-bit camera
+    elec = np.linspace(200, 9000, 30)
+    levels = _emva_levels(sensor, shape, elec, top=top)
+    dark = _emva_levels(sensor, shape, [0], n=16)[0]
+    est = PhotonTransferCurve(dtype=F64, max_value=top).fit(
+        levels, dark=dark, exposure=elec / 0.6
+    )
+    s = est.estimates["sensor"]
+    frac = [(lv[:2] >= top).double().mean().item() for lv in levels]
+    ok = [i for i, f in enumerate(frac) if f <= 0.002]
+    assert s.meta["saturation"] == pytest.approx(
+        est.curve["mean"][max(ok)].item()
+    )
+    assert abs(s.gain.item() / k - 1) < 0.03
+    assert s.meta["linear"] and s.meta["linearity_slope_dev"] < 0.03
+    assert abs(s.meta["quantum_efficiency"] - 0.6) < 0.03
+    assert s.meta["linearity_error"] < 1.0
+    # max_value=None: the maximum is found in the data
+    auto = PhotonTransferCurve(dtype=F64).fit(levels, dark=dark)
+    assert auto.estimates["sensor"].meta["saturation"] == s.meta["saturation"]
+    # the gain fit has a free offset: a constant variance excess (e.g. a
+    # wrong dark level) changes the offset, not K
+    x = est.curve["mean"].reshape(-1)
+    v = est.curve["variance"].reshape(-1)
+    from optix.sensor._ptc import _ols
+
+    m = est.curve["used"].reshape(-1)
+    k1, b1, _ = _ols(x[m], v[m])
+    k2, b2, _ = _ols(x[m], v[m] + 5.0)
+    assert k1 == pytest.approx(k2) and b2 == pytest.approx(b1 + 5.0)
+    assert s.meta["gain_offset"] == pytest.approx(b1)
+
+
+def test_ptc_read_noise_upper_limit():
+    """Eq. (54): sigma^2_y.dark < 0.24 gives sigma_d < 0.40 / K."""
+    shape = (64, 64)
+    sensor = random_sensor(
+        shape,
+        offset=10.0,
+        offset_sd=0.0,
+        read_sd=0.2,
+        gain=0.1,
+        gain_sd=0.0,
+        seed=0,
+        dtype=F64,
+    )
+    levels = _emva_levels(sensor, shape, np.linspace(500, 5000, 12))
+    dark = _emva_levels(sensor, shape, [0], n=4)[0]
+    est = PhotonTransferCurve(dtype=F64).fit(levels, dark=dark)
+    s = est.estimates["sensor"]
+    assert s.meta["read_noise_upper_limit"]
+    assert s.meta["read_noise_e"] == pytest.approx(0.40 / s.gain.item())
+
+
+def test_ptc_float32_matches_float64():
+    shape = (48, 48)
+    sensor = random_sensor(shape, gain=0.4, read_sd=2.0, seed=1, dtype=F64)
+    levels = _emva_levels(sensor, shape, np.linspace(100, 4000, 12), n=3)
+    dark = _emva_levels(sensor, shape, [0], n=8)[0]
+    e64 = PhotonTransferCurve(dtype=F64).fit(levels, dark=dark)
+    e32 = PhotonTransferCurve(dtype=torch.float32).fit(
+        [lv.float() for lv in levels], dark=dark.float()
+    )
+    g64 = e64.estimates["sensor"].gain.item()
+    g32 = e32.estimates["sensor"].gain.item()
+    assert abs(g32 / g64 - 1) < 1e-4
 
 
 def test_ptc_needs_two_frames(sensor):
@@ -294,6 +449,73 @@ def test_exact_inverse_is_unbiased(sigma):
     assert ((alg - ys).abs() > tol)[:3].any()  # the algebraic one is biased
     asym = inverse_anscombe(ef, alpha, sigma, mu, method="asymptotic") - mu
     assert ((asym - ys).abs() < tol)[-2:].all()
+
+
+def _expected_f(y, sigma):
+    """E{f_sigma(z) | y, sigma} by quadrature (Makitalo & Foi 2013, Eq. 10)."""
+    k = torch.arange(0, int(y + 20 * math.sqrt(y + 1) + 40), dtype=F64)
+    pmf = (
+        torch.exp(k * math.log(y) - y - torch.lgamma(k + 1))
+        if y
+        else ((k == 0).to(F64))
+    )
+    n = torch.linspace(-12, 12, 6001, dtype=F64)
+    phi = torch.exp(-0.5 * n * n) / math.sqrt(2 * math.pi)
+    t = k[:, None] + sigma * n
+    f = 2 * (t + 0.375 + sigma**2).clamp_min(0).sqrt()
+    return float(pmf @ torch.trapezoid(f * phi, n, dim=-1))
+
+
+def test_closed_form_matches_letter():
+    """Letter Eq. (4) with alpha=-1, beta=11/3 is Eq. (6); I(2√(3/8)) = 0."""
+    d = torch.linspace(1.3, 30, 50, dtype=F64)
+    u = d * math.sqrt(2 / 3)
+    a, b = -1.0, 11 / 3
+    eq4 = (d / 2) ** 2 - 0.125 - 0.25 * (a / u + b / u**2 + (1 - a - b) / u**3)
+    torch.testing.assert_close(closed_form_inverse(d), eq4)
+    d0 = torch.tensor([2 * math.sqrt(0.375)], dtype=F64)
+    torch.testing.assert_close(
+        closed_form_inverse(d0), torch.zeros(1, dtype=F64)
+    )
+    below = torch.tensor([0.0, 1.0], dtype=F64)
+    # Eq. (21): I_sigma = I_0 - sigma^2, with I_0 = 0 below 2 sqrt(3/8)
+    torch.testing.assert_close(
+        closed_form_inverse(below, 0.25), torch.full((2,), -0.25, dtype=F64)
+    )
+
+
+def test_inverse_errors_match_paper():
+    """Makitalo & Foi 2013: the sup errors (20) and (24), at sigma=0.4, y=0.
+
+    |I_0(E{f|0,0.4}) - 0.16| = 0.0470 (exact I_0) and
+    |closed-form(E{f|0,0.4})| = 0.0468.
+    """
+    ef = torch.tensor([_expected_f(0.0, 0.4)], dtype=F64)
+    cf = inverse_anscombe(ef, 1.0, 0.4, 0.0, method="closed-form")
+    assert abs(abs(cf.item()) - 0.0468) < 5e-4
+    exact0 = inverse_anscombe(ef, 1.0, 0.0, 0.0)  # I_0 from the table
+    assert abs(abs(exact0.item() - 0.16) - 0.0470) < 5e-4
+    # and the exact inverse at sigma=0.4 returns y=0 (ML clipping, Eq. 14)
+    assert abs(inverse_anscombe(ef, 1.0, 0.4, 0.0).item()) < 1e-3
+    # asymptotic (22) and algebraic inverses as defined in Section IV
+    d = torch.tensor([3.0, 10.0], dtype=F64)
+    torch.testing.assert_close(
+        inverse_anscombe(d, 1.0, 2.0, 0.0, method="asymptotic"),
+        d * d / 4 - 0.125 - 4.0,
+    )
+    torch.testing.assert_close(
+        inverse_anscombe(d, 1.0, 2.0, 0.0, method="algebraic"),
+        d * d / 4 - 0.375 - 4.0,
+    )
+
+
+@pytest.mark.parametrize("sigma", [0.0, 1.0, 3.0])
+def test_closed_form_sup_error(sigma):
+    """Eq. (24): |closed-form(E{f|y,sigma}) - y| <= 0.0468 everywhere."""
+    for y in [0.0, 0.3, 1.0, 3.0, 10.0, 40.0]:
+        ef = torch.tensor([_expected_f(y, sigma)], dtype=F64)
+        cf = closed_form_inverse(ef, sigma**2)
+        assert abs(cf.item() - y) < 0.0475, (y, cf)
 
 
 def test_inverse_round_trip_and_float32():
