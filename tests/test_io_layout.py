@@ -142,7 +142,7 @@ def test_light_sheet_frames_round_trip(batch):
     for chunk in chunks:
         assert isinstance(chunk, Chunk)
         assert chunk.data.shape[1:] == (5, 6)
-        assert chunk.data.is_contiguous()
+        assert not chunk.data.is_contiguous()  # a strided view (#66)
         assert chunk.group == ()
         (xs,) = chunk.samples
         torch.testing.assert_close(
@@ -272,6 +272,117 @@ def test_tensor_source_permuted_chunks_are_owned():
         assert chunk.data.shape[1:] == (4, 3)
         chunk.data += 1
     assert y.eq(0).all()
+
+
+def _record_loaded(monkeypatch):
+    """Capture every block loaded from the source (before permuting)."""
+    import optix.io._iter as it
+
+    loaded = []
+    host = it._host
+
+    def spy(*args, **kwargs):
+        out = host(*args, **kwargs)
+        loaded.append(out[0])
+        return out
+
+    monkeypatch.setattr(it, "_host", spy)
+    return loaded
+
+
+def _sheet_iterators(Y, **kw):
+    return {
+        "frames": frame_batches(Y, batch=4, **kw),
+        "tiles": row_tiles(Y, axis="z", batch=4, **kw),
+        "blocks": blocks(Y, (3, 2), 1, **kw),
+    }
+
+
+def test_light_sheet_chunks_are_views_unless_contiguous(monkeypatch):
+    """Permuted chunks are not copied by default (#66)."""
+    from optix.io._arrays import _same_storage
+
+    zarr = pytest.importorskip("zarr")
+    z, _ = _sheet(zarr, (6, 5, 8), (1, 5, 8), dtype="f4")
+    Y = labeled(z, axes="zyx", spatial="yz", sample="x")
+    loaded = _record_loaded(monkeypatch)
+    for name, chunks in _sheet_iterators(Y, dtype=torch.float32).items():
+        for chunk in chunks:
+            assert not chunk.data.is_contiguous(), name
+            assert _same_storage(chunk.data, loaded[-1]), name
+    loaded.clear()
+    for name, chunks in _sheet_iterators(
+        Y, dtype=torch.float32, contiguous=True
+    ).items():
+        for chunk in chunks:
+            assert chunk.data.is_contiguous(), name
+            assert not _same_storage(chunk.data, loaded[-1]), name
+
+
+def test_light_sheet_contiguous_same_results():
+    zarr = pytest.importorskip("zarr")
+    z, y = _sheet(zarr, (6, 5, 8), (3, 5, 4))
+    Y = labeled(z, axes="zyx", spatial="yz", sample="x")
+    outs = {}
+    for contiguous in (False, True):
+        its = _sheet_iterators(Y, contiguous=contiguous)
+        for name, chunks in its.items():
+            out = zarr.create_array(
+                store={}, shape=z.shape, chunks=(3, 5, 4), dtype="u2"
+            )
+            loaded = []
+            for chunk in chunks:
+                loaded.append(chunk.data.clone())
+                chunk.store(out, chunk.data * 1)  # a computed result
+            np.testing.assert_array_equal(out[:], y)
+            outs[name, contiguous] = loaded
+    # the budget differs (contiguous chunks may be smaller): compare the
+    # concatenated chunks; explicit blocks are unaffected
+    for name, dim in (("frames", 0), ("tiles", -1)):
+        a, b = (torch.cat(outs[name, c], dim) for c in (False, True))
+        torch.testing.assert_close(a, b, rtol=0, atol=0)
+    for a, b in zip(outs["blocks", False], outs["blocks", True], strict=True):
+        torch.testing.assert_close(a, b, rtol=0, atol=0)
+
+
+def test_contiguous_counts_the_copy_in_the_budget():
+    y = np.zeros((6, 5, 40), dtype="f4")
+    Y = labeled(y, axes="zyx", spatial="yz", sample="x")
+    item = 6 * 5 * 4  # bytes of one float32 frame
+    kw = dict(memory=8 * item, dtype=torch.float32)
+    strided = [c.n for c in frame_batches(Y, **kw)]
+    dense = [c.n for c in frame_batches(Y, contiguous=True, **kw)]
+    assert max(strided) == 8 and max(dense) == 4
+    kw["memory"] = 40 * 5 * 4 * 4  # four z rows of every sample
+    rows = [c.data.shape[-1] for c in row_tiles(Y, axis="z", **kw)]
+    dense_rows = [
+        c.data.shape[-1] for c in row_tiles(Y, axis="z", contiguous=True, **kw)
+    ]
+    assert max(rows) == 4 and max(dense_rows) == 2
+    kw["memory"] = 30 * 4  # one (y, z) frame
+    core = [c.data[c.inner].numel() for c in blocks(Y, **kw)]
+    dense_core = [
+        c.data[c.inner].numel() for c in blocks(Y, contiguous=True, **kw)
+    ]
+    assert max(dense_core) * 2 <= max(core)
+    # no permutation: nothing to copy, nothing to budget
+    kw["memory"] = 8 * item
+    flat = np.zeros((40, 5, 6), dtype="f4")
+    assert [c.n for c in frame_batches(flat, contiguous=True, **kw)] == [
+        c.n for c in frame_batches(flat, **kw)
+    ]
+
+
+def test_stats_forward_contiguous():
+    from optix.stats import Moments, reduce
+
+    y = np.random.default_rng(7).normal(size=(6, 5, 8))
+    Y = labeled(y, axes="zyx", spatial="yz", sample="x")
+    (a,) = reduce(Y, Moments(2), batch=3, dtype=torch.float64)
+    (b,) = reduce(Y, Moments(2), batch=3, dtype=torch.float64, contiguous=True)
+    torch.testing.assert_close(a.mean, b.mean)
+    torch.testing.assert_close(a.var(), b.var())
+    np.testing.assert_allclose(a.mean.numpy(), y.mean(-1).T)
 
 
 # --- row tiles and blocks ---------------------------------------------------

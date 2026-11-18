@@ -299,3 +299,21 @@ def test_labeled_tensor_keeps_device_and_blocks_layout():
     with pytest.raises(ValueError, match="In-place"):
         Blur().apply(Y, out=Y)
     torch.testing.assert_close(Blur().apply(Y, out=torch.empty(4, 3, 5)), y)
+
+
+class DenseBlur(Estimator):
+    tags = Tags(targets=("test",), streaming="halo")
+
+    def _apply(self, Y, out):
+        def fn(d):
+            assert d.is_contiguous()
+            return d * 1
+
+        return self._apply_blocks(Y, out, fn, halo=1, contiguous=True)
+
+
+def test_apply_blocks_contiguous_option():
+    y = np.random.default_rng(2).normal(size=(4, 5, 6)).astype("f4")
+    Y = labeled(y, axes="zyx", spatial="yz")
+    out = DenseBlur().apply(Y, out=np.zeros_like(y))
+    np.testing.assert_allclose(out, y)

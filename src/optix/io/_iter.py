@@ -202,6 +202,21 @@ class _View:
             raise AssertionError("group axes must be integer-indexed")
         return samples, perm
 
+    def copies(self, contiguous: bool) -> bool:
+        """Whether turning a loaded block into a chunk may copy it.
+
+        With ``contiguous``, any permutation to layout order copies.
+        Otherwise only flattening sample axes that are not adjacent in
+        storage (a spatial axis lies between them) does.
+        """
+        sample = sorted(self.sample)
+        if contiguous:
+            order = list(sample) + list(self.spatial)
+            return order != sorted(order)
+        if self.flatten and sample:
+            return any(sample[0] < a < sample[-1] for a in self.spatial)
+        return False
+
     def inner(self, plan: Plan) -> Index:
         """``plan.inner`` (blocked axes in storage order) in layout order."""
         ranks = {a: i for i, a in enumerate(self._blocked)}
@@ -221,7 +236,9 @@ class Chunk(tuple):
         ints and slices). ``out[index] = ...`` is only valid for the default
         layout and a chunk spanning one sample axis: use :meth:`store`.
     data : Tensor
-        Loaded data, owned by the consumer. :func:`frame_batches`:
+        Loaded data, owned by the consumer; a strided view in layout
+        order unless the iterator was built with ``contiguous=True``.
+        :func:`frame_batches`:
         ``(n, *spatial)``; :func:`row_tiles`: ``(*sample, *spatial)``;
         :func:`blocks`: ``(*spatial)`` core + halo. Spatial axes are in
         layout order, sample axes in storage order.
@@ -386,7 +403,8 @@ class Chunks:
     :class:`Chunk`.
 
     Every yielded data tensor is owned by the consumer: it may be modified
-    in place and never aliases the source.
+    in place and never aliases the source. It is a permuted (strided) view
+    of the loaded block, not a dense copy, unless ``contiguous=True``.
 
     Attributes
     ----------
@@ -409,6 +427,7 @@ class Chunks:
         prefetch: int = 0,
         pad: str | None = None,
         with_inner: bool = False,
+        contiguous: bool = False,
     ) -> None:
         self.shape = tuple(int(s) for s in source.shape)
         self.layout = view.layout
@@ -422,6 +441,7 @@ class Chunks:
         self._prefetch = prefetch
         self._pad = pad
         self._with_inner = with_inner
+        self._contiguous = contiguous
 
     def __len__(self) -> int:
         return len(self._plans)
@@ -458,11 +478,11 @@ class Chunks:
                 samples, perm = view.arrange(plan)
                 if perm != tuple(range(len(perm))):
                     data = data.permute(perm)
-                    if not data.is_contiguous():
-                        data = data.contiguous()
+                if self._contiguous:
+                    data = data.contiguous()
                 if alias and _same_storage(data, t):
                     data = data.clone()
-                if view.flatten:
+                if view.flatten:  # copies only if the sample axes don't merge
                     data = data.reshape(-1, *data.shape[len(samples) :])
                 inner = view.inner(plan) if self._with_inner else None
                 yield Chunk(view, plan, data, inner, samples)
@@ -568,6 +588,7 @@ def frame_batches(
     dtype: torch.dtype | str | None = None,
     device: torch.device | str | None = None,
     prefetch: int | None = None,
+    contiguous: bool = False,
 ) -> Chunks:
     """Batches of samples (frames), one group at a time.
 
@@ -592,6 +613,13 @@ def frame_batches(
         ``chunks_of(out)`` when writing to a chunked output.
     dtype, device : optional
         Working backend.
+    contiguous : bool
+        If True, every chunk is made dense (C-contiguous in layout order),
+        e.g. for FFTs or convolutions, and that copy is counted in the
+        budget (``overhead + 1``) whenever the layout permutes the axes.
+        By default chunks are strided views of the loaded block: the only
+        copy is the unavoidable one when sample axes that are not adjacent
+        in storage are flattened (also counted in the budget).
 
     Returns
     -------
@@ -615,6 +643,7 @@ def frame_batches(
     shape = opt["shape"]
     view = _View(shape, layout, flatten=True)
     group, sample, spatial = view.group, view.sample, view.spatial
+    overhead = overhead + view.copies(contiguous)
     spatial_shape = tuple(shape[a] for a in spatial)
     nsamples = math.prod(shape[a] for a in sample)
     budget = chunk_length(
@@ -652,7 +681,12 @@ def frame_batches(
             "Increase `memory` or rechunk along the sample axes.",
         )
     return Chunks(
-        source, plans, view=view, prefetch=opt["prefetch"], **opt["backend"]
+        source,
+        plans,
+        view=view,
+        prefetch=opt["prefetch"],
+        contiguous=contiguous,
+        **opt["backend"],
     )
 
 
@@ -685,6 +719,7 @@ def row_tiles(
     dtype: torch.dtype | str | None = None,
     device: torch.device | str | None = None,
     prefetch: int | None = None,
+    contiguous: bool = False,
 ) -> Chunks:
     """Strips along one spatial axis holding all samples of one group.
 
@@ -697,7 +732,7 @@ def row_tiles(
     axis : int or str
         Spatial axis along which strips are cut: a position among the
         spatial axes in layout order (negative allowed), or a name.
-    overhead, memory, batch, align, dtype, device, prefetch
+    overhead, memory, batch, align, dtype, device, prefetch, contiguous
         See :func:`frame_batches`. With ``batch``, a tile holds about as
         many elements as ``batch`` frames.
 
@@ -721,6 +756,7 @@ def row_tiles(
     shape = opt["shape"]
     view = _View(shape, layout, flatten=False)
     group, sample, spatial = view.group, view.sample, view.spatial
+    overhead = overhead + view.copies(contiguous)
     if not spatial:
         raise ValueError("row_tiles needs at least one spatial dim")
     cut = _spatial_axis(axis, layout, spatial)
@@ -761,7 +797,12 @@ def row_tiles(
             "batches.",
         )
     return Chunks(
-        source, plans, view=view, prefetch=opt["prefetch"], **opt["backend"]
+        source,
+        plans,
+        view=view,
+        prefetch=opt["prefetch"],
+        contiguous=contiguous,
+        **opt["backend"],
     )
 
 
@@ -809,6 +850,7 @@ def blocks(
     dtype: torch.dtype | str | None = None,
     device: torch.device | str | None = None,
     prefetch: int | None = None,
+    contiguous: bool = False,
 ) -> Chunks:
     """nD blocks over the spatial axes, with a halo.
 
@@ -839,7 +881,7 @@ def blocks(
         filled by padding. Where reflection would need a pad at least as
         large as the loaded extent, replicate padding is used along that
         dim instead (with a warning at construction).
-    overhead, memory, batch, align, dtype, device, prefetch
+    overhead, memory, batch, align, dtype, device, prefetch, contiguous
         See :func:`frame_batches`. With ``batch``, the budget is ``batch``
         frames of the last two spatial axes.
 
@@ -875,6 +917,7 @@ def blocks(
     opt = _resolve(source, memory, batch, prefetch, dtype, device, align)
     view = _View(shape, layout, flatten=False)
     spatial = view.spatial
+    overhead = overhead + view.copies(contiguous)
     nblk = len(spatial)
     halo = (halo,) * nblk if isinstance(halo, int) else tuple(halo)
     if len(halo) != nblk or (block is not None and len(block) != nblk):
@@ -920,5 +963,6 @@ def blocks(
         prefetch=opt["prefetch"],
         pad=pad,
         with_inner=True,
+        contiguous=contiguous,
         **opt["backend"],
     )
