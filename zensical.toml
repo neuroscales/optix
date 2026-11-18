@@ -1,6 +1,34 @@
 [project]
 nav = [
   {"Home" = "index.md"},
+  {"Getting started" = [
+    "getting-started/installation.md",
+    "getting-started/quick-tour.md",
+  ]},
+  {"Concepts" = [
+    "concepts/index.md",
+    "concepts/axes-and-layouts.md",
+    "concepts/image-formation.md",
+    "concepts/estimators.md",
+    "concepts/distributions.md",
+  ]},
+  {"Algorithms" = [
+    "algorithms/index.md",
+    "algorithms/_template.md",
+  ]},
+  {"API reference" = [
+    "reference/index.md",
+    "reference/configuration.md",
+    "reference/estimator.md",
+    "reference/estimates.md",
+    "reference/io.md",
+    "reference/stats.md",
+    "reference/basis.md",
+    "reference/special.md",
+    "reference/models.md",
+    "reference/distributions.md",
+    "reference/functional.md",
+  ]},
 ]
 
 site_name = "optix"
@@ -55,3 +83,6 @@ toc_depth = 2
 [project.markdown_extensions.pymdownx.superfences]
 [project.markdown_extensions.pymdownx.tabbed]
 alternate_style = true
+[project.markdown_extensions.pymdownx.snippets]
+base_path = ["docs"]
+check_paths = true
