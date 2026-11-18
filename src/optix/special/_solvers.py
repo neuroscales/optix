@@ -11,8 +11,23 @@ from torch import Tensor
 _EULER = 0.5772156649015329
 
 
-def _log_minus_digamma(a: Tensor) -> Tensor:
-    """``log(a) - digamma(a)``, using the asymptotic series for large a."""
+def log_minus_digamma(a: Tensor) -> Tensor:
+    """``log(a) - digamma(a)``, elementwise, without cancellation.
+
+    Parameters
+    ----------
+    a : Tensor
+        Positive argument.
+
+    Returns
+    -------
+    Tensor
+        ``log(a) - digamma(a)``. For ``a > 10`` the asymptotic series
+        ``1/(2a) + 1/(12a^2) - 1/(120a^4) + 1/(252a^6)`` is used, which
+        keeps full relative precision where the direct difference loses
+        its digits.
+    """
+    a = torch.as_tensor(a)
     inv = 1 / a
     inv2 = inv * inv
     series = inv * (0.5 + inv * (1 / 12 - inv2 * (1 / 120 - inv2 / 252)))
@@ -67,7 +82,7 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     cap = 1 / eps
     for _ in range(niter):
         nu = nu.clamp(min=torch.finfo(c.dtype).tiny, max=cap)
-        num = _log_minus_digamma(nu) - c
+        num = log_minus_digamma(nu) - c
         den = nu.square() * _inv_minus_trigamma(nu)
         nu = 1 / (1 / nu + num / den)
     return nu.clamp(min=torch.finfo(c.dtype).tiny, max=cap)

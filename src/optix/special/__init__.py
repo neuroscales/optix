@@ -7,6 +7,7 @@ from ._solvers import (
     fit_dirichlet,
     fit_gamma_shape,
     inv_digamma,
+    log_minus_digamma,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "kl_dirichlet",
     "kl_gamma",
     "kl_normal",
+    "log_minus_digamma",
 ]
