@@ -3,6 +3,10 @@
 import torch
 from torch import Tensor
 
+from ._solvers import log_minus_digamma as _lmd
+from ._stable import ratio_minus_log as _g
+from ._stable import stirling_residual as _res
+
 
 def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
     """``KL(Dir(a) || Dir(b))``.
@@ -17,15 +21,32 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
     -------
     (...) Tensor
         Divergence, summed over the last dim.
+
+    Notes
+    -----
+    ``KL = lgamma(a0) - lgamma(b0) - sum(lgamma(a) - lgamma(b))
+    + sum((a - b) (digamma(a) - digamma(a0)))``, rewritten with
+    :func:`stirling_residual` ``r``, :func:`log_minus_digamma` ``lmd``
+    and :func:`ratio_minus_log` ``g`` as::
+
+        sum(b g(a / b) + log(a / b) / 2) - (b0 g(a0 / b0) + log(a0 / b0) / 2)
+        + r(a0) - r(b0) - sum(r(a) - r(b))
+        - sum((a - b) lmd(a)) + (a0 - b0) lmd(a0)
+
+    so that the ``lgamma`` terms of large concentrations cancel exactly.
     """
     a0 = a.sum(-1)
     b0 = b.sum(-1)
-    elog = torch.digamma(a) - torch.digamma(a0).unsqueeze(-1)
+    diff = a - b
+    diff0 = diff.sum(-1)
     return (
-        torch.lgamma(a0)
-        - torch.lgamma(b0)
-        - (torch.lgamma(a) - torch.lgamma(b)).sum(-1)
-        + ((a - b) * elog).sum(-1)
+        (b * _g(a, b, diff) + 0.5 * (a / b).log()).sum(-1)
+        - (b0 * _g(a0, b0, diff0) + 0.5 * (a0 / b0).log())
+        + _res(a0)
+        - _res(b0)
+        - (_res(a) - _res(b)).sum(-1)
+        - (diff * _lmd(a)).sum(-1)
+        + diff0 * _lmd(a0)
     )
 
 
@@ -45,16 +66,27 @@ def kl_gamma(
     -------
     Tensor
         Divergence (broadcast shape of the inputs).
+
+    Notes
+    -----
+    ``KL = (aq - ap) digamma(aq) - lgamma(aq) + lgamma(ap)
+    + ap log(bq / bp) + aq (bp - bq) / bq``, rewritten with
+    :func:`stirling_residual` ``r``, :func:`log_minus_digamma` ``lmd`` and
+    :func:`ratio_minus_log` ``g`` as::
+
+        ap (g(aq / ap) + g(bp / bq)) + log(aq / ap) / 2
+        + (aq - ap) ((bp - bq) / bq - lmd(aq)) + r(ap) - r(aq)
+
+    which has no cancellation between large ``lgamma`` / ``digamma``
+    values (float32 stays accurate at shapes ``~1e6``).
     """
-    shape_q, rate_q, shape_p, rate_p = map(
-        torch.as_tensor, (shape_q, rate_q, shape_p, rate_p)
-    )
+    aq, bq, ap, bp = map(torch.as_tensor, (shape_q, rate_q, shape_p, rate_p))
     return (
-        (shape_q - shape_p) * torch.digamma(shape_q)
-        - torch.lgamma(shape_q)
-        + torch.lgamma(shape_p)
-        + shape_p * (rate_q.log() - rate_p.log())
-        + shape_q * (rate_p - rate_q) / rate_q
+        ap * (_g(aq, ap) + _g(bp, bq))
+        + 0.5 * (aq / ap).log()
+        + (aq - ap) * ((bp - bq) / bq - _lmd(aq))
+        + _res(ap)
+        - _res(aq)
     )
 
 
@@ -78,9 +110,6 @@ def kl_normal(
     mean_q, var_q, mean_p, var_p = map(
         torch.as_tensor, (mean_q, var_q, mean_p, var_p)
     )
-    return 0.5 * (
-        var_p.log()
-        - var_q.log()
-        + (var_q + (mean_q - mean_p).square()) / var_p
-        - 1
-    )
+    # 0.5 (r - 1 - log(r) + (mq - mp)^2 / vp) with r = vq / vp, via
+    # ratio_minus_log (no cancellation when vq ~ vp)
+    return 0.5 * (_g(var_q, var_p) + (mean_q - mean_p).square() / var_p)

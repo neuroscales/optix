@@ -129,9 +129,16 @@ def test_categorical_inputs_from_dtype():
     # soft assignments: expected log-likelihood sum_k r_k log p_k
     r = torch.softmax(torch.randn(6, 4, 3, dtype=D64), -1)
     _close(q.log_prob(r), (r * q.logits).sum(-1))
-    # int64 one-hot vectors are labels: wrong range, clear error
+    # int64 one-hot vectors are labels: wrong range, clear error when
+    # validating (the check synchronises, so it is opt-in)
+    bad = torch.tensor([0, 3, 1, 1])
+    qv = Categorical(q.probs, validate=True)
     with pytest.raises(ValueError, match=r"labels must be in \[0, 3\)"):
-        q.log_prob(torch.tensor([0, 3, 1, 1]))
+        qv.log_prob(bad)
+    with pytest.raises(ValueError, match=r"labels must be in \[0, 3\)"):
+        qv.expand((2, 4))[1].log_prob(bad)  # the flag is propagated
+    with pytest.raises(RuntimeError, match="out of bounds"):
+        q.log_prob(bad)  # not validated: torch's own error (CPU)
     with pytest.raises(ValueError, match="must end with K = 3"):
         q.log_prob(torch.ones(4))
     with pytest.raises(ValueError, match="not broadcastable"):
@@ -608,3 +615,286 @@ def test_compile_with_objects_and_params():
             out = _vb_kernel(*args)
     with optix.config(compile=False):
         _close(out, _vb_kernel(*args))
+
+
+@maybe_compile
+def _properties_of(q):
+    moments = (q.mean + q.variance).reshape(*q.batch_shape, -1).sum(-1)
+    return moments + q.entropy()
+
+
+@maybe_compile
+def _stats_fields(s):
+    return s.n + s.mean + s.sum_x + s.sum_x_sq
+
+
+@pytest.mark.skipif(
+    not _compile._compile_supported(), reason="torch.compile unsupported"
+)
+def test_compile_reads_properties_of_fresh_objects():
+    # Regression (torch 2.3): dynamo evaluated the properties of slotted
+    # objects eagerly and guarded on the short-lived results, which failed
+    # with InternalTorchDynamoError ("<weakref ... to 'Tensor'>").
+    from optix.distributions import NormalStats
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "error", message="torch.compile failed", category=RuntimeWarning
+        )
+        with optix.config(compile=True):
+            for seed in (0, 1):
+                objs = [
+                    Gamma(_rand(4, seed=seed), mean=_rand(4, seed=seed + 1)),
+                    Normal(_rand(4, seed=seed), std=_rand(4), cache=True),
+                    Categorical(_rand(4, 3, seed=seed)),
+                ]
+                for q in objs:
+                    out = _properties_of(q)
+                    # traced code never fills (or reads) the cache
+                    assert not q._cache
+                    with optix.config(compile=False):
+                        _close(out, _properties_of(q))
+                s = NormalStats.from_samples(_rand(5, 4, seed=seed), dim=0)
+                out = _stats_fields(s)
+                with optix.config(compile=False):
+                    _close(out, _stats_fields(s))
+
+
+# -- cache invalidation (regressions) -------------------------------------
+
+
+def test_cache_invalidated_by_inplace_update():
+    s = _rand(5)
+    q = Normal(0.0, std=s, cache=True)
+    _close(q.precision, 1 / s.square())
+    s.mul_(2)  # the stored tensor is s itself (same dtype and device)
+    _close(q.precision, 1 / s.square())
+    # views share the version counter of their base
+    r = Normal(0.0, std=_rand(3, 5)[1], cache=True)
+    first = r.precision.clone()
+    r.stored()[1].add_(1)
+    assert not torch.equal(r.precision, first)
+
+
+def test_cache_cleared_by_assignment():
+    q = Normal(0.0, var=_rand(5), cache=True)
+    q.precision  # noqa: B018 (fills the cache)
+    assert q._cache
+    new = _rand(5, seed=3)
+    q._raw = (q.stored()[0], new)  # the path every replacement takes
+    assert q.cache and not q._cache
+    _close(q.precision, 1 / new)
+
+
+def test_cache_bypassed_with_gradients():
+    v = _rand(5).requires_grad_(True)
+    q = Normal(0.0, var=v, cache=True)
+    for _ in range(2):  # a cached graph would fail the second backward
+        (g,) = torch.autograd.grad(q.precision.sum(), v)
+        _close(g, -1 / v.detach().square())
+    assert not q._cache
+
+
+def test_cache_bypassed_while_compiling(monkeypatch):
+    from optix.distributions import _base
+
+    q = Normal(0.0, var=_rand(5), cache=True)
+    monkeypatch.setattr(_base, "_is_compiling", lambda: True)
+    q.precision  # noqa: B018
+    assert q._cache == {}
+
+
+def test_cache_inference_tensors():
+    with torch.inference_mode():
+        q = Normal(0.0, var=_rand(5), cache=True)
+        _close(q.precision, 1 / q.var)
+    assert not q._cache  # no version counter: not cached
+
+
+# -- review regressions ---------------------------------------------------
+
+
+def test_categorical_soft_log_prob_finite_gradient():
+    p = torch.tensor([[0.0, 0.4, 0.6]], dtype=D64, requires_grad=True)
+    r = torch.tensor([[0.0, 0.5, 0.5]], dtype=D64, requires_grad=True)
+    value = Categorical(p).log_prob(r).sum()
+    gp, gr = torch.autograd.grad(value, (p, r))
+    assert torch.isfinite(value)
+    assert torch.isfinite(gp).all() and torch.isfinite(gr).all()
+    assert gr[0, 0] == 0  # r = 0 where p = 0: log p is masked
+    _close(gr[0, 1:], p.detach()[0, 1:].log())
+
+
+def test_categorical_label_check_needs_validate():
+    q = Categorical(_rand(4, 3))
+    good = torch.tensor([0, 2, 1, 1])
+    # no check (it would synchronise) by default
+    assert not q._validate
+    _close(
+        q.log_prob(good), Categorical(q.probs, validate=True).log_prob(good)
+    )
+    qv = Categorical(q.probs, validate=True)
+    for derived in (qv.detach(), qv.to(dtype=torch.float32), qv[1:]):
+        assert derived._validate
+
+
+def test_indexing_collapses_broadcast_dims():
+    q = Gamma(torch.tensor(2.0, dtype=D64), mean=torch.tensor(3.0, dtype=D64))
+    big = q.expand((50, 60))
+    for sub in (big[1:3], big[..., 5:], big[:, None, 2:4], big[7]):
+        assert all(t.numel() == 1 for t in sub.stored())
+        assert sub._get("rate").numel() == 1
+        assert sub.rate.shape == sub.batch_shape
+    sub = big[1:3]
+    assert sub.batch_shape == (2, 60)
+    _close(sub.rate, torch.full((2, 60), 2 / 3, dtype=D64))
+    # genuinely varying dims are kept
+    r = Gamma(_rand(4, 1), mean=_rand(1, 5)).expand((3, 4, 5))[1:]
+    shapes = dict(zip(r.form, (t.shape for t in r.stored()), strict=True))
+    assert shapes == {"shape": (1, 4, 1), "mean": (1, 1, 5)}
+
+
+def test_new_promotes_dtypes():
+    q = Gamma._new(torch.ones(3), torch.ones(3, dtype=D64))
+    assert all(t.dtype == D64 for t in q.stored()) and q.dtype == D64
+    labels = torch.ones(3, dtype=torch.long)  # non-floating are left alone
+    assert Gamma._new(labels.double(), torch.ones(3)).dtype == D64
+
+
+def test_kl_categorical_k_mismatch_message():
+    q, p = Categorical(_rand(4, 3)), Categorical(_rand(4, 5))
+    with pytest.raises(ValueError, match="K = 3 categories.*K = 5"):
+        kl_divergence(q, p)
+
+
+def test_derived_parameter_has_broadcast_shape_of_inputs():
+    q = Gamma(torch.tensor(2.0, dtype=D64), mean=_rand(4, 5), cache=True)
+    assert q._get("rate").shape == (4, 5)
+    q = Gamma(torch.tensor(2.0, dtype=D64), mean=_rand(5), cache=True)
+    assert q.expand((4, 5))._get("rate").shape == (5,)
+
+
+# -- float32 numerics at large parameters (regressions) -------------------
+
+
+def _lg(x):
+    return torch.lgamma(x)
+
+
+def _dg(x):
+    return torch.digamma(x)
+
+
+_NAIVE = {
+    "gamma_entropy": lambda a, b: a - b.log() + _lg(a) + (1 - a) * _dg(a),
+    "gamma_mean_log": lambda a, b: _dg(a) - b.log(),
+    "gamma_kl": lambda aq, bq, ap, bp: (
+        (aq - ap) * _dg(aq)
+        - _lg(aq)
+        + _lg(ap)
+        + ap * (bq.log() - bp.log())
+        + aq * (bp - bq) / bq
+    ),
+    "gamma_log_prob": lambda x, a, b: (
+        a * b.log() - _lg(a) + torch.xlogy(a - 1, x) - b * x
+    ),
+    "normal_kl": lambda mq, lq, mp, lp: (
+        0.5 * (lq.log() - lp.log() + lp / lq + lp * (mq - mp).square() - 1)
+    ),
+}
+
+
+def _ref64(name, *args):
+    """float64 reference on the float32-rounded inputs."""
+    return _NAIVE[name](*(a.double() for a in args))
+
+
+@pytest.mark.parametrize("nu", [1e2, 1e4, 1e6])
+def test_gamma_float32_large_shape(nu):
+    f = torch.float32
+    a = torch.tensor([nu, 2 * nu], dtype=f)
+    b = a / torch.tensor([2.0, 0.5])
+    a2 = (a.double() * 1.001).float()
+    b2 = (b.double() * 0.999).float()
+    x = (a / b).double() * torch.tensor([0.999, 1.002], dtype=D64)
+    x = x.float()
+    tol = {"rtol": 1e-5, "atol": 1e-5}
+    for name, args in [
+        ("gamma_entropy", (a, b)),
+        ("gamma_mean_log", (a, b)),
+        ("gamma_kl", (a, b, a2, b2)),
+        ("gamma_log_prob", (x, a, b)),
+    ]:
+        out = getattr(functional, name)(*args)
+        assert out.dtype == f
+        # log p(x) has condition number |a - 1 - b x| (~4e3 here) in x:
+        # the rounding of b x alone costs ~eps * 4e3
+        kw = {"rtol": 1e-5, "atol": 1e-3} if name == "gamma_log_prob" else tol
+        _close(out.double(), _ref64(name, *args), **kw)
+    # through the object API too
+    q = Gamma(a, b)
+    _close(q.entropy().double(), _ref64("gamma_entropy", a, b), **tol)
+
+
+@pytest.mark.parametrize("scale", [1e2, 1e4, 1e6])
+def test_dirichlet_float32_large_concentration(scale):
+    f = torch.float32
+    al = torch.tensor([[1.0, 2.0, 3.0], [0.5, 4.0, 7.0]]) * scale
+    be = (al.double() * torch.tensor([1.001, 0.999, 1.0005])).float()
+    x = torch.tensor([[0.17, 0.33, 0.5], [0.05, 0.35, 0.6]], dtype=f)
+    a64, b64, x64 = al.double(), be.double(), x.double()
+
+    def ent(a):
+        a0 = a.sum(-1)
+        k = a.shape[-1]
+        return (
+            _lg(a).sum(-1)
+            - _lg(a0)
+            + (a0 - k) * _dg(a0)
+            - ((a - 1) * _dg(a)).sum(-1)
+        )
+
+    def kl(a, b):
+        a0, b0 = a.sum(-1), b.sum(-1)
+        el = _dg(a) - _dg(a0)[..., None]
+        return (
+            _lg(a0)
+            - _lg(b0)
+            - (_lg(a) - _lg(b)).sum(-1)
+            + ((a - b) * el).sum(-1)
+        )
+
+    def lp(x, a):
+        return _lg(a.sum(-1)) - _lg(a).sum(-1) + torch.xlogy(a - 1, x).sum(-1)
+
+    elog = _dg(a64) - _dg(a64.sum(-1, keepdim=True))
+    tol = {"rtol": 1e-5, "atol": 1e-5}
+    _close(functional.dirichlet_entropy(al).double(), ent(a64), **tol)
+    _close(functional.dirichlet_kl(al, be).double(), kl(a64, b64), **tol)
+    _close(functional.dirichlet_mean_log(al).double(), elog, **tol)
+    # the rounding of the mean m = alpha / a0 costs ~eps * a0 (0.1 at
+    # a0 ~ 1e7); the naive formula is off by ~2 there
+    _close(
+        functional.dirichlet_log_prob(x, al).double(),
+        lp(x64, a64),
+        rtol=1e-5,
+        atol=max(1e-3, 1e-7 * scale),
+    )
+    _close(
+        functional.dirichlet_log_normalizer(al).double(),
+        _lg(a64).sum(-1) - _lg(a64.sum(-1)),
+        rtol=1e-6,
+        atol=1e-5,
+    )
+
+
+def test_normal_kl_float32_nearly_equal():
+    f = torch.float32
+    lq = torch.tensor([1e4, 1.0, 1e-4], dtype=f)
+    lp = (lq.double() * 1.0003).float()
+    mq = torch.tensor([0.0, 1.0, 2.0], dtype=f)
+    mp = mq + torch.tensor([1e-4, 1e-3, 1.0], dtype=f)
+    out = functional.normal_kl(mq, lq, mp, lp)
+    _close(
+        out.double(), _ref64("normal_kl", mq, lq, mp, lp), rtol=1e-5, atol=1e-9
+    )

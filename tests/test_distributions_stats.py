@@ -43,11 +43,20 @@ CLASSES = {
 }
 
 
+_COUNT_DTYPES = (torch.int64, D64)
+
+
 def _close_stats(a, b, **kw):
     assert type(a) is type(b)
-    for x, y in zip(a.astuple(), b.astuple(), strict=True):
+    c = a._count_index
+    pairs = zip(a.astuple(), b.astuple(), strict=True)
+    for i, (x, y) in enumerate(pairs):
         shape = torch.broadcast_shapes(x.shape, y.shape)
-        torch.testing.assert_close(x.expand(shape), y.expand(shape), **kw)
+        x, y = x.expand(shape), y.expand(shape)
+        if i == c:  # exact int64 or float64 counts, compared by value
+            assert x.dtype in _COUNT_DTYPES and y.dtype in _COUNT_DTYPES
+            x, y = x.to(D64), y.to(D64)
+        torch.testing.assert_close(x, y, **kw)
 
 
 @pytest.mark.parametrize("kind", list(CLASSES))
@@ -102,10 +111,13 @@ def test_sum_scale_state_dict_to(kind):
     _close_stats(per.sum((-2, -1)), cls.from_samples(x, dim=None))
     s = cls.from_samples(x, dim=0)
     double = s.scale(2.0)
-    torch.testing.assert_close(double.n, 2 * s.n)
+    torch.testing.assert_close(double.n, 2 * s.n.to(D64))
     _close_stats(cls.from_state_dict(s.state_dict()), s)
     f32 = s.to(dtype=torch.float32)
-    assert f32.dtype == torch.float32 and s.dtype == D64
+    assert s.dtype == D64
+    # counts keep their dtype; CategoricalStats has nothing else
+    assert f32.dtype == (D64 if kind == "categorical" else torch.float32)
+    assert f32.astuple()[s._count_index].dtype in _COUNT_DTYPES
 
 
 def test_scale_equals_duplicated_data():
@@ -206,9 +218,9 @@ def test_from_expectations():
 def test_from_labels():
     labels = torch.tensor([[0, 2], [1, 2], [2, 2]])
     s = CategoricalStats.from_labels(labels, 3, dim=0, dtype=D64)
-    ref = torch.tensor([[1.0, 1, 1], [0, 0, 3]], dtype=D64)
-    torch.testing.assert_close(s.counts, ref)
-    torch.testing.assert_close(s.n, torch.tensor([3.0, 3.0], dtype=D64))
+    ref = torch.tensor([[1, 1, 1], [0, 0, 3]])
+    torch.testing.assert_close(s.counts, ref)  # exact int64 counts
+    torch.testing.assert_close(s.n, torch.tensor([3, 3]))
 
 
 # -- posterior ------------------------------------------------------------
@@ -413,3 +425,111 @@ def test_dirichlet_fit():
     torch.testing.assert_close(fit.concentration[1], init.concentration)
     fit2 = Dirichlet.fit(s, torch.ones(3, dtype=D64), niter=50)
     torch.testing.assert_close(fit2.concentration[0], alpha[0])
+
+
+# -- counts and labels (regressions) --------------------------------------
+
+_BIG = 2**24 + 3  # not representable in float32
+
+
+def test_unweighted_counts_are_exact_int64():
+    x = torch.ones((), dtype=torch.float32).expand(_BIG)  # no memory
+    for cls in (GammaStats, NormalStats):
+        s = cls.from_samples(x + 1, dim=0)
+        assert s.n.dtype == torch.int64 and int(s.n) == _BIG
+        assert s.dtype == torch.float32  # the other fields keep theirs
+    d = DirichletStats.from_samples(torch.full((7, 3), 1 / 3), dim=0)
+    assert d.n.dtype == torch.int64 and int(d.n) == 7
+
+
+def test_weighted_counts_are_float64():
+    x = _data("gamma", dtype=torch.float32)
+    w = torch.rand(x.shape, generator=_gen(2))
+    s = GammaStats.from_samples(x, w, dim=0)
+    assert s.n.dtype == D64 and s.dtype == torch.float32
+    torch.testing.assert_close(s.n, w.sum(0).double())
+    c = CategoricalStats.from_samples(_data("categorical").float(), dim=0)
+    assert c.counts.dtype == D64
+
+
+def test_merge_int64_and_float64_counts_past_2_24():
+    x = torch.full((_BIG,), 2.0).expand(_BIG)
+    big = NormalStats.from_samples(x, dim=0)  # int64 count
+    one = NormalStats.from_samples(torch.tensor([2.0]), torch.ones(1), dim=0)
+    assert big.n.dtype == torch.int64 and one.n.dtype == D64
+    out = big + one
+    assert out.n.dtype == D64 and out.n.item() == _BIG + 1
+    assert (big + big).n.dtype == torch.int64
+    assert (big + big).n.item() == 2 * _BIG
+    torch.testing.assert_close(out.mean, torch.tensor(2.0))
+    # in place: an int64 accumulator takes a weighted batch
+    acc = GammaStats.zeros(dtype=torch.float32)
+    assert acc.n.dtype == torch.int64
+    acc.add_(GammaStats.from_samples(x, dim=0))
+    acc.add_(GammaStats.from_samples(x, dim=0))
+    assert acc.n.dtype == torch.int64 and acc.n.item() == 2 * _BIG
+    acc.add_(
+        GammaStats.from_samples(torch.tensor([2.0]), torch.ones(1), dim=0)
+    )
+    assert acc.n.dtype == D64 and acc.n.item() == 2 * _BIG + 1
+    assert acc.dtype == torch.float32
+    # scaling a count gives a float64 count
+    assert big.scale(0.5).n.dtype == D64
+    assert big.scale(0.5).n.item() == _BIG / 2
+
+
+def test_from_labels_matches_one_hot_without_building_it(monkeypatch):
+    g = _gen(4)
+    labels = torch.randint(0, 5, (6, 7, 8), generator=g)
+    w = torch.rand(6, 7, 8, generator=g, dtype=torch.float32)
+    oh = torch.nn.functional.one_hot(labels, 5).double()
+
+    def no_one_hot(*args, **kwargs):
+        raise AssertionError("one_hot must not be called")
+
+    monkeypatch.setattr(torch.nn.functional, "one_hot", no_one_hot)
+    for dim in (None, 0, (0, 2), -1, ()):
+        s = CategoricalStats.from_labels(labels, 5, dim=dim)
+        ref = CategoricalStats.from_samples(oh, dim=dim)
+        assert s.counts.dtype == torch.int64
+        torch.testing.assert_close(s.counts.double(), ref.counts)
+        sw = CategoricalStats.from_labels(labels, 5, w, dim=dim)
+        ref_w = CategoricalStats.from_samples(oh, w.double(), dim=dim)
+        assert sw.counts.dtype == D64  # summed in float32, stored in f64
+        torch.testing.assert_close(sw.counts, ref_w.counts, rtol=1e-6, atol=0)
+    s = CategoricalStats.from_labels(torch.tensor(3), 5, dim=None)
+    torch.testing.assert_close(s.counts, torch.tensor([0, 0, 0, 1, 0]))
+
+
+def test_posterior_ignores_mean_of_empty_stats():
+    nan = torch.tensor([float("nan"), 1.0], dtype=D64)
+    stats = NormalStats(
+        torch.tensor([0.0, 2.0], dtype=D64), nan, torch.zeros(2, dtype=D64)
+    )
+    prior = Normal(torch.tensor(0.5, dtype=D64), precision=2.0)
+    post = posterior(prior, stats, precision=torch.tensor(3.0, dtype=D64))
+    assert torch.isfinite(post.mean).all()
+    torch.testing.assert_close(post.mean[0], torch.tensor(0.5, dtype=D64))
+    g = posterior(
+        Gamma(torch.tensor(2.0, dtype=D64), 1.0),
+        stats,
+        mean=torch.tensor(0.0, dtype=D64),
+    )
+    assert torch.isfinite(g.rate).all()
+    torch.testing.assert_close(g.rate[0], torch.tensor(1.0, dtype=D64))
+
+
+def test_posterior_keeps_prior_dtype_with_float64_counts():
+    x = _data("gamma", dtype=torch.float32)
+    stats = GammaStats.from_samples(x, torch.ones_like(x), dim=0)
+    assert stats.n.dtype == D64
+    prior = Gamma(torch.tensor(1.0), 1.0)
+    post = posterior(prior, stats, shape=torch.tensor(2.0))
+    assert post.dtype == torch.float32
+    d = posterior(
+        Dirichlet(torch.ones(3)),
+        CategoricalStats.from_labels(torch.tensor([0, 2, 2]), 3, dim=0),
+    )
+    assert d.dtype == torch.float32
+    torch.testing.assert_close(d.concentration, torch.tensor([2.0, 1.0, 3.0]))
+    assert Gamma.fit(stats).dtype == torch.float32

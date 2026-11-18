@@ -54,7 +54,6 @@ class Gamma(Distribution):
     ``A = lgamma(a) - a log(b)``, ``h(x) = 1``.
     """
 
-    __slots__ = ()
     _forms = {
         ("shape", "rate"): (0, 0),
         ("shape", "scale"): (0, 0),
@@ -240,6 +239,7 @@ class Gamma(Distribution):
             ``init``). Gradients stay finite where ``n == 0``.
         """
         n, sx, slx = stats.astuple()
+        n = n.to(sx.dtype)  # int64 / float64 count
         ok = n > 0
         safe = torch.where(ok, n, torch.ones_like(n))
         xbar = torch.where(ok, sx / safe, 1)

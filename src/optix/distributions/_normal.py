@@ -49,7 +49,6 @@ class Normal(Distribution):
     ``A = lam m^2 / 2 - log(lam) / 2``, ``log h = -log(2 pi) / 2``.
     """
 
-    __slots__ = ()
     _forms = {
         ("mean", "var"): (0, 0),
         ("mean", "std"): (0, 0),

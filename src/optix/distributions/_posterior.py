@@ -19,14 +19,25 @@ def _known(value: object, like: Tensor) -> Tensor:
     return torch.as_tensor(value, dtype=like.dtype, device=like.device)
 
 
+def _like(stats: tuple[Tensor, ...], like: Tensor) -> tuple[Tensor, ...]:
+    """Statistics on ``like``'s device and dtype (counts are int64 or
+    float64; the update runs in the prior's dtype)."""
+    return tuple(t.to(dtype=like.dtype, device=like.device) for t in stats)
+
+
+def _seen(n: Tensor, xbar: Tensor) -> Tensor:
+    """``xbar`` where ``n > 0``, else 0: the mean of no data may be NaN."""
+    return torch.where(n > 0, xbar, 0)
+
+
 @_register_posterior(Dirichlet, CategoricalStats)
 def _dirichlet_categorical(
     prior: Dirichlet, stats: CategoricalStats
 ) -> Dirichlet:
     """``alpha_N = alpha_0 + counts``."""
     (alpha,) = prior.params()
-    (counts,) = stats.astuple()
-    return Dirichlet._new(_floor(alpha + counts.to(device=alpha.device)))
+    (counts,) = _like(stats.astuple(), alpha)
+    return Dirichlet._new(_floor(alpha + counts))
 
 
 @_register_posterior(Gamma, GammaStats)
@@ -36,7 +47,7 @@ def _gamma_rate(prior: Gamma, stats: GammaStats, *, shape: Tensor) -> Gamma:
     ``a_N = a_0 + shape * n`` and ``b_N = b_0 + sum_x``.
     """
     a, b = prior.params()
-    n, sx, _ = (t.to(device=a.device) for t in stats.astuple())
+    n, sx, _ = _like(stats.astuple(), a)
     shape = _known(shape, a)
     return Gamma._new(_floor(a + shape * n), _floor(b + sx))
 
@@ -51,9 +62,9 @@ def _gamma_precision(
     ``b_N = b_0 + (scatter + n (xbar - mean)^2) / 2``.
     """
     a, b = prior.params()
-    n, xbar, scatter = (t.to(device=a.device) for t in stats.astuple())
+    n, xbar, scatter = _like(stats.astuple(), a)
     mean = _known(mean, a)
-    quad = scatter + n * (xbar - mean).square()
+    quad = scatter + n * _seen(n, xbar - mean).square()
     return Gamma._new(_floor(a + 0.5 * n), _floor(b + 0.5 * quad))
 
 
@@ -67,10 +78,11 @@ def _normal_mean(
     ``m_N = (lam_0 m_0 + n P xbar) / lam_N`` (``m_0`` where ``lam_N = 0``).
     """
     m0, lam0 = prior.params()
-    n, xbar, _ = (t.to(device=m0.device) for t in stats.astuple())
+    n, xbar, _ = _like(stats.astuple(), m0)
     precision = _known(precision, m0)
     lam = lam0 + n * precision
     ok = lam > 0
     safe = torch.where(ok, lam, torch.ones_like(lam))
-    mean = torch.where(ok, (lam0 * m0 + n * precision * xbar) / safe, m0)
+    data = n * precision * _seen(n, xbar)
+    mean = torch.where(ok, (lam0 * m0 + data) / safe, m0)
     return Normal._new(mean, lam)

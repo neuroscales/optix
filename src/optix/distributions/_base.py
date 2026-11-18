@@ -153,10 +153,16 @@ class Distribution:
 
     **Caching.** Derived quantities are recomputed on every access unless
     caching is switched on (``cache=True`` at construction, or
-    ``q.cache = True``). The cache is bypassed while compiling, so traced
-    functions have no side effects. A cached tensor keeps its autograd
-    graph: switch caching off when the parameters require gradients and
-    several backward passes are run.
+    ``q.cache = True``). An entry is reused only while the stored tensors
+    keep the version counters they had when it was computed, so an
+    in-place change of a parameter (``s.mul_(2)``) invalidates it. The
+    cache is bypassed while compiling (traced functions have no side
+    effects and never see it), when a stored tensor requires gradients (a
+    cached graph would break a second backward pass) and for inference
+    tensors (which have no version counter). A derived parameter has the
+    broadcast shape of the stored tensors it is computed from (e.g. the
+    rate of a Gamma given by a scalar shape and a per-pixel mean is
+    per-pixel), and is cached with that shape.
 
     **Shapes.** Parameters are stored with their own shapes (not expanded
     to the batch shape), so a scalar prior against per-pixel posteriors
@@ -173,7 +179,18 @@ class Distribution:
     synchronise with the host).
     """
 
-    __slots__ = ("_form", "_raw", "_batch_shape", "_event_shape", "_cache")
+    # No ``__slots__``: torch 2.3's dynamo reads the attributes of an
+    # instance of a slotted class with a plain ``getattr`` instead of
+    # inlining properties, which evaluates them eagerly and installs
+    # guards on short-lived tensors (``InternalTorchDynamoError`` when an
+    # object is passed to a compiled function).
+    _form: Form
+    _stored: tuple[Tensor, ...]
+    _batch_shape: torch.Size
+    _event_shape: torch.Size
+    _cache: dict[str, tuple[tuple[int, ...], Tensor]] | None
+    #: Whether value checks that synchronise are run (``validate=True``).
+    _validate: bool
 
     #: Parameterisations: names -> event ndim of each parameter.
     _forms: ClassVar[dict[Form, tuple[int, ...]]] = {}
@@ -210,6 +227,7 @@ class Distribution:
         )
         self._setup(form, raw)
         self.cache = cache
+        self._validate = bool(validate)
         if validate:
             self.validate()
 
@@ -217,10 +235,11 @@ class Distribution:
         name = type(self).__name__
         batch, events = _shapes(name, form, raw, self._forms[form])
         self._form = form
-        self._raw = tuple(raw)
+        self._raw = raw
         self._batch_shape = batch
         self._event_shape = self._check_events(form, events)
         self._cache = None
+        self._validate = False
 
     @classmethod
     def _check_events(
@@ -247,9 +266,18 @@ class Distribution:
     def _new(cls, *raw: Tensor, form: Form | None = None) -> Self:
         """Build from tensors in ``form`` (default canonical).
 
-        Shapes are checked; values are never validated and tensors are
-        not cast. Used by library code (updates, fits, ``expand``, ...).
+        Shapes are checked; values are never validated. Floating tensors
+        are promoted to a common dtype (a no-op when they already agree).
+        Used by library code (updates, fits, ``expand``, ...).
         """
+        floats = [t.dtype for t in raw if t.is_floating_point()]
+        if floats:
+            dtype = floats[0]
+            for d in floats[1:]:
+                dtype = torch.promote_types(dtype, d)
+            raw = tuple(
+                t.to(dtype) if t.is_floating_point() else t for t in raw
+            )
         self = object.__new__(cls)
         self._setup(cls._canonical if form is None else form, raw)
         return self
@@ -268,6 +296,18 @@ class Distribution:
         raise ValueError(f"{name}: give {options}; got {got}")
 
     # -- parameters ------------------------------------------------------
+    @property
+    def _raw(self) -> tuple[Tensor, ...]:
+        """Stored tensors, in :attr:`form` order."""
+        return self._stored
+
+    @_raw.setter
+    def _raw(self, value: Sequence[Tensor]) -> None:
+        # every path that replaces a stored tensor goes through here
+        self._stored = tuple(value)
+        if getattr(self, "_cache", None) is not None:
+            self._cache = {}
+
     @property
     def form(self) -> Form:
         """Names of the stored parameters (the parameterisation given)."""
@@ -295,13 +335,18 @@ class Distribution:
         """Parameter ``name``, stored or derived, with its own shape."""
         if name in self._form:
             return self._raw[self._form.index(name)]
-        cache = self._cache
-        use = cache is not None and not _is_compiling()
-        if use and name in cache:
-            return cache[name]
+        # test compiling first: traced code never reads the cache
+        if _is_compiling() or self._cache is None:
+            return self._derive(name)
+        raw = self._raw
+        if any(t.requires_grad or t.is_inference() for t in raw):
+            return self._derive(name)
+        key = tuple(t._version for t in raw)
+        hit = self._cache.get(name)
+        if hit is not None and hit[0] == key:
+            return hit[1]
         value = self._derive(name)
-        if use:
-            cache[name] = value
+        self._cache[name] = (key, value)
         return value
 
     def _view(self, name: str) -> Tensor:
@@ -364,6 +409,7 @@ class Distribution:
     def _rebuild(self, raw: Sequence[Tensor]) -> Self:
         new = self._new(*raw, form=self._form)
         new.cache = self.cache
+        new._validate = self._validate
         return new
 
     def expand(self, batch_shape: Sequence[int]) -> Self:
@@ -416,7 +462,13 @@ class Distribution:
             e = self._ndims[n]
             full = t.expand(self._batch_shape + t.shape[t.ndim - e :])
             # after an Ellipsis, full slices keep the event dims in place
-            raw.append(full[index + (slice(None),) * e if ellipsis else index])
+            v = full[index + (slice(None),) * e if ellipsis else index]
+            # broadcast batch dims (stride 0) go back to size 1, so that
+            # derived parameters are not computed at the full batch shape
+            for d in range(v.ndim - e):
+                if v.stride(d) == 0 and v.shape[d] > 1:
+                    v = v.narrow(d, 0, 1)
+            raw.append(v)
         batch = torch.empty(self._batch_shape, device="meta")[index].shape
         new = self._rebuild(raw)
         new._batch_shape = batch
@@ -504,6 +556,10 @@ class Distribution:
         same variable (``Categorical`` labels / one-hot).
         """
         return self._event_shape
+
+    def _kl_event_desc(self) -> str:
+        """What :meth:`_kl_event_shape` is, for error messages."""
+        return f"event_shape {_fmt(self._event_shape)}"
 
     def _check_value_shape(self, value: Tensor) -> torch.Size:
         """Check the event dims of ``value``; return the result shape."""
@@ -617,8 +673,7 @@ def kl_divergence(q: Distribution, p: Distribution) -> Tensor:
     if q._kl_event_shape() != p._kl_event_shape():
         raise ValueError(
             f"kl_divergence: event shapes differ: q is {nq} with "
-            f"event_shape {_fmt(q.event_shape)}, p is {np_} with "
-            f"event_shape {_fmt(p.event_shape)}"
+            f"{q._kl_event_desc()}, p is {np_} with {p._kl_event_desc()}"
         )
     try:
         batch = torch.broadcast_shapes(q.batch_shape, p.batch_shape)

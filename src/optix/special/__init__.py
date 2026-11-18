@@ -9,6 +9,7 @@ from ._solvers import (
     inv_digamma,
     log_minus_digamma,
 )
+from ._stable import ratio_minus_log, stirling_residual
 
 __all__ = [
     "dirichlet_elog",
@@ -20,4 +21,6 @@ __all__ = [
     "kl_gamma",
     "kl_normal",
     "log_minus_digamma",
+    "ratio_minus_log",
+    "stirling_residual",
 ]

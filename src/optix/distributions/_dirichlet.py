@@ -38,7 +38,6 @@ class Dirichlet(Distribution):
     ``A = sum(lgamma(alpha)) - lgamma(a0)``, ``h = 1``.
     """
 
-    __slots__ = ()
     _forms = {("concentration",): (1,)}
     _canonical = ("concentration",)
     _constraints = {"concentration": "positive"}
@@ -153,6 +152,7 @@ class Dirichlet(Distribution):
         else:
             alpha0 = torch.as_tensor(init, dtype=stats.dtype)
         n, slx = stats.astuple()
+        n = n.to(slx.dtype)  # int64 / float64 count
         alpha0 = alpha0.to(device=slx.device)
         ok = (n > 0)[..., None]
         safe = torch.where(ok, n[..., None], 1)

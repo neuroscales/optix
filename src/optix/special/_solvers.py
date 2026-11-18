@@ -28,11 +28,14 @@ def log_minus_digamma(a: Tensor) -> Tensor:
         its digits.
     """
     a = torch.as_tensor(a)
-    inv = 1 / a
+    big = a > 10
+    # each branch sees arguments it is finite on (finite gradients)
+    inv = 1 / torch.where(big, a, 10)
     inv2 = inv * inv
     series = inv * (0.5 + inv * (1 / 12 - inv2 * (1 / 120 - inv2 / 252)))
-    direct = a.log() - torch.digamma(a)
-    return torch.where(a > 10, series, direct)
+    d = torch.where(big, 1, a)
+    direct = d.log() - torch.digamma(d)
+    return torch.where(big, series, direct)
 
 
 def _inv_minus_trigamma(a: Tensor) -> Tensor:
@@ -130,9 +133,15 @@ def dirichlet_elog(alpha: Tensor) -> Tensor:
     Returns
     -------
     (..., K) Tensor
-        ``E[log pi] = digamma(alpha) - digamma(sum(alpha))``.
+        ``E[log pi] = digamma(alpha) - digamma(sum(alpha))``, computed as
+        ``log(alpha / a0) - lmd(alpha) + lmd(a0)`` with
+        ``lmd = log_minus_digamma``, which does not cancel for large
+        concentrations.
     """
-    return torch.digamma(alpha) - torch.digamma(alpha.sum(-1, keepdim=True))
+    a0 = alpha.sum(-1, keepdim=True)
+    return (
+        (alpha / a0).log() - log_minus_digamma(alpha) + log_minus_digamma(a0)
+    )
 
 
 def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:

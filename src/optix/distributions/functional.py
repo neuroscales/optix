@@ -29,7 +29,11 @@ from ..special import (
     kl_dirichlet,
     kl_gamma,
     log_minus_digamma,
+    ratio_minus_log,
+    stirling_residual,
 )
+
+_HALF_LOG_2PI = 0.5 * math.log(2 * math.pi)
 
 __all__ = [
     "categorical_entropy",
@@ -111,9 +115,11 @@ def gamma_mean_log(a: Tensor, b: Tensor) -> Tensor:
     Returns
     -------
     Tensor
-        Broadcast shape of the inputs.
+        Broadcast shape of the inputs. Computed as
+        ``log(a / b) - log_minus_digamma(a)`` (no cancellation for large
+        ``a`` and ``b``).
     """
-    return torch.digamma(a) - b.log()
+    return (a / b).log() - log_minus_digamma(a)
 
 
 def gamma_mean_log_ms(mean: Tensor, shape: Tensor) -> Tensor:
@@ -158,7 +164,11 @@ def gamma_mean_inv(a: Tensor, b: Tensor) -> Tensor:
 def gamma_entropy(a: Tensor, b: Tensor) -> Tensor:
     """Entropy of ``Gamma(a, b)``.
 
-    ``H = a - log(b) + lgamma(a) + (1 - a) digamma(a)``.
+    ``H = a - log(b) + lgamma(a) + (1 - a) digamma(a)``, computed as
+    ``log(2 pi a) / 2 + r(a) + (a - 1) lmd(a) - log(b)`` with
+    :func:`~optix.special.stirling_residual` ``r`` and
+    :func:`~optix.special.log_minus_digamma` ``lmd``, so that the large
+    ``lgamma`` and ``digamma`` terms do not cancel at large ``a``.
 
     Parameters
     ----------
@@ -170,13 +180,24 @@ def gamma_entropy(a: Tensor, b: Tensor) -> Tensor:
     Tensor
         Broadcast shape of the inputs.
     """
-    return a - b.log() + torch.lgamma(a) + (1 - a) * torch.digamma(a)
+    return (
+        0.5 * a.log()
+        + _HALF_LOG_2PI
+        + stirling_residual(a)
+        + (a - 1) * log_minus_digamma(a)
+        - b.log()
+    )
 
 
 def gamma_log_prob(x: Tensor, a: Tensor, b: Tensor) -> Tensor:
     """Log-density of ``Gamma(a, b)`` at ``x > 0``.
 
-    ``log p(x) = a log(b) - lgamma(a) + (a - 1) log(x) - b x``.
+    ``log p(x) = a log(b) - lgamma(a) + (a - 1) log(x) - b x``, computed
+    for ``x > 0`` as ``-a g(b x / a) + log(a) / 2 - log(x)
+    - log(2 pi) / 2 - r(a)`` with :func:`~optix.special.ratio_minus_log`
+    ``g`` and :func:`~optix.special.stirling_residual` ``r`` (no
+    cancellation between ``a log(b x)``, ``lgamma(a)`` and ``b x`` at large
+    ``a``); the direct formula is used at ``x == 0``.
 
     Parameters
     ----------
@@ -190,7 +211,17 @@ def gamma_log_prob(x: Tensor, a: Tensor, b: Tensor) -> Tensor:
     Tensor
         Broadcast shape of the inputs.
     """
-    return a * b.log() - torch.lgamma(a) + torch.xlogy(a - 1, x) - b * x
+    pos = x > 0
+    xs = torch.where(pos, x, 1)
+    stable = (
+        -a * ratio_minus_log(b * xs, a)
+        + 0.5 * a.log()
+        - xs.log()
+        - _HALF_LOG_2PI
+        - stirling_residual(a)
+    )
+    direct = a * b.log() - torch.lgamma(a) + torch.xlogy(a - 1, x) - b * x
+    return torch.where(pos, stable, direct)
 
 
 def gamma_log_normalizer(a: Tensor, b: Tensor) -> Tensor:
@@ -268,7 +299,12 @@ def dirichlet_entropy(alpha: Tensor) -> Tensor:
     """Entropy of ``Dir(alpha)``.
 
     ``H = sum(lgamma(alpha)) - lgamma(a0) + (a0 - K) digamma(a0)
-    - sum((alpha - 1) digamma(alpha))``.
+    - sum((alpha - 1) digamma(alpha))``, computed with
+    :func:`~optix.special.stirling_residual` ``r`` and
+    :func:`~optix.special.log_minus_digamma` ``lmd`` as
+    ``sum(log(alpha / a0)) / 2 - (K - 1) log(a0 / (2 pi)) / 2
+    + sum(r(alpha)) - r(a0) + sum((alpha - 1) lmd(alpha))
+    - (a0 - K) lmd(a0)`` (no cancellation at large concentrations).
 
     Parameters
     ----------
@@ -282,10 +318,29 @@ def dirichlet_entropy(alpha: Tensor) -> Tensor:
     a0 = alpha.sum(-1)
     k = alpha.shape[-1]
     return (
-        torch.lgamma(alpha).sum(-1)
-        - torch.lgamma(a0)
-        + (a0 - k) * torch.digamma(a0)
-        - ((alpha - 1) * torch.digamma(alpha)).sum(-1)
+        0.5 * (alpha / a0[..., None]).log().sum(-1)
+        - 0.5 * (k - 1) * (a0.log() - _LOG_2PI)
+        + stirling_residual(alpha).sum(-1)
+        - stirling_residual(a0)
+        + ((alpha - 1) * log_minus_digamma(alpha)).sum(-1)
+        - (a0 - k) * log_minus_digamma(a0)
+    )
+
+
+def _dirichlet_log_norm(alpha: Tensor) -> Tensor:
+    """``lgamma(a0) - sum(lgamma(alpha))``, without the Stirling terms.
+
+    Equal to ``-sum((alpha - 1/2) log(alpha / a0))
+    + (K - 1) log(a0 / (2 pi)) / 2 + r(a0) - sum(r(alpha))``, whose terms
+    grow like ``alpha log(alpha / a0)`` instead of ``alpha log(alpha)``.
+    """
+    a0 = alpha.sum(-1)
+    k = alpha.shape[-1]
+    return (
+        -((alpha - 0.5) * (alpha / a0[..., None]).log()).sum(-1)
+        + 0.5 * (k - 1) * (a0.log() - _LOG_2PI)
+        + stirling_residual(a0)
+        - stirling_residual(alpha).sum(-1)
     )
 
 
@@ -304,11 +359,22 @@ def dirichlet_log_prob(x: Tensor, alpha: Tensor) -> Tensor:
     Returns
     -------
     (...) Tensor
+        Computed with the mean ``m = alpha / a0`` and
+        :func:`~optix.special.stirling_residual` ``r`` as
+        ``sum((alpha - 1) log(x / m)) - sum(log m) / 2
+        + (K - 1) log(a0 / (2 pi)) / 2 + r(a0) - sum(r(alpha))``: the
+        ``lgamma`` terms and ``alpha log x`` do not cancel at large
+        concentrations.
     """
+    a0 = alpha.sum(-1, keepdim=True)
+    m = alpha / a0
+    k = alpha.shape[-1]
     return (
-        torch.lgamma(alpha.sum(-1))
-        - torch.lgamma(alpha).sum(-1)
-        + torch.xlogy(alpha - 1, x).sum(-1)
+        torch.xlogy(alpha - 1, x / m).sum(-1)
+        - 0.5 * m.log().sum(-1)
+        + 0.5 * (k - 1) * (a0[..., 0].log() - _LOG_2PI)
+        + stirling_residual(a0[..., 0])
+        - stirling_residual(alpha).sum(-1)
     )
 
 
@@ -325,8 +391,11 @@ def dirichlet_log_normalizer(alpha: Tensor) -> Tensor:
     Returns
     -------
     (...) Tensor
+        Computed without the cancellation of the ``lgamma`` terms at
+        large concentrations (Stirling residuals, as in
+        :func:`dirichlet_log_prob`).
     """
-    return torch.lgamma(alpha).sum(-1) - torch.lgamma(alpha.sum(-1))
+    return -_dirichlet_log_norm(alpha)
 
 
 dirichlet_kl = kl_dirichlet
@@ -585,4 +654,5 @@ def normal_kl(mq: Tensor, lq: Tensor, mp: Tensor, lp: Tensor) -> Tensor:
     Tensor
         Broadcast shape of the inputs.
     """
-    return 0.5 * (lq.log() - lp.log() + lp / lq + lp * (mq - mp).square() - 1)
+    # r - 1 - log(r) with r = lp / lq, via ratio_minus_log (no cancellation)
+    return 0.5 * (ratio_minus_log(lp, lq) + lp * (mq - mp).square())

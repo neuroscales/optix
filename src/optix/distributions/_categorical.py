@@ -28,7 +28,9 @@ class Categorical(Distribution):
     logits : (*batch, K) Tensor, optional
         Log-weights, normalised by ``log_softmax``.
     validate, cache, dtype, device
-        See :class:`Gamma`.
+        See :class:`Gamma`. ``validate=True`` also makes :meth:`log_prob`
+        check that integer labels are in range (kept by ``expand``,
+        indexing, ``to`` and ``detach``).
 
     Notes
     -----
@@ -56,7 +58,6 @@ class Categorical(Distribution):
     additive constant), ``A = logsumexp(eta)``, ``E[T] = p``.
     """
 
-    __slots__ = ()
     _forms = {("logits",): (1,), ("probs",): (1,)}
     _canonical = ("logits",)
     _constraints = {"logits": "logits", "probs": "nonnegative"}
@@ -89,6 +90,9 @@ class Categorical(Distribution):
 
     def _kl_event_shape(self) -> torch.Size:
         return self._raw[0].shape[-1:]
+
+    def _kl_event_desc(self) -> str:
+        return f"K = {self.num_categories} categories"
 
     def _derive(self, name: str) -> Tensor:
         (raw,) = self._raw
@@ -166,9 +170,17 @@ class Categorical(Distribution):
         Raises
         ------
         ValueError
-            If a label is out of range (checked eagerly, which
-            synchronises; skipped while compiling) or the last dim of an
-            assignment is not ``K``.
+            If the last dim of an assignment is not ``K``, or if a label
+            is out of range and the object was built with
+            ``validate=True`` (that check synchronises and is skipped
+            while compiling).
+
+        Notes
+        -----
+        Without ``validate=True``, labels are not range-checked: an
+        out-of-range label raises a ``RuntimeError`` on the CPU and a
+        device-side assert on CUDA (which leaves the CUDA context
+        unusable), so validate labels when their source is not trusted.
         """
         value = torch.as_tensor(value, device=self.device)
         name = type(self).__name__
@@ -191,11 +203,12 @@ class Categorical(Distribution):
             ) from None
         if not labels:
             value = value.to(self.dtype)
-            out = torch.where(value != 0, value * logits, 0).sum(-1)
+            # 0 * log(0) = 0, with a zero (not NaN) gradient w.r.t. both
+            safe = torch.where(value != 0, logits, 0)
+            out = (value * safe).sum(-1)
         else:
-            if not _is_compiling() and bool(
-                ((value < 0) | (value >= k)).any()
-            ):
+            check = self._validate and not _is_compiling()
+            if check and bool(((value < 0) | (value >= k)).any()):
                 raise ValueError(
                     f"{name}.log_prob: labels must be in [0, {k}); integer "
                     "values are labels (cast one-hot vectors to float or "

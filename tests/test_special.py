@@ -135,3 +135,80 @@ def test_fit_dirichlet_broadcast_init():
     alpha = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
     fit = fit_dirichlet(dirichlet_elog(alpha), torch.ones(2))
     torch.testing.assert_close(fit, alpha)
+
+
+# -- cancellation-free building blocks ------------------------------------
+
+
+def test_stirling_residual_vs_lgamma():
+    from optix.special import stirling_residual
+
+    a = torch.cat(
+        [torch.logspace(-3, 1, 400), torch.logspace(1, 8, 400)]
+    ).double()
+    direct = torch.lgamma(a) - (
+        (a - 0.5) * a.log() - a + 0.5 * math.log(2 * math.pi)
+    )
+    small = a < 1e3  # direct difference still accurate in float64
+    torch.testing.assert_close(stirling_residual(a)[small], direct[small])
+    big = torch.tensor([1e6, 1e8], dtype=torch.float32)
+    torch.testing.assert_close(stirling_residual(big), 1 / (12 * big))
+    x = torch.tensor([1e-6, 0.5, 10.0, 1e7], requires_grad=True)
+    (g,) = torch.autograd.grad(stirling_residual(x).sum(), x)
+    assert torch.isfinite(g).all()
+
+
+def test_ratio_minus_log():
+    from optix.special import ratio_minus_log
+
+    y = torch.cat(
+        [torch.logspace(-30, 30, 2001), 1 + torch.linspace(-0.3, 0.3, 2001)]
+    ).double()
+    x = y - 1
+    series = sum((-1) ** k * x**k / k for k in range(2, 8))
+    ref = torch.where(x.abs() < 1e-3, series, x - torch.log1p(x))
+    ref = torch.where(x.abs() > 0.5, y - 1 - y.log(), ref)
+    torch.testing.assert_close(ratio_minus_log(y), ref, rtol=1e-12, atol=0)
+    # float32 near 1: relative precision kept (naive y - 1 - log y is 0)
+    num = torch.tensor([1.0001, 0.9999, 1.0], dtype=torch.float32)
+    out = ratio_minus_log(num, torch.ones(3))
+    ref = ratio_minus_log(num.double(), torch.ones(3, dtype=torch.float64))
+    torch.testing.assert_close(out.double(), ref, rtol=1e-5, atol=0)
+    # ratios too small for 1 + x stay finite
+    tiny = ratio_minus_log(torch.tensor([1e-30]), torch.tensor([1.0]))
+    torch.testing.assert_close(tiny, torch.tensor([1e-30 - 1 + 69.07755]))
+    y = torch.tensor([0.5, 1.0, 1.1, 3.0], requires_grad=True)
+    (g,) = torch.autograd.grad(ratio_minus_log(y).sum(), y)
+    torch.testing.assert_close(g, 1 - 1 / y.detach())
+
+
+@pytest.mark.parametrize("big", [1e4, 1e6])
+def test_kl_float32_large_parameters(big):
+    f = torch.float32
+    aq = torch.tensor([big, 3 * big], dtype=f)
+    ap = (aq.double() * 1.002).float()
+    bq = torch.tensor([1.0, big], dtype=f)
+    bp = (bq.double() * 0.998).float()
+    ref = kl_divergence(
+        Gamma(aq.double(), bq.double()), Gamma(ap.double(), bp.double())
+    )
+    out = kl_gamma(aq, bq, ap, bp)
+    assert out.dtype == f
+    torch.testing.assert_close(out.double(), ref, rtol=1e-5, atol=1e-5)
+    al = torch.tensor([[1.0, 2.0, 5.0]]) * big
+    be = (al.double() * torch.tensor([1.001, 0.998, 1.0])).float()
+    ref = kl_divergence(Dirichlet(al.double()), Dirichlet(be.double()))
+    torch.testing.assert_close(
+        kl_dirichlet(al, be).double(), ref, rtol=1e-5, atol=1e-5
+    )
+    vq = torch.tensor([1e-4, 1.0, 1e4], dtype=f)
+    vp = (vq.double() * 1.0004).float()
+    ref = kl_divergence(
+        Normal(0.0, vq.double().sqrt()), Normal(0.0, vp.double().sqrt())
+    )
+    torch.testing.assert_close(
+        kl_normal(torch.zeros(3), vq, torch.zeros(3), vp).double(),
+        ref,
+        rtol=1e-4,
+        atol=1e-10,
+    )
