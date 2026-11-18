@@ -1,0 +1,70 @@
+[project]
+name = "optix"
+authors = [{name = "Yael Balbastre"}]
+description = "Processing algorithms for microscopy"
+readme = "README.md"
+license = "MIT"
+classifiers = [
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+dynamic = ["version"]
+requires-python = ">=3.9"
+dependencies = [
+  "torch>=2.2",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8",
+  "pytest-cov>=5",
+]
+doc = [
+  "zensical>=0.0.11",
+  "mkdocstrings[python]>=1.0.0",
+  "markdown-grid-tables",
+]
+
+[project.urls]
+Homepage = "https://github.com/neuroscales/optix"
+Issues = "https://github.com/neuroscales/optix/issues"
+
+[build-system]
+requires = [
+  "setuptools>=59.0",
+  "wheel",
+  "versioningit>=1.0",
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["optix*"]
+
+[tool.versioningit]
+default-version = "0+unknown"
+
+[tool.versioningit.vcs]
+default-tag = "0.1"
+
+[tool.versioningit.format]
+distance = "{base_version}+{distance}.{vcs}{rev}"
+dirty = "{base_version}+{distance}.{vcs}{rev}.dirty"
+distance-dirty = "{base_version}+{distance}.{vcs}{rev}.dirty"
+
+[tool.versioningit.write]
+file = "src/optix/_version.py"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["ANN", "B", "E", "F", "I", "UP", "W"]
