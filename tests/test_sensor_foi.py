@@ -2,10 +2,12 @@ import numpy as np
 import pytest
 import torch
 
+import optix
 from optix.estimates import SensorEstimate
 from optix.io import Layout, labeled
 from optix.models import simulate_sensor
 from optix.sensor import (
+    PoissonGaussian,
     SegmentStats,
     clipped_normal_moments,
     from_normalized,
@@ -59,10 +61,13 @@ def test_harness_ground_truth(a, read_sd, offset):
 
 
 def test_sensor_estimate_without_offset():
+    # not estimated -> None, never a silent zero; b goes into variance
     est = sensor_estimate(torch.tensor(0.5, dtype=torch.float64), -40.0)
     assert est.meta["offset_estimated"] is False
-    y = torch.tensor([100.0, 500.0], dtype=torch.float64)
-    torch.testing.assert_close(est.noise_variance(y), 0.5 * y - 40)
+    assert est.offset is None
+    assert est.gain.item() == 0.5 and est.variance.item() == -40.0
+    with pytest.raises(ValueError, match="offset"):
+        est.noise_variance(torch.tensor([100.0]))
 
 
 def test_normalized_units_round_trip():
@@ -188,12 +193,124 @@ def test_group_frames_layout():
         next(group_frames(x, frame=6))
 
 
-@pytest.mark.skip(
-    reason="blocked: the Foi et al. (2008) method needs the paper "
-    "(doi:10.1109/TIP.2008.2001399), not yet available"
-)
+# Tolerances of the recovery tests: K observed-information standard
+# errors (inverse Hessian of -log L at the ML estimate). A Monte Carlo
+# over independent scenes and noise (108 fits: the SETTINGS clipped and
+# not, plus the robust, pooled and differencing modes) gave z-scores
+# (estimate - truth) / SE with standard deviation <= 1.27, mean <= 0.42
+# in magnitude and max |z| = 3.15. K = 5 is then >= 3.6 effective
+# standard deviations: a false-failure rate below 5e-4 per parameter.
+K = 5
+WIDE = (-200.0, 4500.0)  # data range enclosing unclipped harness data
+
+
+def check_recovery(est, a, b, group=()):
+    s = est.estimates["sensor"]
+    se = est.covariance[group].diagonal().sqrt()
+    gain, var = s.gain[group].item(), s.variance[group].item()
+    assert s.offset is None
+    assert se[0] < 0.1 * a  # the test has power
+    assert abs(gain - a) < K * se[0].item(), (gain, a, se[0].item())
+    assert abs(var - b) < K * se[1].item(), (var, b, se[1].item())
+    return se
+
+
 @pytest.mark.parametrize("clip", [None, (0.0, 1000.0)])
 @pytest.mark.parametrize("a, read_sd, offset", SETTINGS)
-def test_recovery(a, read_sd, offset, clip):  # pragma: no cover
+def test_recovery(a, read_sd, offset, clip):
     y, a, b, _ = synthetic(a, read_sd, offset, clip=clip)
-    raise NotImplementedError
+    est = PoissonGaussian(data_range=clip or WIDE).fit(y)
+    assert est.is_faithful is False  # data_range differs from the preset
+    assert est.history.converged
+    s = est.estimates["sensor"]
+    assert s.gain.shape == (1, 1) and s.meta["offset_estimated"] is False
+    check_recovery(est, a, b)
+
+
+def test_recovery_float_range_from_data():
+    # faithful defaults: float data, range taken from the frame
+    y, a, b, _ = synthetic(0.5, 1.5, 100.0, clip=(0.0, 1000.0))
+    y[0, 0, :2] = torch.tensor([0.0, 1000.0], dtype=y.dtype)
+    est = PoissonGaussian().fit(y)
+    assert est.is_faithful
+    assert est.estimates["sensor"].meta["data_range"] == {"[]": [0.0, 1000.0]}
+    check_recovery(est, a, b)
+
+
+def test_recovery_float32_matches_float64():
+    y, a, b, _ = synthetic(2.0, 5.0, 50.0, clip=(0.0, 1000.0))
+    e64 = PoissonGaussian(data_range=(0, 1000), dtype=torch.float64).fit(y)
+    e32 = PoissonGaussian(data_range=(0, 1000), dtype=torch.float32).fit(y)
+    se = e64.covariance[()].diagonal().sqrt()
+    s64, s32 = e64.estimates["sensor"], e32.estimates["sensor"]
+    assert s32.gain.dtype == torch.float32
+    # float32 round-off of the coefficients must be far below the noise
+    assert abs(s32.gain.item() - s64.gain.item()) < 0.05 * se[0].item()
+    assert abs(s32.variance.item() - s64.variance.item()) < 0.05 * se[1]
+
+
+def test_robust_mad():
+    y, a, b, _ = synthetic(0.5, 1.5, 100.0, clip=(0.0, 1000.0))
+    est = PoissonGaussian(data_range=(0, 1000), robust=True).fit(y)
+    check_recovery(est, a, b)
+
+
+def test_pooled_frames_and_chunking():
+    y, a, b, _ = synthetic(0.5, 1.5, 100.0, clip=(0.0, 1000.0), frames=6)
+    single = PoissonGaussian(data_range=(0, 1000)).fit(y)
+    pooled = PoissonGaussian(data_range=(0, 1000), pooled=True).fit(y)
+    se = check_recovery(pooled, a, b)
+    # six frames: about sqrt(6) times smaller standard errors
+    assert se[0] < 0.6 * single.covariance[()][0, 0].sqrt()
+    # streaming in batches of 1, 4 or all frames gives the same fit
+    with optix.config(batch=4):
+        four = PoissonGaussian(data_range=(0, 1000), pooled=True).fit(y)
+    with optix.config(batch=1):
+        one = PoissonGaussian(data_range=(0, 1000), pooled=True).fit(y)
+    for other in (four, one):
+        assert other.estimates["sensor"].allclose(
+            pooled.estimates["sensor"], rtol=1e-6, atol=1e-6
+        )
+
+
+def test_temporal_differencing():
+    y, a, b, _ = synthetic(2.0, 5.0, 50.0, clip=(0.0, 1000.0), frames=5)
+    est = PoissonGaussian(data_range=(0, 1000), differencing=True).fit(y)
+    check_recovery(est, a, b)
+    pooled = PoissonGaussian(
+        data_range=(0, 1000), differencing=True, pooled=True
+    )
+    with optix.config(batch=3):  # pairs split across chunks
+        pooled.fit(y)
+    check_recovery(pooled, a, b)
+
+
+def test_groups_and_layout():
+    ya, a1, b1, _ = synthetic(0.5, 1.5, 100.0, seed=0)
+    yb, a2, b2, _ = synthetic(2.0, 5.0, 50.0, seed=3)
+    data = torch.stack([ya[0], yb[0]], -1)  # y x c
+    lay = Layout("yxc", spatial="yx", group="c")
+    est = PoissonGaussian(data_range=WIDE).fit(labeled(data, lay))
+    s = est.estimates["sensor"]
+    assert s.gain.shape == (2, 1, 1)
+    check_recovery(est, a1, b1, (0,))
+    check_recovery(est, a2, b2, (1,))
+
+
+def test_options_and_errors():
+    assert PoissonGaussian(faithful=False).options["pooled"] is True
+    with pytest.raises(ValueError, match="incompatible"):
+        PoissonGaussian(robust=True, pooled=True)
+    y = torch.zeros(1, 4, 4, 4)
+    with pytest.raises(ValueError, match="two spatial"):
+        PoissonGaussian().fit(y, layout=Layout("tzyx", spatial="zyx"))
+    with pytest.raises(ValueError, match="empty data range"):
+        PoissonGaussian().fit(torch.zeros(1, 32, 32))
+
+
+def test_integer_data_range():
+    y, *_ = synthetic(0.5, 1.5, 100.0, clip=(0.0, 1000.0))
+    est = PoissonGaussian().fit(y.round().to(torch.int16))
+    assert est.estimates["sensor"].meta["data_range"] == {
+        "[]": [-32768.0, 32767.0]
+    }

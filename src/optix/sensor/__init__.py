@@ -9,8 +9,10 @@ from ._foi import (
     sensor_estimate,
     to_normalized,
 )
+from ._poisson_gaussian import PoissonGaussian
 
 __all__ = [
+    "PoissonGaussian",
     "SegmentStats",
     "clipped_normal_moments",
     "from_normalized",

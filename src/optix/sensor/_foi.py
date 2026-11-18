@@ -1,34 +1,26 @@
 """Plumbing for the Poisson-Gaussian fit of Foi et al. (2008).
 
-Reference: A. Foi, M. Trimeche, V. Katkovnik, K. Egiazarian, "Practical
-Poissonian-Gaussian noise modeling and fitting for single-image raw-data",
-IEEE TIP 17(10):1737-1754, 2008, doi:10.1109/TIP.2008.2001399.
-
-Status
-------
-Only the parts that do not depend on details of the paper are here:
+Paper-independent parts of the fit (the method itself is in
+`_foi_local`, `_foi_clip`, `_foi_fit` and [`PoissonGaussian`][]):
 
 - per-segment sufficient statistics that merge exactly across frames
-  (:class:`SegmentStats`), for pooling the fit over a stack;
+  ([`SegmentStats`][]), for pooling the fit over a stack;
 - the moments of a Gaussian censored at the clipping bounds
-  (:func:`clipped_normal_moments`), derived from first principles;
+  ([`clipped_normal_moments`][]), derived from first principles;
 - unit conversions between normalised and data units, and between the
-  ``(a, b)`` parametrisation and :class:`~optix.estimates.SensorEstimate`;
+  (a, b) parametrisation and
+  [`SensorEstimate`][optix.estimates.SensorEstimate];
 - loading of one frame per group under an arbitrary
-  :class:`~optix.io.Layout`.
-
-The wavelet decomposition, the segmentation, the local estimators and
-the likelihood are paper-specific. They will be implemented from the
-paper itself once it is available.
+  [`Layout`][optix.io.Layout].
 
 Model and units
 ---------------
-The variance of an observation ``z`` with expectation ``y`` (both in
-ADU) is ``sigma^2(y) = a * y + b``. With the camera model of
-:class:`~optix.estimates.SensorEstimate`, ``a = gain`` (ADU per
-electron) and ``b = variance - gain * offset`` (ADU^2): ``b`` is the
-variance extrapolated to ``y = 0`` ADU and is negative when the offset is
-large. Clipped data are ``clip(z, low, high)``.
+The variance of an observation z with expectation y (both in ADU) is
+σ²(y) = a·y + b. With the camera model of
+[`SensorEstimate`][optix.estimates.SensorEstimate], a = gain (ADU per
+electron) and b = variance − gain·offset (ADU²): b is the variance
+extrapolated to y = 0 ADU and is negative when the offset is large.
+Clipped data are clip(z, low, high).
 """
 
 import math
@@ -54,32 +46,32 @@ __all__ = [
 
 
 class SegmentStats:
-    """Mergeable per-segment statistics of ``(value, noise)`` pairs.
+    """Mergeable per-segment statistics of `(value, noise)` pairs.
 
-    For each segment ``i`` (for example a level set), this accumulates
-    the count ``n_i``, the mean of ``value`` (for example approximation
+    For each segment `i` (for example a level set), this accumulates
+    the count `n_i`, the mean of `value` (for example approximation
     coefficients, giving the local mean) and the mean and variance of
-    ``noise`` (for example detail coefficients, giving the local standard
+    `noise` (for example detail coefficients, giving the local standard
     deviation).
 
     Parameters
     ----------
     segments : int
-        Number of segments; labels are in ``[0, segments)``.
+        Number of segments; labels are in `[0, segments)`.
 
     Attributes
     ----------
     value : Moments
-        Order-1 moments of ``value``, with state of shape ``(segments,)``.
+        Order-1 moments of `value`, with state of shape `(segments,)`.
     noise : Moments
-        Order-2 moments of ``noise``, with state of shape ``(segments,)``.
+        Order-2 moments of `noise`, with state of shape `(segments,)`.
 
     Notes
     -----
     Each update computes the segment sums in float64 (temporaries the
     size of the selected entries only) and centres the noise on its
     segment mean before squaring. It then merges them with Pebay's
-    pairwise formulas (:class:`optix.stats.Moments`). The result does not
+    pairwise formulas ([`Moments`][optix.stats.Moments]). The result does not
     depend on chunking, up to round-off, and is the same for float32 and
     float64 inputs, up to their precision.
 
@@ -111,9 +103,9 @@ class SegmentStats:
         ----------
         labels : Tensor
             Integer segment of each entry. Entries outside
-            ``[0, segments)`` are ignored.
+            `[0, segments)` are ignored.
         value, noise : Tensor
-            Same shape as ``labels``.
+            Same shape as `labels`.
         mask : Tensor, optional
             Boolean; False entries are ignored.
 
@@ -144,7 +136,7 @@ class SegmentStats:
         return self
 
     def merge(self, other: "SegmentStats") -> "SegmentStats":
-        """Merge another :class:`SegmentStats` (same number of segments)."""
+        """Merge another [`SegmentStats`][] (same number of segments)."""
         if other.segments != self.segments:
             raise ValueError("Cannot merge SegmentStats of different sizes")
         self.value.merge(other.value)
@@ -168,14 +160,14 @@ class SegmentStats:
         return self
 
     def result(self, min_count: int = 2) -> dict[str, Tensor]:
-        """Statistics of the segments with at least ``min_count`` entries.
+        """Statistics of the segments with at least `min_count` entries.
 
         Returns
         -------
         dict
-            ``segment`` (labels, int64), ``count``, ``mean`` (of
-            ``value``), ``noise_mean`` and ``std`` (sample standard
-            deviation of ``noise``, ``ddof=1``), all float64 and of the
+            `segment` (labels, int64), `count`, `mean` (of
+            `value`), `noise_mean` and `std` (sample standard
+            deviation of `noise`, `ddof=1`), all float64 and of the
             same length.
         """
         if self.empty:
@@ -211,24 +203,22 @@ def clipped_normal_moments(
     low: float | None = 0.0,
     high: float | None = 1.0,
 ) -> tuple[Tensor, Tensor]:
-    """Mean and standard deviation of ``clip(z, low, high)``.
+    """Mean and standard deviation of `clip(z, low, high)`.
 
-    The variable is ``z ~ N(mean, std^2)``. With ``t ~ N(0, 1)``,
-    ``alpha = (low - mean) / std`` and ``beta = (high - mean) / std``,
-    ``clip(z) = mean + std * clip(t, alpha, beta)``, and::
+    The variable is z ~ 𝒩(μ, σ²), with μ = `mean` and σ = `std`. With
+    t ~ 𝒩(0, 1), α = (low − μ)/σ and β = (high − μ)/σ,
+    clip(z) = μ + σ·clip(t, α, β), and
 
-        m  = E[clip(t)]   = alpha Phi(alpha) + beta Phi(-beta)
-                            + phi(alpha) - phi(beta)
-        s2 = E[clip(t)^2] = alpha^2 Phi(alpha) + beta^2 Phi(-beta)
-                            + Phi(beta) - Phi(alpha)
-                            + alpha phi(alpha) - beta phi(beta)
-        E[clip(z)]   = mean + std * m
-        Var[clip(z)] = std^2 * (s2 - m^2)
+        m  = E[clip(t)]  = α Φ(α) + β Φ(−β) + φ(α) − φ(β)
+        s² = E[clip(t)²] = α² Φ(α) + β² Φ(−β) + Φ(β) − Φ(α)
+                           + α φ(α) − β φ(β)
+        E[clip(z)]   = μ + σ m
+        Var[clip(z)] = σ² (s² − m²)
 
     Parameters
     ----------
     mean, std : Tensor
-        Parameters of the unclipped Gaussian (``std > 0``).
+        Parameters of the unclipped Gaussian (`std > 0`).
     low, high : float or None
         Clipping bounds (None: no clipping on that side).
 
@@ -239,11 +229,10 @@ def clipped_normal_moments(
 
     Notes
     -----
-    Writing the moments about ``mean`` in units of ``std`` avoids the
-    cancellation of ``E[z^2] - E[z]^2`` when clipping is negligible: then
-    ``m -> 0`` and ``s2 -> 1``. ``Phi(-beta)`` is used instead of
-    ``1 - Phi(beta)``. Compute in float64 when nearly every sample is
-    clipped, because ``s2 - m^2`` then cancels.
+    Writing the moments about μ in units of σ avoids the cancellation
+    of E[z²] − E[z]² when clipping is negligible: then m → 0 and
+    s² → 1. Φ(−β) is used instead of 1 − Φ(β). Compute in float64 when
+    nearly every sample is clipped, because s² − m² then cancels.
     """
     mean, std = torch.broadcast_tensors(
         torch.as_tensor(mean), torch.as_tensor(std).to(mean)
@@ -273,9 +262,9 @@ def clipped_normal_moments(
 def to_normalized(
     a: float, b: float, low: float, scale: float
 ) -> tuple[float, float]:
-    """``(a, b)`` in the units of ``(z - low) / scale``.
+    """(a, b) in the units of z′ = (z − low)/scale.
 
-    ``sigma'^2(y') = (a / scale) y' + (a low + b) / scale^2``.
+    σ′²(y′) = (a/scale)·y′ + (a·low + b)/scale².
     """
     return a / scale, (a * low + b) / scale**2
 
@@ -283,7 +272,7 @@ def to_normalized(
 def from_normalized(
     a: float, b: float, low: float, scale: float
 ) -> tuple[float, float]:
-    """Inverse of :func:`to_normalized` (back to data units)."""
+    """Inverse of [`to_normalized`][] (back to data units)."""
     an = a * scale
     return an, b * scale**2 - an * low
 
@@ -295,25 +284,25 @@ def sensor_estimate(
     *,
     meta: dict | None = None,
 ) -> SensorEstimate:
-    """:class:`SensorEstimate` for ``sigma^2(y) = a y + b`` (ADU).
+    """[`SensorEstimate`][optix.estimates.SensorEstimate] for σ²(y) = a·y + b.
 
     Parameters
     ----------
     a : Tensor or float
         Slope of the variance function, i.e. the gain (ADU per electron).
     b : Tensor or float
-        Variance at ``y = 0`` ADU (ADU^2).
+        Variance at y = 0 ADU (ADU²).
     offset : Tensor or float, optional
-        Known camera offset (ADU). ``(a, b)`` alone do not determine it.
+        Known camera offset (ADU). (a, b) alone do not determine it.
 
     Returns
     -------
     SensorEstimate
-        ``gain = a`` and ``variance = b + a * offset``. Without an
-        offset, ``offset = 0``, ``variance = b`` and
-        ``meta["offset_estimated"] = False``. ``noise_variance(mean)`` is
-        then still exactly ``a * mean + b``, but ``variance`` is not the
-        read-noise variance.
+        `gain = a`. With an offset, `variance = b + a·offset` (the
+        read-noise variance). Without one, `offset = None` (not
+        estimated) and `variance = b`, the variance extrapolated to
+        0 ADU, which is negative when the offset is large;
+        `meta["offset_estimated"] = False`.
     """
     a = torch.as_tensor(a)
     b = torch.as_tensor(b).to(a)
@@ -321,17 +310,16 @@ def sensor_estimate(
     meta.setdefault("units", "ADU")
     if offset is None:
         meta["offset_estimated"] = False
-        offset = torch.zeros_like(a)
-    else:
-        meta.setdefault("offset_estimated", True)
-        offset = torch.as_tensor(offset).to(a)
+        return SensorEstimate(offset=None, variance=b, gain=a, meta=meta)
+    meta.setdefault("offset_estimated", True)
+    offset = torch.as_tensor(offset).to(a)
     return SensorEstimate(
         offset=offset, variance=b + a * offset, gain=a, meta=meta
     )
 
 
 def integer_range(dtype: object) -> tuple[float, float]:
-    """``(min, max)`` of an integer dtype (torch or numpy-like)."""
+    """`(min, max)` of an integer dtype (torch or numpy-like)."""
     if isinstance(dtype, torch.dtype):
         info = torch.iinfo(dtype)
     else:
@@ -340,7 +328,7 @@ def integer_range(dtype: object) -> tuple[float, float]:
 
 
 def group_frames(
-    Y: ArrayLike,
+    data: ArrayLike,
     layout: Layout | None = None,
     frame: int = 0,
     *,
@@ -351,9 +339,9 @@ def group_frames(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
     layout : Layout, optional
-        Default: that of a labelled ``Y``, else ``(*samples, H, W)``.
+        Default: that of a labelled `data`, else `(*samples, H, W)`.
     frame : int
         Index of the frame in the flattened sample axes (storage order).
 
@@ -365,14 +353,14 @@ def group_frames(
         The frame, with its spatial axes in layout order. Only this frame
         is read.
     """
-    raw = Y.array if isinstance(Y, Labeled) else Y
+    raw = data.array if isinstance(data, Labeled) else data
     if layout is None:
         layout = (
-            Y.layout
-            if isinstance(Y, Labeled)
-            else Layout.default(len(Y.shape), 2)
+            data.layout
+            if isinstance(data, Labeled)
+            else Layout.default(len(data.shape), 2)
         )
-    shape = tuple(int(s) for s in Y.shape)
+    shape = tuple(int(s) for s in data.shape)
     gpos, spos, xpos = layout.positions(len(shape))
     sshape = tuple(shape[p] for p in spos)
     nsamples = math.prod(sshape)
