@@ -461,13 +461,16 @@ class Estimator:
         *,
         ndim: int = 2,
         overhead: float = 2.0,
+        contiguous: bool = False,
     ) -> WritableArrayLike:
         """Apply ``fn(chunk, batch)`` to frame batches and store the results.
 
         ``batch`` is ``(n, *spatial)``; ``chunk.group`` selects the
         parameters of a ``(*group, *spatial)`` map. ``fn`` returns a tensor
         of the shape of ``batch``, written back with ``chunk.store``.
-        In-place use (``out is Y``) is safe: chunks are owned.
+        In-place use (``out is Y``) is safe: chunks are owned. ``batch``
+        is a strided view unless ``contiguous`` (see
+        :func:`optix.io.frame_batches`).
         """
         raw = Y.array if isinstance(Y, Labeled) else Y
         out = prepare_out(out, tuple(Y.shape), like=raw, dtype=self.dtype)
@@ -475,6 +478,7 @@ class Estimator:
             Y,
             ndim=None if isinstance(Y, Labeled) else ndim,
             overhead=overhead,
+            contiguous=contiguous,
             align=chunks_of(out),
             dtype=self.dtype,
             device=self.device,
@@ -493,8 +497,12 @@ class Estimator:
         halo: int | Sequence[int],
         block: Sequence[int | None] | None = None,
         pad: str | None = None,
+        contiguous: bool = False,
     ) -> WritableArrayLike:
         """Apply ``fn`` to blocks with a halo and store the cropped cores.
+
+        ``contiguous=True`` hands ``fn`` dense blocks (FFTs, convolutions;
+        see :func:`optix.io.blocks`).
 
         Raises
         ------
@@ -516,6 +524,7 @@ class Estimator:
             block,
             halo,
             pad=pad,
+            contiguous=contiguous,
             align=chunks_of(out),
             dtype=self.dtype,
             device=self.device,
