@@ -196,7 +196,9 @@ def _is_bool(dtype: object) -> bool:
 
 def _round_clamp(value: Tensor, lo: int, hi: int) -> Tensor:
     """Round and clamp floats into [lo, hi] without wrap-around."""
-    if value.dtype not in (torch.float16, torch.float32, torch.float64):
+    # float16 / bfloat16 cannot represent the bounds of wide integer types
+    # (65504 is the float16 maximum): work in float32 at least.
+    if value.dtype not in (torch.float32, torch.float64):
         value = value.to(torch.float32)
     npdt = _numpy_dtype(value.dtype)
     flo, fhi = np.array(lo, dtype=npdt), np.array(hi, dtype=npdt)
@@ -210,6 +212,15 @@ def _round_clamp(value: Tensor, lo: int, hi: int) -> Tensor:
     return value.round().clamp(flo, fhi)
 
 
+def _clamp_integer(value: Tensor, lo: int, hi: int) -> Tensor:
+    """Clamp integers into [lo, hi] so that a narrowing cast cannot wrap."""
+    info = torch.iinfo(value.dtype)
+    lo, hi = max(lo, info.min), min(hi, info.max)
+    if lo == info.min and hi == info.max:
+        return value
+    return value.clamp(lo, hi)
+
+
 def _cast_for(value: Tensor, dtype: object) -> Tensor:
     """Prepare `value` (on its device) for writing into `dtype`."""
     if dtype is None:
@@ -220,6 +231,10 @@ def _cast_for(value: Tensor, dtype: object) -> Tensor:
         bounds = _integer_info(dtype)
         if bounds is not None:
             return _round_clamp(value, *bounds)
+    elif value.dtype != torch.bool and not value.dtype.is_complex:
+        bounds = _integer_info(dtype)
+        if bounds is not None:
+            return _clamp_integer(value, *bounds)
     return value
 
 
@@ -239,9 +254,12 @@ def store(out: WritableArrayLike, index: Index, value: Tensor) -> None:
     -----
     Floating values written to an integer output are rounded and clamped
     to the output's range on the value's device, before the transfer (a
-    raw cast wraps around); NaN becomes 0. Floating values written to a
-    boolean output become ``value != 0``. An output without a ``dtype``
-    receives the values as they are.
+    raw cast wraps around); NaN becomes 0. Floating values of less than
+    single precision (float16, bfloat16) are promoted to float32 first.
+    Integer values written to a narrower integer output are clamped to
+    its range in the same way, instead of wrapping around. Floating values
+    written to a boolean output become ``value != 0``. An output without a
+    ``dtype`` receives the values as they are.
     """
     value = value.detach()
     if isinstance(out, Tensor):
