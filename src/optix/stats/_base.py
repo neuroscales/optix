@@ -171,7 +171,8 @@ def reduce(
         group axes: use :func:`reduce_groups`.
     **chunk_options
         Forwarded to :func:`optix.io.frame_batches` (``overhead``,
-        ``memory``, ``batch``, ``dtype``, ``device``, ``prefetch``, ...).
+        ``memory``, ``batch``, ``dtype``, ``device``, ``prefetch``,
+        ``contiguous``, ...).
 
     Returns
     -------
