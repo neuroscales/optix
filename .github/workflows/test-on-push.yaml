@@ -18,3 +18,22 @@ permissions:
 jobs:
   tests:
     uses: ./.github/workflows/test.yaml
+
+  tests-no-compile:
+    uses: ./.github/workflows/test.yaml
+    with:
+      optix-compile: "0"
+
+  tests-float64:
+    uses: ./.github/workflows/test.yaml
+    with:
+      optix-dtype: float64
+
+  tests-newest:
+    uses: ./.github/workflows/test.yaml
+    # continue-on-error is not allowed on a reusable-workflow call, so
+    # it is set on the called job through the allow-failure input
+    with:
+      allow-failure: true
+      python-version: "3.14"
+      pytorch-version: latest
