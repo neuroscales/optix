@@ -1,0 +1,20 @@
+name: Coverage on push
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - src/**
+      - tests/**
+      - setup.py
+      - pyproject.toml
+      - .github/workflows/coverage*.yaml
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    uses: ./.github/workflows/coverage.yaml

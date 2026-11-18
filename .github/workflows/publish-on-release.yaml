@@ -1,0 +1,17 @@
+name: Publish to PyPI on release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    uses: ./.github/workflows/publish-pypi.yaml
+    with:
+      tag: ${{ github.ref }}
+      test: false
+    secrets:
+      password: ${{ secrets.PYPI_TOKEN }}
