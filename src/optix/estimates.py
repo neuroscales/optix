@@ -13,9 +13,11 @@ Conventions
 - Gains are in ADU per electron (EMVA 1288 ``K``).
 - Flat fields are stored as produced by the algorithm;
   ``meta["flat_norm"]`` records the normalisation (``"mean"`` or
-  ``"geomean"``) and :meth:`ShadingEstimate.normalize` converts.
+  ``"geomean"``) and
+  [`ShadingEstimate.normalize`][optix.estimates.ShadingEstimate.normalize]
+  converts.
 - Data-sized outputs (class probabilities, corrected stacks) are never
-  stored in an estimate: they come from ``Estimator.apply(Y, out=)``.
+  stored in an estimate: they come from ``Estimator.apply(data, out=)``.
 """
 
 import copy
@@ -144,7 +146,7 @@ class Estimate:
 
     @classmethod
     def from_dict(cls, d: dict[str, object]) -> Self:
-        """Inverse of :meth:`to_dict`."""
+        """Inverse of [`to_dict`][optix.estimates.Estimate.to_dict]."""
         return cls(**d)
 
     def _payload(self) -> dict[str, object]:
@@ -179,7 +181,10 @@ class Estimate:
 
     @classmethod
     def load(cls, path: str | os.PathLike) -> Self:
-        """Load an estimate saved with :meth:`save` (``weights_only``)."""
+        """Load an estimate saved with [`save`][optix.estimates.Estimate.save].
+
+        Loading uses ``weights_only``.
+        """
         payload = torch.load(path, weights_only=True)
         return cls._from_payload(payload)
 
@@ -196,7 +201,7 @@ def _need(estimate: Estimate, *names: str) -> None:
 class SensorEstimate(Estimate):
     """Camera model ``y = offset + gain * n + e``.
 
-    ``n ~ Poisson(electrons)`` and ``e ~ N(0, variance)``. The Foi
+    ``n ∼ Poisson(electrons)`` and ``e ∼ N(0, variance)``. The Foi
     parametrisation is derived, not stored: ``a = gain``,
     ``b = variance - gain * offset``.
 
@@ -205,7 +210,7 @@ class SensorEstimate(Estimate):
     offset : Tensor, optional
         Camera offset in ADU; scalar or (H, W).
     variance : Tensor, optional
-        Read-noise variance in ADU^2.
+        Read-noise variance in ADU².
     gain : Tensor, optional
         ADU per electron; scalar or (H, W).
     defective : Tensor, optional
@@ -283,7 +288,7 @@ class Classification(Estimate):
     """Class model summary (provisional).
 
     Per-voxel probabilities are data-sized and come from
-    ``apply(Y, out=)``; only the class model is stored here.
+    ``apply(data, out=)``; only the class model is stored here.
 
     Attributes
     ----------

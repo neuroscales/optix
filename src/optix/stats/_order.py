@@ -14,7 +14,7 @@ _MAX_KTHVALUE = 4
 
 
 def tile_reduce(
-    Y: ArrayLike,
+    data: ArrayLike,
     fn: Callable[[Tensor], Tensor | tuple[Tensor, ...]],
     *,
     ndim: int | None = None,
@@ -26,7 +26,7 @@ def tile_reduce(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
         Data.
     fn : callable
         Takes a ``(rows, *rest, N)`` tile (spatial axes in layout order,
@@ -35,13 +35,13 @@ def tile_reduce(
     ndim : int, optional
         Without a layout: number of trailing spatial dims (default 2).
     layout : Layout, optional
-        Axis roles (see :func:`optix.io.row_tiles`). Tiles are cut along
-        the first spatial axis.
+        Axis roles (see [`row_tiles`][optix.io.row_tiles]). Tiles are cut
+        along the first spatial axis.
     overhead : float
         Chunk-sized temporaries held by ``fn`` (see
-        :func:`optix.io.chunk_length`).
+        [`chunk_length`][optix.io.chunk_length]).
     **chunk_options
-        Forwarded to :func:`optix.io.row_tiles`.
+        Forwarded to [`row_tiles`][optix.io.row_tiles].
 
     Returns
     -------
@@ -49,7 +49,12 @@ def tile_reduce(
         Full ``(*group, *spatial)`` maps, on the working device.
     """
     tiles = row_tiles(
-        Y, ndim=ndim, layout=layout, axis=0, overhead=overhead, **chunk_options
+        data,
+        ndim=ndim,
+        layout=layout,
+        axis=0,
+        overhead=overhead,
+        **chunk_options,
     )
     shape = tiles.group_shape + tiles.spatial_shape
     nspatial = len(tiles.spatial_shape)
@@ -57,9 +62,9 @@ def tile_reduce(
     single = False
     with torch.no_grad():
         for chunk in tiles:
-            data = chunk.data
-            rest = data.shape[data.ndim - nspatial :]
-            tile = data.reshape(-1, *rest).movedim(0, -1)
+            block = chunk.data
+            rest = block.shape[block.ndim - nspatial :]
+            tile = block.reshape(-1, *rest).movedim(0, -1)
             result = fn(tile)
             if isinstance(result, Tensor):
                 single, result = True, (result,)
@@ -75,15 +80,15 @@ def tile_reduce(
     return outs[0] if single else tuple(outs)
 
 
-def _nsamples(Y: ArrayLike, ndim: int | None, layout: Layout | None) -> int:
-    source, layout = bind(Y, layout, ndim)
+def _nsamples(data: ArrayLike, ndim: int | None, layout: Layout | None) -> int:
+    source, layout = bind(data, layout, ndim)
     if layout is None:
         layout = Layout.default(len(source.shape), 2 if ndim is None else ndim)
     return nsamples(source, layout)
 
 
 def order_statistics(
-    Y: ArrayLike,
+    data: ArrayLike,
     k: int | Sequence[int],
     *,
     ndim: int | None = None,
@@ -94,14 +99,15 @@ def order_statistics(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
         Data.
     k : int or sequence of int
         1-based rank(s), as in ``torch.kthvalue``.
     ndim, layout : optional
-        See :func:`tile_reduce`.
+        See [`tile_reduce`][optix.stats.tile_reduce].
     **kw
-        Forwarded to :func:`tile_reduce` / :func:`optix.io.row_tiles`.
+        Forwarded to [`tile_reduce`][optix.stats.tile_reduce] /
+        [`row_tiles`][optix.io.row_tiles].
 
     Returns
     -------
@@ -114,14 +120,14 @@ def order_statistics(
     3 then). ``torch.quantile`` is not used: it rejects large inputs.
     NaNs give undefined results.
     """
-    n = _nsamples(Y, ndim, layout)
+    n = _nsamples(data, ndim, layout)
     ks = [k] if isinstance(k, int) else [int(i) for i in k]
     for i in ks:
         if not 1 <= i <= n:
             raise ValueError(f"k={i} out of range [1, {n}]")
     if isinstance(k, int):
         return tile_reduce(
-            Y,
+            data,
             lambda t: t.kthvalue(k, -1).values,
             ndim=ndim,
             layout=layout,
@@ -139,11 +145,11 @@ def order_statistics(
             s = t.sort(-1).values
             return tuple(s[..., i - 1] for i in ks)
 
-    return torch.stack(tile_reduce(Y, fn, ndim=ndim, layout=layout, **kw))
+    return torch.stack(tile_reduce(data, fn, ndim=ndim, layout=layout, **kw))
 
 
 def median_mad(
-    Y: ArrayLike,
+    data: ArrayLike,
     *,
     ndim: int | None = None,
     layout: Layout | None = None,
@@ -153,21 +159,22 @@ def median_mad(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
         Data.
     ndim, layout : optional
-        See :func:`tile_reduce`.
+        See [`tile_reduce`][optix.stats.tile_reduce].
     **kw
-        Forwarded to :func:`tile_reduce` / :func:`optix.io.row_tiles`.
+        Forwarded to [`tile_reduce`][optix.stats.tile_reduce] /
+        [`row_tiles`][optix.io.row_tiles].
 
     Returns
     -------
     median, mad : (*group, *spatial) Tensor
         Lower median (rank ``(N + 1) // 2``, as ``torch.median``) and the
-        lower median of ``|Y - median|``, unscaled (multiply by 1.4826 for
+        lower median of ``|data - median|``, unscaled (multiply by 1.4826 for
         a Gaussian standard deviation).
     """
-    n = _nsamples(Y, ndim, layout)
+    n = _nsamples(data, ndim, layout)
     if n < 1:
         raise ValueError("No data to reduce")
     k = (n + 1) // 2
@@ -178,4 +185,4 @@ def median_mad(
         mad = (t - med.unsqueeze(-1)).abs().kthvalue(k, -1).values
         return med, mad
 
-    return tile_reduce(Y, fn, ndim=ndim, layout=layout, **kw)
+    return tile_reduce(data, fn, ndim=ndim, layout=layout, **kw)

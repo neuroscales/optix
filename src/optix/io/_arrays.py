@@ -44,7 +44,7 @@ class ArrayLike(Protocol):
 
 @runtime_checkable
 class WritableArrayLike(ArrayLike, Protocol):
-    """An :class:`ArrayLike` that also supports ``__setitem__``."""
+    """An [`ArrayLike`][optix.io.ArrayLike] that supports ``__setitem__``."""
 
     def __setitem__(self, index: Index, value: object) -> None: ...
 

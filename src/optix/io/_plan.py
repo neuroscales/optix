@@ -69,9 +69,9 @@ def plan_grid(
         Shape of the source.
     specs : sequence of (int, int) or None
         Per axis: None to iterate it one integer index at a time, or
-        ``(block, halo)`` with ``block >= 1`` and ``halo >= 0``.
+        ``(block, halo)`` with ``block ≥ 1`` and ``halo ≥ 0``.
     pad : bool
-        See :func:`plan_blocks`.
+        See ``plan_blocks``.
     order : sequence of int, optional
         Nesting of the iteration, outermost axis first (default: C order).
 

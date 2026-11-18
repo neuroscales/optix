@@ -14,21 +14,21 @@ def gauss_hermite(
     dtype: torch.dtype | str | None = None,
     device: torch.device | str | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """Gauss-Hermite nodes and log-weights for the weight ``exp(-x^2)``.
+    """Gauss-Hermite nodes and log-weights for the weight exp(−x²).
 
     Computed with the Golub-Welsch algorithm: the nodes are the eigenvalues
     of the symmetric Jacobi matrix of the (physicists') Hermite
-    polynomials, and the weights are ``sqrt(pi) * v0^2`` where ``v0`` holds
-    the first components of the normalised eigenvectors. Here the
-    (equivalent) Christoffel formula ``w_i = 1 / (n p_{n-1}(x_i)^2)`` is
-    used, with ``p_k`` the orthonormal Hermite polynomials, because tiny
+    polynomials, and the weights are √π · v₀² where v₀ holds the first
+    components of the normalised eigenvectors. Here the (equivalent)
+    Christoffel formula wᵢ = 1 / (n pₙ₋₁(xᵢ)²) is used, with pₖ the
+    orthonormal Hermite polynomials, because tiny
     eigenvector components are not accurate in floating point. Everything
     runs in float64 on the CPU; the results are then cast and moved.
 
     Parameters
     ----------
     n : int
-        Number of nodes (>= 1).
+        Number of nodes (≥ 1).
     dtype, device : optional
         Output dtype and device (default: from the configuration).
 
@@ -42,13 +42,11 @@ def gauss_hermite(
 
     Notes
     -----
-    ``sum(exp(logw) * f(nodes))`` approximates
-    ``integral f(x) exp(-x^2) dx``, exactly for polynomials of degree
-    ``<= 2n - 1``. For a Gaussian expectation use the change of variables
-    ``x = mu + sqrt(2) * s * t``::
+    ∑ exp(``logw``) · f(``nodes``) ≈ ∫ f(x) exp(−x²) dx, exactly for
+    polynomials of degree ≤ 2n − 1. For a Gaussian expectation use the
+    change of variables x = μ + √2 σ t:
 
-        E_{N(mu, s^2)}[f] ~= sum(exp(logw) * f(mu + sqrt(2) * s * nodes))
-                             / sqrt(pi)
+        E[f(x)] ≈ (1/√π) ∑ exp(``logw``) · f(μ + √2 σ ``nodes``),  x ∼ N(μ, σ²)
     """
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")

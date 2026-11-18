@@ -24,17 +24,9 @@ class Reservoir(Reducer):
     smallest keys again, so merging is exact and the sample is exactly
     uniform.
 
-    Parameters
-    ----------
-    size : int
-        Maximum number of values kept.
-    seed : int, optional
-        Seed of the random keys. Samples are reproducible for a fixed seed
-        **and a fixed chunking** only.
-
     Attributes
     ----------
-    values : (<= size,) Tensor
+    values : (≤ size,) Tensor
         Sampled values (flattened, in no particular order).
     seen : int
         Number of values seen (after masking).
@@ -43,11 +35,11 @@ class Reservoir(Reducer):
     -----
     Once the reservoir is full, with ``kmax`` its largest key, a value is
     only kept if its key is below ``kmax``. A float32 Bernoulli mask with
-    probability ``q``, the smallest power of two ``>= kmax / 2^62`` (and
-    ``>= 2^-24``, so that it is exact in float32), selects candidates, and
-    int64 keys are drawn uniformly in ``[0, q 2^62)`` for those only; keys
-    ``>= kmax`` are then discarded. Each value thus gets a key uniform in
-    ``[0, kmax)`` with probability exactly ``kmax / 2^62``, as if a key had
+    probability ``q``, the smallest power of two ≥ ``kmax`` / 2⁶² (and
+    ≥ 2⁻²⁴, so that it is exact in float32), selects candidates, and
+    int64 keys are drawn uniformly in [0, ``q`` 2⁶²) for those only; keys
+    ≥ ``kmax`` are then discarded. Each value thus gets a key uniform in
+    [0, ``kmax``) with probability exactly ``kmax`` / 2⁶², as if a key had
     been drawn for every value, without a chunk-sized int64 temporary.
 
     Each update synchronises with the host (boolean indexing and reading
@@ -61,6 +53,16 @@ class Reservoir(Reducer):
     _state = ("values", "keys", "count")
 
     def __init__(self, size: int, *, seed: int | None = None) -> None:
+        """Create an empty reservoir.
+
+        Parameters
+        ----------
+        size : int
+            Maximum number of values kept.
+        seed : int, optional
+            Seed of the random keys. Samples are reproducible for a fixed
+            seed **and a fixed chunking** only.
+        """
         if size < 1:
             raise ValueError(f"size must be >= 1, got {size}")
         super().__init__(dim=None)
@@ -136,7 +138,7 @@ class Reservoir(Reducer):
         return self
 
     def merge(self, other: "Reservoir") -> Self:
-        """Merge another :class:`Reservoir` (exact)."""
+        """Merge another [`Reservoir`][optix.stats.Reservoir] (exact)."""
         state = self._other_state(other)
         if state["values"] is None:
             return self

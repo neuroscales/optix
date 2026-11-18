@@ -18,15 +18,15 @@ def dct_basis(
 ) -> Tensor:
     """Orthonormal DCT-II basis.
 
-    ``B[i, j] = c_j cos(pi (i + 1/2) j / n)`` with ``c_0 = sqrt(1/n)`` and
-    ``c_j = sqrt(2/n)``. Built in float64, then cast.
+    B[i, j] = cⱼ cos(π (i + ½) j / n) with c₀ = √(1/n) and cⱼ = √(2/n)
+    for j ≥ 1. Built in float64, then cast.
 
     Parameters
     ----------
     n : int
         Number of samples.
     k : int, optional
-        Number of (lowest-frequency) basis functions, ``<= n``.
+        Number of (lowest-frequency) basis functions, ≤ n.
         Default: ``n``.
     dtype, device : optional
         Output dtype and device (default: from the configuration).
@@ -34,7 +34,7 @@ def dct_basis(
     Returns
     -------
     (n, k) Tensor
-        Basis functions in columns, ``B.T @ B == I``.
+        Basis functions in columns, Bᵀ B = I.
     """
     k = n if k is None else k
     if not 0 < k <= n:
@@ -60,15 +60,15 @@ def dct_bending(
     """Diagonal regulariser of a separable DCT-II basis.
 
     Energy of the ``order``-th derivatives of each separable basis
-    function ``prod_d B_d[:, j_d]``. The DCT-II functions diagonalise the
+    function ∏_d B_d[:, j_d]. The DCT-II functions diagonalise the
     discrete Laplacian with reflecting (Neumann) boundaries, with
-    eigenvalues ``lambda_j = (2 - 2 cos(pi j / n)) / h^2`` (``h`` =
-    spacing). The energy of the order-``m`` derivatives (sum over all
-    ordered derivative multi-indices) is then ``(sum_d lambda_{j_d})^m``:
-    ``m = 1`` is the membrane energy and ``m = 2`` the bending energy.
+    eigenvalues λⱼ = (2 − 2 cos(π j / n)) / h² (h = spacing). The energy
+    of the order-m derivatives (sum over all ordered derivative
+    multi-indices) is then (∑_d λ_{j_d})ᵐ: m = 1 is the membrane energy
+    and m = 2 the bending energy.
 
     The discrete eigenvalues are used (rather than the continuous
-    ``(pi j / (n h))^2``) so that, for ``order=1``, the penalty equals the
+    (π j / (n h))²) so that, for ``order=1``, the penalty equals the
     finite-difference energy exactly; both agree at low frequencies.
 
     Parameters
@@ -130,12 +130,13 @@ def project(x: Tensor, bases: Sequence[Tensor]) -> Tensor:
     x : (..., n1, ..., nd) Tensor
         Signal.
     bases : sequence of (n_i, k_i) Tensor
-        One basis per trailing dim (e.g. from :func:`dct_basis`).
+        One basis per trailing dim (e.g. from
+        [`dct_basis`][optix.basis.dct_basis]).
 
     Returns
     -------
     (..., k1, ..., kd) Tensor
-        Coefficients ``x x_1 B_1^T ... x_d B_d^T``.
+        Coefficients ``x`` ×₁ B₁ᵀ ⋯ ×_d B_dᵀ.
     """
     return _apply(x, bases, transpose=True)
 
@@ -153,6 +154,6 @@ def reconstruct(coef: Tensor, bases: Sequence[Tensor]) -> Tensor:
     Returns
     -------
     (..., n1, ..., nd) Tensor
-        Signal ``coef x_1 B_1 ... x_d B_d``.
+        Signal ``coef`` ×₁ B₁ ⋯ ×_d B_d.
     """
     return _apply(coef, bases, transpose=False)

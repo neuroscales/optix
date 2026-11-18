@@ -124,29 +124,33 @@ class Distribution:
 
     **Parameterisations.** A family declares several parameterisations
     (``_forms``: tuples of parameter names). An object stores exactly the
-    tensors of the one it was built with (:attr:`form`) and derives every
-    other parameter on demand (:meth:`_derive`), e.g. the precision of a
+    tensors of the one it was built with
+    ([`form`][optix.distributions.Distribution.form]) and derives every
+    other parameter on demand (``_derive``), e.g. the precision of a
     Normal given by its variance. ``params()`` returns the canonical
     parameterisation (``_canonical``), which is what the
-    :mod:`~optix.distributions.functional` kernels take.
+    [`functional`][optix.distributions.functional] kernels take.
 
-    Later families declare their forms the same way, e.g. (sketch)::
+    Later families declare their forms the same way, e.g. (sketch):
 
-        class MultivariateNormal(Distribution):
-            _forms = {
-                ("mean", "covariance"): (1, 2),
-                ("mean", "precision"): (1, 2),
-                ("mean", "scale_tril"): (1, 2),
-                ("mean", "precision_tril"): (1, 2),
-            }
-            _canonical = ("mean", "precision_tril")
-            _event_ndim = 1
-            # _check_events: mean (K,) against matrices (K, K)
-            # _derive("precision_tril"): cholesky / flip trick, ...
+    ```python
+    class MultivariateNormal(Distribution):
+        _forms = {
+            ("mean", "covariance"): (1, 2),
+            ("mean", "precision"): (1, 2),
+            ("mean", "scale_tril"): (1, 2),
+            ("mean", "precision_tril"): (1, 2),
+        }
+        _canonical = ("mean", "precision_tril")
+        _event_ndim = 1
+        # _check_events: mean (K,) against matrices (K, K)
+        # _derive("precision_tril"): cholesky / flip trick, ...
 
-        class Wishart(Distribution):
-            _forms = {("df", "scale"): (0, 2), ("df", "rate"): (0, 2),
-                      ("df", "mean"): (0, 2)}   # mean = df * scale
+
+    class Wishart(Distribution):
+        _forms = {("df", "scale"): (0, 2), ("df", "rate"): (0, 2),
+                  ("df", "mean"): (0, 2)}   # mean = df * scale
+    ```
 
     and a conjugate update returns the form in which it is additive (a
     Wishart posterior in ``(df, rate)``).
@@ -175,7 +179,8 @@ class Distribution:
     a floating-point tensor.
 
     Objects are immutable by convention. Values are not checked unless
-    ``validate=True`` is passed or :meth:`validate` is called (both
+    ``validate=True`` is passed or
+    [`validate`][optix.distributions.Distribution.validate] is called (both
     synchronise with the host).
     """
 
@@ -298,7 +303,7 @@ class Distribution:
     # -- parameters ------------------------------------------------------
     @property
     def _raw(self) -> tuple[Tensor, ...]:
-        """Stored tensors, in :attr:`form` order."""
+        """Stored tensors, in ``form`` order."""
         return self._stored
 
     @_raw.setter
@@ -365,7 +370,8 @@ class Distribution:
         return tuple(self._get(n) for n in self._canonical)
 
     def stored(self) -> tuple[Tensor, ...]:
-        """Stored parameters (in :attr:`form` order), unexpanded."""
+        """Stored parameters, unexpanded, in
+        [`form`][optix.distributions.Distribution.form] order."""
         return self._raw
 
     def validate(self) -> Self:
@@ -419,7 +425,7 @@ class Distribution:
         ----------
         batch_shape : sequence of int
             Target batch shape, broadcast-compatible with
-            :attr:`batch_shape`.
+            [`batch_shape`][optix.distributions.Distribution.batch_shape].
 
         Returns
         -------
@@ -515,7 +521,7 @@ class Distribution:
 
     @property
     def variance(self) -> Tensor:
-        """``Var[x]`` (elementwise / marginal)."""
+        """Var[x] (elementwise / marginal)."""
         raise self._unsupported("variance")
 
     def entropy(self) -> Tensor:
@@ -527,20 +533,22 @@ class Distribution:
         raise self._unsupported("log_prob")
 
     def natural_params(self) -> tuple[Tensor, ...]:
-        """Natural parameters, ordered like :meth:`expected_stats`."""
+        """Natural parameters, ordered like
+        [`expected_stats`][optix.distributions.Distribution.expected_stats]."""
         raise self._unsupported("natural_params")
 
     def log_normalizer(self) -> Tensor:
-        """Log-normalizer ``A(eta)``, shape ``batch_shape``."""
+        """Log-normalizer A(η), shape ``batch_shape``."""
         raise self._unsupported("log_normalizer")
 
     def expected_stats(self) -> NamedTuple:
-        """``E[T(x)]``, ordered like :meth:`natural_params`."""
+        """E[T(x)], ordered like
+        [`natural_params`][optix.distributions.Distribution.natural_params]."""
         raise self._unsupported("expected_stats")
 
     @classmethod
     def from_natural(cls, *eta: Tensor) -> Self:
-        """Distribution with natural parameters ``eta``."""
+        """Distribution with natural parameters ``eta`` (η)."""
         raise NotImplementedError(
             f"{cls.__name__} does not implement from_natural"
         )
@@ -558,7 +566,7 @@ class Distribution:
         return self._event_shape
 
     def _kl_event_desc(self) -> str:
-        """What :meth:`_kl_event_shape` is, for error messages."""
+        """What ``_kl_event_shape`` is, for error messages."""
         return f"event_shape {_fmt(self._event_shape)}"
 
     def _check_value_shape(self, value: Tensor) -> torch.Size:
@@ -584,11 +592,13 @@ class Distribution:
 
     # -- sugar -----------------------------------------------------------
     def sample(self, sample_shape: Sequence[int] = ()) -> Tensor:
-        """Samples (no gradient), delegated to :meth:`to_torch`."""
+        """Samples (no gradient), delegated to
+        [`to_torch`][optix.distributions.Distribution.to_torch]."""
         return self.to_torch().sample(torch.Size(sample_shape))
 
     def rsample(self, sample_shape: Sequence[int] = ()) -> Tensor:
-        """Reparameterised samples, delegated to :meth:`to_torch`."""
+        """Reparameterised samples, delegated to
+        [`to_torch`][optix.distributions.Distribution.to_torch]."""
         return self.to_torch().rsample(torch.Size(sample_shape))
 
     def kl(self, other: "Distribution") -> Tensor:
@@ -639,7 +649,7 @@ def _register_posterior(
 
 
 def kl_divergence(q: Distribution, p: Distribution) -> Tensor:
-    """``KL(q || p)``, elementwise over the broadcast batch shape.
+    """KL(q ‖ p), elementwise over the broadcast batch shape.
 
     Parameters
     ----------

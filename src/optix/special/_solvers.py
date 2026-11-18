@@ -12,7 +12,7 @@ _EULER = 0.5772156649015329
 
 
 def log_minus_digamma(a: Tensor) -> Tensor:
-    """``log(a) - digamma(a)``, elementwise, without cancellation.
+    """ln a − ψ(a), elementwise, without cancellation.
 
     Parameters
     ----------
@@ -22,10 +22,10 @@ def log_minus_digamma(a: Tensor) -> Tensor:
     Returns
     -------
     Tensor
-        ``log(a) - digamma(a)``. For ``a > 10`` the asymptotic series
-        ``1/(2a) + 1/(12a^2) - 1/(120a^4) + 1/(252a^6)`` is used, which
-        keeps full relative precision where the direct difference loses
-        its digits.
+        ln a − ψ(a). For a > 10 the asymptotic series
+        1/(2a) + 1/(12a²) − 1/(120a⁴) + 1/(252a⁶) is used, which keeps
+        full relative precision where the direct difference loses its
+        digits.
     """
     a = torch.as_tensor(a)
     big = a > 10
@@ -39,7 +39,7 @@ def log_minus_digamma(a: Tensor) -> Tensor:
 
 
 def _inv_minus_trigamma(a: Tensor) -> Tensor:
-    """``1/a - trigamma(a)``, using the asymptotic series for large a."""
+    """1/a − ψ′(a), using the asymptotic series for large a."""
     inv = 1 / a
     inv2 = inv * inv
     series = -inv2 * (0.5 + inv * (1 / 6 - inv2 * (1 / 30 - inv2 / 42)))
@@ -48,33 +48,45 @@ def _inv_minus_trigamma(a: Tensor) -> Tensor:
 
 
 def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
-    """Solve ``log(nu) - digamma(nu) = c`` for ``nu > 0``, elementwise.
+    """Solve ln ν − ψ(ν) = c for ν > 0, elementwise.
 
     This is the maximum-likelihood equation of the Gamma shape, with
-    ``c = log(mean(x)) - mean(log(x)) > 0`` (the Jensen gap).
+    c = ln x̄ − mean(ln x) > 0 (the Jensen gap).
 
     Parameters
     ----------
     c : Tensor
-        Right-hand side. Values ``<= 0`` (which round-off can produce) are
-        clamped to ``eps / 2``, which caps ``nu`` at about ``1 / eps`` of
-        the dtype. Values above ``1 / eps`` (including ``inf``) are clamped
-        to ``1 / eps``, which keeps ``nu >= ~eps`` and the result finite.
+        Right-hand side. Values ≤ 0 (which round-off can produce) are
+        clamped to ε / 2, which caps ν at about 1 / ε, where ε is the
+        machine epsilon of the dtype. Values above 1 / ε (including
+        ``inf``) are clamped to 1 / ε, which keeps ν ≳ ε and the result
+        finite.
     niter : int
         Number of Newton iterations.
 
     Returns
     -------
     Tensor
-        Shape parameter ``nu``, same shape and dtype as ``c``.
+        Shape parameter ν, same shape and dtype as ``c``.
 
     Notes
     -----
     Uses Minka's initialisation
-    ``nu = (3 - c + sqrt((c - 3)^2 + 24 c)) / (12 c)`` and Newton's method
-    on ``1 / nu`` (Minka, "Estimating a Gamma distribution", 2002). For
-    ``nu > 10`` the residual and its derivative use asymptotic series, which
-    avoids the cancellation in ``log(nu) - digamma(nu)``.
+    ν = (3 − c + √((c − 3)² + 24c)) / (12c) and Newton's method on 1/ν.
+    For ν > 10 the residual and its derivative use asymptotic series,
+    which avoids the cancellation in ln ν − ψ(ν).
+
+    !!! references "References"
+        1. Minka T. *Estimating a Gamma distribution.* 2002.
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @misc{minka2002gamma,
+              author = {Minka, T.},
+              title = {Estimating a Gamma distribution},
+              year = {2002}
+            }
+            ```
     """
     c = torch.as_tensor(c)
     if not c.is_floating_point():
@@ -97,19 +109,20 @@ def inv_digamma(y: Tensor, niter: int = 5) -> Tensor:
     Parameters
     ----------
     y : Tensor
-        Values of ``digamma(x)``.
+        Values of ψ(x).
     niter : int
         Number of Newton iterations.
 
     Returns
     -------
     Tensor
-        ``x > 0`` such that ``digamma(x) == y``.
+        x > 0 such that ψ(x) = ``y``.
 
     Notes
     -----
-    Minka's initialisation: ``exp(y) + 1/2`` for ``y >= -2.22``, else
-    ``-1 / (y + euler_gamma)``; then Newton's method.
+    Minka's initialisation: exp(y) + ½ for y ≥ −2.22, else
+    −1 / (y + γ) with γ the Euler-Mascheroni constant; then Newton's
+    method.
     """
     y = torch.as_tensor(y)
     if not y.is_floating_point():
@@ -133,10 +146,10 @@ def dirichlet_elog(alpha: Tensor) -> Tensor:
     Returns
     -------
     (..., K) Tensor
-        ``E[log pi] = digamma(alpha) - digamma(sum(alpha))``, computed as
-        ``log(alpha / a0) - lmd(alpha) + lmd(a0)`` with
-        ``lmd = log_minus_digamma``, which does not cancel for large
-        concentrations.
+        E[ln π] = ψ(α) − ψ(α₀) with α₀ = ∑ αₖ, computed as
+        ln(α / α₀) − lmd(α) + lmd(α₀) with lmd =
+        [`log_minus_digamma`][optix.special.log_minus_digamma], which does
+        not cancel for large concentrations.
     """
     a0 = alpha.sum(-1, keepdim=True)
     return (
@@ -147,10 +160,9 @@ def dirichlet_elog(alpha: Tensor) -> Tensor:
 def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     """Dirichlet maximum likelihood given expected log-probabilities.
 
-    Maximises ``log Gamma(sum a) - sum log Gamma(a) + sum (a - 1) elogpi``
-    over ``a > 0`` with Newton's method, using the diagonal-plus-rank-one
-    structure of the Hessian (Minka, "Estimating a Dirichlet
-    distribution", 2000).
+    Maximises ln Γ(∑ aₖ) − ∑ ln Γ(aₖ) + ∑ (aₖ − 1) ``elogpi``ₖ over a > 0
+    with Newton's method, using the diagonal-plus-rank-one structure of
+    the Hessian.
 
     Parameters
     ----------
@@ -171,13 +183,25 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     -----
     Whenever a Newton step would make any component of a vector
     non-positive, that vector takes the fixed-point update
-    ``a = inv_digamma(digamma(sum a) + elogpi)`` instead, which always
-    stays positive (and is also taken when the Newton step is not finite).
+    a = ψ⁻¹(ψ(∑ aₖ) + ``elogpi``) instead, which always stays positive
+    (and is also taken when the Newton step is not finite).
 
     Convergence is only local: Newton's method needs a warm start (for
     example the previous estimate) to converge in a few iterations, and
     from a poor initial guess it may need many iterations or settle on
     the slower fixed-point steps.
+
+    !!! references "References"
+        1. Minka T. *Estimating a Dirichlet distribution.* 2000.
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @misc{minka2000dirichlet,
+              author = {Minka, T.},
+              title = {Estimating a Dirichlet distribution},
+              year = {2000}
+            }
+            ```
     """
     elogpi, alpha = torch.broadcast_tensors(elogpi, alpha)
     alpha = alpha.to(elogpi.dtype)

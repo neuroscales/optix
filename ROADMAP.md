@@ -52,7 +52,7 @@ The docs build an "assumption × target" table from that metadata.
 
 ### Conventions every estimator follows
 
-- `fit(Y) -> self`, `apply(Y, out=None)`, results as dataclasses; `Y` is any array-like with
+- `fit(data) -> self`, `apply(data, out=None)`, results as dataclasses; `data` is any array-like with
   `.shape` and slicing (numpy, zarr, tensor), only ever loaded batch by batch.
 - `faithful=True` (default) reproduces the published algorithm, including its preprocessing
   and default hyper-parameters. Every extension is an explicit keyword argument that is off

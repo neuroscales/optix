@@ -80,7 +80,7 @@ def chunk_length(
     Returns
     -------
     int
-        Number of items, >= 1.
+        Number of items, ≥ 1.
     """
     if memory is None and batch is None:
         memory = get_config().memory
@@ -227,23 +227,25 @@ class Chunk(tuple):
     """One loaded chunk.
 
     Unpacks as ``(index, data)``, or ``(index, data, inner)`` for
-    :func:`blocks`.
+    [`blocks`][optix.io.blocks].
 
     Attributes
     ----------
     index : Index
         Region of the core in the source, in storage order (full-length:
         ints and slices). ``out[index] = ...`` is only valid for the default
-        layout and a chunk spanning one sample axis: use :meth:`store`.
+        layout and a chunk spanning one sample axis: use
+        [`store`][optix.io.Chunk.store].
     data : Tensor
         Loaded data, owned by the consumer; a strided view in layout
         order unless the iterator was built with ``contiguous=True``.
-        :func:`frame_batches`:
-        ``(n, *spatial)``; :func:`row_tiles`: ``(*sample, *spatial)``;
-        :func:`blocks`: ``(*spatial)`` core + halo. Spatial axes are in
-        layout order, sample axes in storage order.
+        [`frame_batches`][optix.io.frame_batches]: ``(n, *spatial)``;
+        [`row_tiles`][optix.io.row_tiles]: ``(*sample, *spatial)``;
+        [`blocks`][optix.io.blocks]: ``(*spatial)`` core + halo. Spatial
+        axes are in layout order, sample axes in storage order.
     inner : Index or None
-        Crop of ``data`` that gives the core (:func:`blocks` only).
+        Crop of ``data`` that gives the core ([`blocks`][optix.io.blocks]
+        only).
     group : tuple of int
         Position along the group axes (layout order).
     samples : tuple of slice
@@ -330,11 +332,11 @@ class Chunk(tuple):
         Parameters
         ----------
         out : writable array-like
-            Destination (a :class:`~optix.io.Labeled` is unwrapped).
+            Destination (a [`Labeled`][optix.io.Labeled] is unwrapped).
         result : Tensor
             Shaped like ``data`` along the sample and spatial axes (see
-            ``into``). For :func:`blocks`, a result of the loaded shape is
-            cropped to the core.
+            ``into``). For [`blocks`][optix.io.blocks], a result of the loaded
+            shape is cropped to the core.
         into : {"source", "map", "samples"}
             ``"source"``: ``out`` has the shape of the source, in storage
             order, and ``result`` is ``(n, *spatial)`` (or ``data``'s
@@ -397,10 +399,11 @@ class Chunk(tuple):
 class Chunks:
     """Re-iterable, sized sequence of lazily loaded chunks.
 
-    Built by :func:`frame_batches`, :func:`row_tiles` and :func:`blocks`.
+    Built by [`frame_batches`][optix.io.frame_batches],
+    [`row_tiles`][optix.io.row_tiles] and [`blocks`][optix.io.blocks].
     Sizes and the backend are resolved at construction, so iterating twice
     gives identical chunks and ``len()`` is exact. Items are
-    :class:`Chunk`.
+    [`Chunk`][optix.io.Chunk].
 
     Every yielded data tensor is owned by the consumer: it may be modified
     in place and never aliases the source. It is a permuted (strided) view
@@ -413,7 +416,7 @@ class Chunks:
     layout : Layout
         Layout of the source (the default one when none was given).
     group_shape, sample_shape, spatial_shape : tuple of int
-        See :meth:`Layout.shape_of`.
+        See [`Layout.shape_of`][optix.io.Layout.shape_of].
     """
 
     def __init__(
@@ -529,16 +532,16 @@ def _check_ndim(shape: tuple[int, ...], ndim: int) -> None:
         raise ValueError(
             f"Data of shape {shape} have fewer than ndim + 1 = {ndim + 1} "
             f"dims. Data must be laid out as (*batch, frames, *spatial); "
-            f"add a frame axis (e.g. Y[None]) if there is a single frame, "
+            f"add a frame axis (e.g. data[None]) if there is a single frame, "
             f"or pass a `layout`."
         )
 
 
 def _layout_for(
-    Y: ArrayLike, layout: Layout | None, ndim: int | None
+    data: ArrayLike, layout: Layout | None, ndim: int | None
 ) -> tuple[ArrayLike, Layout]:
     """Raw source and layout (default: ``ndim`` trailing spatial dims)."""
-    source, layout = bind(Y, layout, ndim)
+    source, layout = bind(data, layout, ndim)
     if layout is None:
         ndim = 2 if ndim is None else ndim
         shape = tuple(int(s) for s in source.shape)
@@ -577,7 +580,7 @@ def _amplification(
 
 
 def frame_batches(
-    Y: ArrayLike,
+    data: ArrayLike,
     *,
     ndim: int | None = None,
     layout: Layout | None = None,
@@ -594,22 +597,22 @@ def frame_batches(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
         Source data.
     ndim : int, optional
         Without a layout: number of trailing spatial dims (default 2); the
         leading dims are samples (``(*batch, frames, *spatial)``).
     layout : Layout, optional
-        Axis roles (default: that of a :class:`Labeled` ``Y``, else
-        ``Layout.default(Y.ndim, ndim)``).
+        Axis roles (default: that of a [`Labeled`][optix.io.Labeled]
+        ``data``, else ``Layout.default(data.ndim, ndim)``).
     overhead : float
         Number of chunk-sized temporaries the consumer holds (see
-        :func:`chunk_length`).
+        [`chunk_length`][optix.io.chunk_length]).
     memory, batch, prefetch : optional
         Chunk budget in bytes, explicit frame count, and read-ahead depth
         (default: configuration).
     align : sequence of int, optional
-        Storage chunks to align to (default: ``chunks_of(Y)``). Pass
+        Storage chunks to align to (default: ``chunks_of(data)``). Pass
         ``chunks_of(out)`` when writing to a chunked output.
     dtype, device : optional
         Working backend.
@@ -624,10 +627,10 @@ def frame_batches(
     Returns
     -------
     Chunks
-        Yields :class:`Chunk` items, unpacking as ``(index, data)``:
-        ``data`` is ``(n, *spatial)``, the sample axes being flattened in
-        storage order and the spatial axes in layout order. Write a result
-        back with ``chunk.store(out, result)``.
+        Yields [`Chunk`][optix.io.Chunk] items, unpacking as
+        ``(index, data)``: ``data`` is ``(n, *spatial)``, the sample axes
+        being flattened in storage order and the spatial axes in layout
+        order. Write a result back with ``chunk.store(out, result)``.
 
     Notes
     -----
@@ -638,7 +641,7 @@ def frame_batches(
     iterated one index at a time. A warning is emitted when the read
     amplification over the group and sample axes is large.
     """
-    source, layout = _layout_for(Y, layout, ndim)
+    source, layout = _layout_for(data, layout, ndim)
     opt = _resolve(source, memory, batch, prefetch, dtype, device, align)
     shape = opt["shape"]
     view = _View(shape, layout, flatten=True)
@@ -707,7 +710,7 @@ def _spatial_axis(axis: int | str, layout: Layout, spatial: tuple) -> int:
 
 
 def row_tiles(
-    Y: ArrayLike,
+    data: ArrayLike,
     *,
     ndim: int | None = None,
     layout: Layout | None = None,
@@ -725,23 +728,24 @@ def row_tiles(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
         Source data.
     ndim, layout
-        See :func:`frame_batches`.
+        See [`frame_batches`][optix.io.frame_batches].
     axis : int or str
         Spatial axis along which strips are cut: a position among the
         spatial axes in layout order (negative allowed), or a name.
     overhead, memory, batch, align, dtype, device, prefetch, contiguous
-        See :func:`frame_batches`. With ``batch``, a tile holds about as
-        many elements as ``batch`` frames.
+        See [`frame_batches`][optix.io.frame_batches]. With ``batch``, a
+        tile holds about as many elements as ``batch`` frames.
 
     Returns
     -------
     Chunks
-        Yields :class:`Chunk` items, unpacking as ``(index, data)``:
-        ``data`` is ``(*sample, *spatial)`` (sample axes in storage order,
-        not flattened; spatial axes in layout order, cut along ``axis``).
+        Yields [`Chunk`][optix.io.Chunk] items, unpacking as
+        ``(index, data)``: ``data`` is ``(*sample, *spatial)`` (sample
+        axes in storage order, not flattened; spatial axes in layout order,
+        cut along ``axis``).
         Store a per-pixel reduction with ``chunk.store(map, r,
         into="map")``.
 
@@ -751,7 +755,7 @@ def row_tiles(
     read amplification is computed and a warning is emitted when it is
     large.
     """
-    source, layout = _layout_for(Y, layout, ndim)
+    source, layout = _layout_for(data, layout, ndim)
     opt = _resolve(source, memory, batch, prefetch, dtype, device, align)
     shape = opt["shape"]
     view = _View(shape, layout, flatten=False)
@@ -837,7 +841,7 @@ def _auto_block(
 
 
 def blocks(
-    Y: ArrayLike,
+    data: ArrayLike,
     block: Sequence[int | None] | None = None,
     halo: int | Sequence[int] = 0,
     *,
@@ -856,7 +860,7 @@ def blocks(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
         Source data.
     block : sequence of int or None, optional
         Core block size along each spatial axis (layout order); ``None``
@@ -865,14 +869,14 @@ def blocks(
         blocked dims are the spatial axes of the layout, or without one the
         trailing ``len(halo)`` dims (all dims if ``halo`` is a scalar), and
         the size is chosen automatically: starting from the full extents,
-        the largest dim is halved until ``prod(block + 2 * halo) *
+        the largest dim is halved until ``∏(block + 2 * halo) *
         overhead`` fits the budget, then sizes are aligned to storage
         chunks. Group and sample axes are iterated one index at a time.
     halo : int or sequence of int
         Halo width along each blocked dim.
     layout : Layout, optional
-        Axis roles (default: that of a :class:`Labeled` ``Y``, else as
-        described above).
+        Axis roles (default: that of a [`Labeled`][optix.io.Labeled]
+        ``data``, else as described above).
     pad : {None, "reflect", "replicate", "zeros"}
         None: halos are clipped at the array boundary, so edge blocks are
         smaller and the algorithm applies its own boundary condition, as it
@@ -882,23 +886,24 @@ def blocks(
         large as the loaded extent, replicate padding is used along that
         dim instead (with a warning at construction).
     overhead, memory, batch, align, dtype, device, prefetch, contiguous
-        See :func:`frame_batches`. With ``batch``, the budget is ``batch``
-        frames of the last two spatial axes.
+        See [`frame_batches`][optix.io.frame_batches]. With ``batch``, the
+        budget is ``batch`` frames of the last two spatial axes.
 
     Returns
     -------
     Chunks
-        Yields :class:`Chunk` items, unpacking as ``(index, data, inner)``:
-        ``data`` is core + halo with the spatial axes in layout order,
-        ``data[inner]`` is the core, and ``index`` is where the core lives
-        in ``Y``. ``chunk.store(out, result)`` crops and writes back.
+        Yields [`Chunk`][optix.io.Chunk] items, unpacking as
+        ``(index, data, inner)``: ``data`` is core + halo with the spatial
+        axes in layout order, ``data[inner]`` is the core, and ``index`` is
+        where the core lives in ``data``. ``chunk.store(out, result)``
+        crops and writes back.
 
     Notes
     -----
-    Writing results back into ``Y`` itself is wrong when ``halo > 0`` (a
+    Writing results back into ``data`` itself is wrong when ``halo > 0`` (a
     block's halo would read already-processed neighbours).
     """
-    source, layout = bind(Y, layout)
+    source, layout = bind(data, layout)
     shape = tuple(int(s) for s in source.shape)
     if pad is not None and pad not in _PAD_MODES:
         raise ValueError(f"pad must be None or one of {_PAD_MODES}")

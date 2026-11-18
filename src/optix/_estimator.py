@@ -197,23 +197,8 @@ class Estimator:
     ``recommended`` presets, spell out their options as keyword-only
     parameters defaulting to None, and call
     ``self._resolve(faithful, locals())``. They implement ``_fit`` and
-    ``_apply``; the public :meth:`fit` / :meth:`apply` run them under
-    ``torch.no_grad()``.
-
-    Parameters
-    ----------
-    faithful : bool
-        Selects the preset of defaults: ``paper`` when True,
-        ``recommended`` when False. Explicit option values always win.
-    dtype, device : optional
-        Working backend (default: configuration; the device follows a
-        Tensor input when unset).
-    layout : Layout, optional
-        Axis roles of the data (see :class:`optix.io.Layout`); can also be
-        given to :meth:`fit`, or carried by a labelled array. Default:
-        ``(*samples, H, W)``.
-    **options
-        Hyper-parameters (the base's view of the subclass's options).
+    ``_apply``; the public [`fit`][optix.Estimator.fit] /
+    [`apply`][optix.Estimator.apply] run them under ``torch.no_grad()``.
 
     Attributes
     ----------
@@ -222,20 +207,21 @@ class Estimator:
     is_faithful : bool
         Whether the resolved options equal the paper preset.
     estimates : dict of str to Estimate
-        Results of :meth:`fit`, e.g. ``{"sensor": ..., "shading": ...}``.
-        Parameter maps are shaped ``(*group, *spatial)``, spatial axes in
-        layout order.
+        Results of [`fit`][optix.Estimator.fit], e.g.
+        ``{"sensor": ..., "shading": ...}``. Parameter maps are shaped
+        ``(*group, *spatial)``, spatial axes in layout order.
     layout : Layout or None
-        Layout used by the last :meth:`fit` (or given at construction);
-        :meth:`apply` uses it for plain arrays.
+        Layout used by the last [`fit`][optix.Estimator.fit] (or given at
+        construction); [`apply`][optix.Estimator.apply] uses it for plain
+        arrays.
     history : History
 
     Notes
     -----
-    Subclasses receive a :class:`optix.io.Labeled` array in ``_fit`` /
+    Subclasses receive a [`Labeled`][optix.io.Labeled] array in ``_fit`` /
     ``_apply`` whenever a layout is set, so that the io and stats helpers
-    pick it up; :meth:`_layout_of` and :meth:`_map_shape` give the layout
-    (default included) and the shape of the parameter maps.
+    pick it up; ``_layout_of`` and ``_map_shape`` give the layout (default
+    included) and the shape of the parameter maps.
     """
 
     tags: ClassVar[Tags]
@@ -256,6 +242,23 @@ class Estimator:
         layout: Layout | None = None,
         **options: object,
     ) -> None:
+        """Set up the working backend and resolve the options.
+
+        Parameters
+        ----------
+        faithful : bool
+            Selects the preset of defaults: ``paper`` when True,
+            ``recommended`` when False. Explicit option values always win.
+        dtype, device : optional
+            Working backend (default: configuration; the device follows a
+            Tensor input when unset).
+        layout : Layout, optional
+            Axis roles of the data (see [`Layout`][optix.io.Layout]); can
+            also be given to [`fit`][optix.Estimator.fit], or carried by a
+            labelled array. Default: ``(*samples, H, W)``.
+        **options
+            Hyper-parameters (the base's view of the subclass's options).
+        """
         if layout is not None and not isinstance(layout, Layout):
             raise TypeError(f"layout must be a Layout, got {layout!r}")
         self.dtype = _parse_dtype(dtype)
@@ -288,7 +291,7 @@ class Estimator:
     # -- public API ------------------------------------------------------
     def fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         layout: Layout | None = None,
         init: object = None,
@@ -299,10 +302,10 @@ class Estimator:
 
         Parameters
         ----------
-        Y : array-like or Labeled
+        data : array-like or Labeled
             Data; ``(*samples, H, W)`` without a layout.
         layout : Layout, optional
-            Axis roles (default: that of a labelled ``Y``, else the one
+            Axis roles (default: that of a labelled ``data``, else the one
             given at construction). Stored in ``self.layout``.
         init : Estimate, sequence of Estimate, or Estimator, optional
             Initial values (cloned; the caller's objects are not modified).
@@ -317,18 +320,18 @@ class Estimator:
             is reset at the start of each call.
         """
         self.history = History()
-        if isinstance(Y, Labeled):
-            if layout is not None and layout != Y.layout:
+        if isinstance(data, Labeled):
+            if layout is not None and layout != data.layout:
                 raise ValueError(
                     f"layout={layout!r} conflicts with the layout of the "
-                    f"labelled array, {Y.layout!r}"
+                    f"labelled array, {data.layout!r}"
                 )
-            layout = Y.layout
+            layout = data.layout
         layout = self.layout if layout is None else layout
-        Y = self._labeled(Y, layout)
+        data = self._labeled(data, layout)
         self.layout = layout
         with torch.no_grad():
-            self._fit(Y, init=init, callback=callback, verbose=verbose)
+            self._fit(data, init=init, callback=callback, verbose=verbose)
         meta = {
             "estimator": type(self).__name__,
             "version": __version__,
@@ -340,31 +343,31 @@ class Estimator:
         return self
 
     def apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None = None
+        self, data: ArrayLike, out: WritableArrayLike | None = None
     ) -> WritableArrayLike:
         """Apply the fitted model (e.g. correct the data).
 
         Parameters
         ----------
-        Y : array-like or Labeled
+        data : array-like or Labeled
             Data, in the layout of the fit (unless labelled otherwise).
         out : writable array-like, optional
             Output (tensor, numpy, zarr, memmap...). Default: a new tensor
-            on the device of ``Y`` if it is a Tensor, else on the CPU.
+            on the device of ``data`` if it is a Tensor, else on the CPU.
 
         Returns
         -------
         writable array-like
             ``out``.
         """
-        if not isinstance(Y, Labeled):
-            Y = self._labeled(Y, self.layout)
+        if not isinstance(data, Labeled):
+            data = self._labeled(data, self.layout)
         with torch.no_grad():
-            return self._apply(Y, out)
+            return self._apply(data, out)
 
     def _fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         init: object,
         callback: Callable | None,
@@ -373,30 +376,30 @@ class Estimator:
         raise NotImplementedError
 
     def _apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None
+        self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
         raise NotImplementedError
 
     # -- helpers for subclasses ------------------------------------------
     @staticmethod
-    def _labeled(Y: ArrayLike, layout: Layout | None) -> ArrayLike:
-        """``Y`` labelled with ``layout`` (unchanged when None)."""
+    def _labeled(data: ArrayLike, layout: Layout | None) -> ArrayLike:
+        """``data`` labelled with ``layout`` (unchanged when None)."""
         if layout is None:
-            return Y
-        if isinstance(Y, Labeled):
-            return Y if Y.layout == layout else labeled(Y, layout)
-        return labeled(Y, layout)
+            return data
+        if isinstance(data, Labeled):
+            return data if data.layout == layout else labeled(data, layout)
+        return labeled(data, layout)
 
     @staticmethod
-    def _layout_of(Y: ArrayLike, ndim: int = 2) -> Layout:
-        """Layout of ``Y`` (the default one with ``ndim`` spatial dims)."""
-        if isinstance(Y, Labeled):
-            return Y.layout
-        return Layout.default(len(Y.shape), ndim)
+    def _layout_of(data: ArrayLike, ndim: int = 2) -> Layout:
+        """Layout of ``data`` (the default one with ``ndim`` spatial dims)."""
+        if isinstance(data, Labeled):
+            return data.layout
+        return Layout.default(len(data.shape), ndim)
 
-    def _map_shape(self, Y: ArrayLike, ndim: int = 2) -> tuple[int, ...]:
-        """Shape ``(*group, *spatial)`` of the parameter maps for ``Y``."""
-        return self._layout_of(Y, ndim).map_shape(Y)
+    def _map_shape(self, data: ArrayLike, ndim: int = 2) -> tuple[int, ...]:
+        """Shape ``(*group, *spatial)`` of the parameter maps for ``data``."""
+        return self._layout_of(data, ndim).map_shape(data)
 
     @staticmethod
     def _init_estimates(init: object) -> list[Estimate]:
@@ -455,7 +458,7 @@ class Estimator:
 
     def _apply_frames(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         out: WritableArrayLike | None,
         fn: Callable[[Chunk, Tensor], Tensor],
         *,
@@ -468,15 +471,15 @@ class Estimator:
         ``batch`` is ``(n, *spatial)``; ``chunk.group`` selects the
         parameters of a ``(*group, *spatial)`` map. ``fn`` returns a tensor
         of the shape of ``batch``, written back with ``chunk.store``.
-        In-place use (``out is Y``) is safe: chunks are owned. ``batch``
+        In-place use (``out is data``) is safe: chunks are owned. ``batch``
         is a strided view unless ``contiguous`` (see
-        :func:`optix.io.frame_batches`).
+        [`frame_batches`][optix.io.frame_batches]).
         """
-        raw = Y.array if isinstance(Y, Labeled) else Y
-        out = prepare_out(out, tuple(Y.shape), like=raw, dtype=self.dtype)
+        raw = data.array if isinstance(data, Labeled) else data
+        out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
         chunks = frame_batches(
-            Y,
-            ndim=None if isinstance(Y, Labeled) else ndim,
+            data,
+            ndim=None if isinstance(data, Labeled) else ndim,
             overhead=overhead,
             contiguous=contiguous,
             align=chunks_of(out),
@@ -490,7 +493,7 @@ class Estimator:
 
     def _apply_blocks(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         out: WritableArrayLike | None,
         fn: Callable[[Tensor], Tensor],
         *,
@@ -502,15 +505,15 @@ class Estimator:
         """Apply ``fn`` to blocks with a halo and store the cropped cores.
 
         ``contiguous=True`` hands ``fn`` dense blocks (FFTs, convolutions;
-        see :func:`optix.io.blocks`).
+        see [`blocks`][optix.io.blocks]).
 
         Raises
         ------
         ValueError
-            If ``out`` is (or shares memory with) ``Y`` while the halo is
+            If ``out`` is (or shares memory with) ``data`` while the halo is
             nonzero: halos would read already-processed neighbours.
         """
-        raw = Y.array if isinstance(Y, Labeled) else Y
+        raw = data.array if isinstance(data, Labeled) else data
         halos = [halo] if isinstance(halo, int) else list(halo)
         target = out.array if isinstance(out, Labeled) else out
         if any(halos) and out is not None and _shares_memory(target, raw):
@@ -518,9 +521,9 @@ class Estimator:
                 "In-place processing with a halo is not possible: use a "
                 "separate output."
             )
-        out = prepare_out(out, tuple(Y.shape), like=raw, dtype=self.dtype)
+        out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
         chunks = blocks(
-            Y,
+            data,
             block,
             halo,
             pad=pad,
@@ -557,7 +560,7 @@ class Estimator:
         return {}
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
-        """Restore what :meth:`_extra_state` returned."""
+        """Restore what ``_extra_state`` returned."""
 
     def state_dict(self) -> dict[str, object]:
         """Everything needed to rebuild the fitted estimator."""
@@ -573,7 +576,7 @@ class Estimator:
         }
 
     def load_state_dict(self, state: dict[str, object]) -> Self:
-        """Restore a :meth:`state_dict` (in place)."""
+        """Restore a [`state_dict`][optix.Estimator.state_dict] (in place)."""
         self.faithful = state["faithful"]
         self._resolve(self.faithful, state["options"])
         self.estimates = {

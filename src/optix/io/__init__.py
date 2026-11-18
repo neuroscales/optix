@@ -1,9 +1,9 @@
 """Lazy, chunked access to array-likes (Tensor, numpy, memmap, zarr, ...).
 
-Axis roles (spatial, sample, group) are declared with a :class:`Layout`,
-either attached to the data with :func:`labeled` or passed as
-``layout=``. Without one, data are ``(*samples, *spatial)`` with ``ndim``
-trailing spatial dims.
+Axis roles (spatial, sample, group) are declared with a
+[`Layout`][optix.io.Layout], either attached to the data with
+[`labeled`][optix.io.labeled] or passed as ``layout=``. Without one, data
+are ``(*samples, *spatial)`` with ``ndim`` trailing spatial dims.
 """
 
 from ._arrays import (

@@ -2,12 +2,12 @@
 
 The active configuration is the innermost ``with optix.config(...)`` block
 of the current context, else the process-wide defaults set with
-:func:`set_config` (seeded at import from ``OPTIX_*`` environment
+[`set_config`][optix.set_config] (seeded at import from ``OPTIX_*`` environment
 variables).
 
 Public entry points (iterator construction, ``fit``, ``apply``) read the
 configuration once and pass explicit values down; private kernels never
-call :func:`get_config`.
+call [`get_config`][optix.get_config].
 """
 
 import contextlib
@@ -255,8 +255,8 @@ def set_config(**options: object) -> None:
     Parameters
     ----------
     **options
-        Any field of :class:`Config`. Values are validated and normalised
-        (``"float64"`` -> ``torch.float64``, ``"1GiB"`` -> bytes, ...).
+        Any field of ``Config``. Values are validated and normalised
+        (``"float64"`` → ``torch.float64``, ``"1GiB"`` → bytes, ...).
 
     Raises
     ------
@@ -283,11 +283,6 @@ class config(contextlib.ContextDecorator):
     as a decorator. Overrides apply to the current thread / asyncio task
     only: threads started inside the block see the process-wide defaults.
 
-    Parameters
-    ----------
-    **options
-        Any field of :class:`Config`. Values are validated immediately.
-
     Notes
     -----
     Nesting works, and an instance may be re-entered (but not used
@@ -295,6 +290,13 @@ class config(contextlib.ContextDecorator):
     """
 
     def __init__(self, **options: object) -> None:
+        """Validate the overrides.
+
+        Parameters
+        ----------
+        **options
+            Any field of ``Config``. Values are validated immediately.
+        """
         self._options = _normalize(options)
         self._tokens: list[Token] = []
 

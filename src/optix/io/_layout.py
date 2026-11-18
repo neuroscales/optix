@@ -241,7 +241,7 @@ class Layout:
         Returns
         -------
         group_shape, sample_shape, spatial_shape : tuple of int
-            In the orders of :meth:`positions`.
+            In the orders of [`positions`][optix.io.Layout.positions].
         """
         shape = tuple(
             int(s)
@@ -263,7 +263,10 @@ class Layout:
         return group + sample + spatial
 
     def inverse_permutation(self, ndim: int) -> tuple[int, ...]:
-        """Inverse of :meth:`permutation` (canonical back to storage)."""
+        """Inverse of [`permutation`][optix.io.Layout.permutation].
+
+        Maps the canonical order back to storage.
+        """
         perm = self.permutation(ndim)
         inverse = [0] * ndim
         for i, p in enumerate(perm):
@@ -286,10 +289,12 @@ class Layout:
 
 
 class Labeled:
-    """An array-like bundled with its :class:`Layout` (never loaded).
+    """An array-like bundled with its [`Layout`][optix.io.Layout].
 
-    Built by :func:`labeled`. Indexing, ``shape`` and every other attribute
-    (``dtype``, ``chunks``, ...) pass through to the wrapped array.
+    The wrapped array is never loaded. Built by
+    [`labeled`][optix.io.labeled]. Indexing, ``shape`` and every other
+    attribute (``dtype``, ``chunks``, ...) pass through to the wrapped
+    array.
 
     Attributes
     ----------
@@ -299,6 +304,15 @@ class Labeled:
     """
 
     def __init__(self, array: ArrayLike, layout: Layout) -> None:
+        """Wrap ``array`` and check that ``layout`` fits its dims.
+
+        Parameters
+        ----------
+        array : array-like
+            The array to label.
+        layout : Layout
+            Axis roles of ``array``.
+        """
         layout.positions(len(array.shape))
         self.array = array
         self.layout = layout
@@ -333,7 +347,7 @@ class Labeled:
 
 
 def labeled(
-    Y: ArrayLike,
+    data: ArrayLike,
     layout: Layout | None = None,
     *,
     axes: str | Sequence[str] | None = None,
@@ -341,17 +355,19 @@ def labeled(
     sample: Role | None = None,
     group: Role | None = None,
 ) -> Labeled:
-    """Attach a :class:`Layout` to an array-like, without loading it.
+    """Attach a [`Layout`][optix.io.Layout] to an array-like.
+
+    The array is not loaded.
 
     Parameters
     ----------
-    Y : array-like
-        Tensor, ndarray, memmap, zarr, ... (or a :class:`Labeled`, which is
-        re-labelled).
+    data : array-like
+        Tensor, ndarray, memmap, zarr, ... (or a [`Labeled`][optix.io.Labeled],
+        which is re-labelled).
     layout : Layout, optional
         The layout. Mutually exclusive with the role keywords.
     axes, spatial, sample, group : optional
-        Build the layout in place (see :class:`Layout`).
+        Build the layout in place (see [`Layout`][optix.io.Layout]).
 
     Returns
     -------
@@ -360,8 +376,8 @@ def labeled(
     Examples
     --------
     >>> import numpy as np
-    >>> Y = labeled(np.zeros((40, 30, 500)), axes="zyx", spatial="yz")
-    >>> Y.shape, Y.layout.shape_of(Y)[2]
+    >>> data = labeled(np.zeros((40, 30, 500)), axes="zyx", spatial="yz")
+    >>> data.shape, data.layout.shape_of(data)[2]
     ((40, 30, 500), (30, 40))
     """
     roles = {
@@ -378,26 +394,26 @@ def labeled(
             raise TypeError("labeled() needs a `layout` or `spatial` axes")
         roles.setdefault("group", ())
         layout = Layout(**roles)
-    if isinstance(Y, Labeled):
-        Y = Y.array
-    return Labeled(Y, layout)
+    if isinstance(data, Labeled):
+        data = data.array
+    return Labeled(data, layout)
 
 
 def bind(
-    Y: ArrayLike, layout: Layout | None = None, ndim: int | None = None
+    data: ArrayLike, layout: Layout | None = None, ndim: int | None = None
 ) -> tuple[ArrayLike, Layout | None]:
-    """Unwrap a :class:`Labeled` and reconcile it with ``layout`` / ``ndim``.
+    """Unwrap a ``Labeled`` and reconcile it with ``layout`` / ``ndim``.
 
-    Returns the raw array and the explicit layout (None when neither ``Y``
+    Returns the raw array and the explicit layout (None when neither ``data``
     nor ``layout`` carries one: the caller then uses the default).
     """
-    if isinstance(Y, Labeled):
-        if layout is not None and layout != Y.layout:
+    if isinstance(data, Labeled):
+        if layout is not None and layout != data.layout:
             raise ValueError(
                 f"layout={layout!r} conflicts with the layout of the "
-                f"labelled array, {Y.layout!r}"
+                f"labelled array, {data.layout!r}"
             )
-        layout, Y = Y.layout, Y.array
+        layout, data = data.layout, data.array
     if layout is not None:
         if not isinstance(layout, Layout):
             raise TypeError(f"layout must be a Layout, got {layout!r}")
@@ -406,10 +422,10 @@ def bind(
                 f"ndim={ndim} conflicts with the {len(layout.spatial)} "
                 f"spatial axes of the layout"
             )
-        layout.positions(len(Y.shape))
-    return Y, layout
+        layout.positions(len(data.shape))
+    return data, layout
 
 
-def nsamples(Y: ArrayLike, layout: Layout) -> int:
+def nsamples(data: ArrayLike, layout: Layout) -> int:
     """Number of samples (product of the sample shape)."""
-    return math.prod(layout.shape_of(Y)[1])
+    return math.prod(layout.shape_of(data)[1])

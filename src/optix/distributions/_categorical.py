@@ -13,24 +13,13 @@ __all__ = ["Categorical", "CategoricalExpectations"]
 
 
 class CategoricalExpectations(NamedTuple):
-    """``E[onehot(z)]`` (the probabilities), like the natural parameters."""
+    """E[onehot(z)] (the probabilities), like the natural parameters."""
 
     x: Tensor
 
 
 class Categorical(Distribution):
     """Categorical distribution over ``K`` categories (event shape ``()``).
-
-    Parameters
-    ----------
-    probs : (*batch, K) Tensor, optional
-        Non-negative weights, normalised by their sum.
-    logits : (*batch, K) Tensor, optional
-        Log-weights, normalised by ``log_softmax``.
-    validate, cache, dtype, device
-        See :class:`Gamma`. ``validate=True`` also makes :meth:`log_prob`
-        check that integer labels are in range (kept by ``expand``,
-        indexing, ``to`` and ``detach``).
 
     Notes
     -----
@@ -43,19 +32,21 @@ class Categorical(Distribution):
 
     - integer dtype: labels in ``[0, K)``, shape ``(*batch,)``;
     - floating or boolean dtype: one-hot or soft assignments ``r``, shape
-      ``(*batch, K)``; ``log_prob(r) = sum_k r_k log p_k`` is the expected
+      ``(*batch, K)``; ``log_prob(r)`` = ∑ₖ rₖ ln pₖ is the expected
       log-likelihood used by variational Bayes.
 
     Integers always mean labels, including the int64 output of
     ``torch.nn.functional.one_hot``: cast it with ``.float()`` or
-    ``.bool()`` first. :meth:`sample` returns int64 labels, or float
-    one-hot vectors with ``one_hot=True``. Expectations
-    (:attr:`mean` ``== probs``), entropy and KL do not depend on the
-    representation. There is no reparameterised sampling (as in torch,
-    :meth:`rsample` raises).
+    ``.bool()`` first.
+    [`sample`][optix.distributions.Categorical.sample] returns int64
+    labels, or float one-hot vectors with ``one_hot=True``. Expectations
+    ([`mean`][optix.distributions.Categorical.mean] = ``probs``), entropy
+    and KL do not depend on the representation. There is no
+    reparameterised sampling (as in torch,
+    [`rsample`][optix.distributions.Distribution.rsample] raises).
 
-    Exponential family: ``T(z) = onehot(z)``, ``eta = log(p)`` (up to an
-    additive constant), ``A = logsumexp(eta)``, ``E[T] = p``.
+    Exponential family: T(z) = onehot(z), η = ln p (up to an additive
+    constant), A = logsumexp(η), E[T] = p.
     """
 
     _forms = {("logits",): (1,), ("probs",): (1,)}
@@ -74,6 +65,20 @@ class Categorical(Distribution):
         dtype: torch.dtype | None = None,
         device: torch.device | str | None = None,
     ) -> None:
+        """Create a Categorical distribution.
+
+        Parameters
+        ----------
+        probs : (*batch, K) Tensor, optional
+            Non-negative weights, normalised by their sum.
+        logits : (*batch, K) Tensor, optional
+            Log-weights, normalised by ``log_softmax``.
+        validate, cache, dtype, device
+            See [`Gamma`][optix.distributions.Gamma]. ``validate=True``
+            also makes [`log_prob`][optix.distributions.Categorical.log_prob]
+            check that integer labels are in range (kept by ``expand``,
+            indexing, ``to`` and ``detach``).
+        """
         if (probs is None) == (logits is None):
             raise ValueError(
                 "Categorical: give exactly one of probs or logits"
@@ -118,37 +123,37 @@ class Categorical(Distribution):
         return super()._derive(name)
 
     def params(self) -> tuple[Tensor]:
-        """Normalised logits ``(log p,)``, unexpanded."""
+        """Normalised logits (ln p,), unexpanded."""
         return (self._get("norm_logits"),)
 
     @property
     def num_categories(self) -> int:
-        """Number of categories ``K``."""
+        """Number of categories K."""
         return self._raw[0].shape[-1]
 
     @property
     def logits(self) -> Tensor:
-        """Normalised logits ``log(p)``, ``(*batch, K)``."""
+        """Normalised logits ln p, ``(*batch, K)``."""
         return self._view("norm_logits")
 
     @property
     def probs(self) -> Tensor:
-        """Normalised probabilities ``p``, ``(*batch, K)``."""
+        """Normalised probabilities p, ``(*batch, K)``."""
         return self._view("norm_probs")
 
     @property
     def mean(self) -> Tensor:
-        """``E[onehot(z)] = p``, ``(*batch, K)``."""
+        """E[onehot(z)] = p, ``(*batch, K)``."""
         return self.probs
 
     @property
     def variance(self) -> Tensor:
-        """``Var[onehot(z)_k] = p_k (1 - p_k)``, ``(*batch, K)``."""
+        """Var[onehot(z)ₖ] = pₖ (1 − pₖ), ``(*batch, K)``."""
         p = self._get("norm_probs")
         return self._out(p * (1 - p), 1)
 
     def entropy(self) -> Tensor:
-        """``H = -sum(p log p)`` (``0 log 0 = 0``, finite gradients)."""
+        """H = −∑ pₖ ln pₖ (0 ln 0 = 0, finite gradients)."""
         return self._out(F.categorical_entropy(*self.params()))
 
     def log_prob(self, value: Tensor) -> Tensor:
@@ -157,15 +162,15 @@ class Categorical(Distribution):
         Parameters
         ----------
         value : Tensor
-            Integer labels ``(*sample, *batch)``: ``log p[value]``. Or
+            Integer labels ``(*sample, *batch)``: ln p[value]. Or
             floating / boolean one-hot or soft assignments
-            ``(*sample, *batch, K)``: ``sum_k r_k log p_k`` (with
-            ``0 log 0 = 0``).
+            ``(*sample, *batch, K)``: ∑ₖ rₖ ln pₖ (with 0 ln 0 = 0).
 
         Returns
         -------
         Tensor
-            Broadcast of the value's batch shape and :attr:`batch_shape`.
+            Broadcast of the value's batch shape and
+            [`batch_shape`][optix.distributions.Distribution.batch_shape].
 
         Raises
         ------
@@ -232,25 +237,25 @@ class Categorical(Distribution):
         return out.to(self.dtype)
 
     def natural_params(self) -> tuple[Tensor]:
-        """``(eta,)``: the stored log-weights, up to an additive constant.
+        """(η,): the stored log-weights, up to an additive constant.
 
         For ``logits`` these are the given logits, for ``probs`` their
         logarithm (unnormalised), so that ``log_normalizer`` is
-        ``logsumexp(eta)``.
+        logsumexp(η).
         """
         return (self._view("eta"),)
 
     def log_normalizer(self) -> Tensor:
-        """``A = logsumexp(eta)`` (zero when normalised)."""
+        """A = logsumexp(η) (zero when normalised)."""
         return self._out(F.categorical_log_normalizer(self._get("eta")))
 
     def expected_stats(self) -> CategoricalExpectations:
-        """``(E[onehot(z)],) = (p,)``, whatever the view."""
+        """(E[onehot(z)],) = (p,), whatever the view."""
         return CategoricalExpectations(self.probs)
 
     @classmethod
     def from_natural(cls, eta: Tensor) -> Self:
-        """Distribution with logits ``eta`` (stored as given)."""
+        """Distribution with logits ``eta`` (η), stored as given."""
         return cls._new(eta, form=("logits",))
 
     def to_torch(self) -> torch.distributions.Categorical:

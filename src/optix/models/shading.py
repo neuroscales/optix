@@ -25,9 +25,9 @@ def random_shading(
 ) -> ShadingEstimate:
     """Draw a smooth random flat field.
 
-    ``flat = exp(f)`` with ``f`` a random combination of the lowest
-    ``order`` DCT-II functions along each dim (no DC term), scaled so that
-    ``std(f) == strength``, then normalised to mean 1.
+    flat = exp(f) with f a random combination of the lowest ``order``
+    DCT-II functions along each dim (no DC term), scaled so that
+    std(f) = ``strength``, then normalised to mean 1.
 
     Parameters
     ----------
@@ -72,7 +72,7 @@ def random_shading(
 
 
 def simulate_shading(x: Tensor, shading: ShadingEstimate) -> Tensor:
-    """Apply a shading model: ``flat * x + dark + baseline``.
+    """Apply a shading model: flat · x + dark + baseline.
 
     Parameters
     ----------

@@ -80,7 +80,7 @@ def simulate_sensor(
     Parameters
     ----------
     signal : (..., H, W) Tensor
-        Expected number of electrons (>= 0).
+        Expected number of electrons (≥ 0).
     sensor : SensorEstimate
         Needs ``offset``, ``variance`` and ``gain``. ``defective`` is a
         label only: defective pixels are simulated like the others.
@@ -91,7 +91,7 @@ def simulate_sensor(
     Returns
     -------
     Tensor
-        ``offset + gain * Poisson(signal) + N(0, variance)``, in ADU.
+        offset + gain · Poisson(signal) + N(0, variance), in ADU.
     """
     for name in ("offset", "variance", "gain"):
         if getattr(sensor, name) is None:

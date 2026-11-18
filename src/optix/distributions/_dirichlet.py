@@ -14,7 +14,7 @@ __all__ = ["Dirichlet", "DirichletExpectations"]
 
 
 class DirichletExpectations(NamedTuple):
-    """``E[T(x)]`` of a Dirichlet, ordered like its natural parameters."""
+    """E[T(x)] of a Dirichlet, ordered like its natural parameters."""
 
     log_x: Tensor
 
@@ -22,20 +22,12 @@ class DirichletExpectations(NamedTuple):
 class Dirichlet(Distribution):
     """Dirichlet distribution over the simplex (event shape ``(K,)``).
 
-    ``p(pi) = Gamma(a0) / prod(Gamma(alpha)) prod(pi^(alpha - 1))`` with
-    ``a0 = sum(alpha)``.
-
-    Parameters
-    ----------
-    concentration : (*batch, K) Tensor
-        Concentration ``alpha > 0``.
-    validate, cache, dtype, device
-        See :class:`Gamma`.
+    p(π) = Γ(α₀) / ∏ Γ(αₖ) · ∏ πₖ^(αₖ − 1) with α₀ = ∑ αₖ.
 
     Notes
     -----
-    Exponential family: ``T(pi) = log(pi)``, ``eta = alpha - 1``,
-    ``A = sum(lgamma(alpha)) - lgamma(a0)``, ``h = 1``.
+    Exponential family: T(π) = ln π, η = α − 1,
+    A = ∑ ln Γ(αₖ) − ln Γ(α₀), h = 1.
     """
 
     _forms = {("concentration",): (1,)}
@@ -52,6 +44,15 @@ class Dirichlet(Distribution):
         dtype: torch.dtype | None = None,
         device: torch.device | str | None = None,
     ) -> None:
+        """Create a Dirichlet distribution.
+
+        Parameters
+        ----------
+        concentration : (*batch, K) Tensor
+            Concentration α > 0.
+        validate, cache, dtype, device
+            See [`Gamma`][optix.distributions.Gamma].
+        """
         self._init(
             ("concentration",),
             [concentration],
@@ -63,52 +64,50 @@ class Dirichlet(Distribution):
 
     @property
     def concentration(self) -> Tensor:
-        """Concentration ``alpha``, ``(*batch, K)``."""
+        """Concentration α, ``(*batch, K)``."""
         return self._view("concentration")
 
     @property
     def mean(self) -> Tensor:
-        """``E[pi] = alpha / a0``, ``(*batch, K)``."""
+        """E[π] = α / α₀, ``(*batch, K)``."""
         return self._out(F.dirichlet_mean(*self.params()), 1)
 
     @property
     def variance(self) -> Tensor:
-        """``Var[pi_k] = alpha_k (a0 - alpha_k) / (a0^2 (a0 + 1))``."""
+        """Var[πₖ] = αₖ (α₀ − αₖ) / (α₀² (α₀ + 1))."""
         return self._out(F.dirichlet_variance(*self.params()), 1)
 
     @property
     def mean_log(self) -> Tensor:
-        """``E[log pi] = digamma(alpha) - digamma(a0)``, ``(*batch, K)``."""
+        """E[ln π] = ψ(α) − ψ(α₀), ``(*batch, K)``."""
         return self._out(F.dirichlet_mean_log(*self.params()), 1)
 
     def entropy(self) -> Tensor:
-        """``sum(lgamma(alpha)) - lgamma(a0) + (a0 - K) digamma(a0)
-        - sum((alpha - 1) digamma(alpha))``.
-        """
+        """∑ ln Γ(αₖ) − ln Γ(α₀) + (α₀ − K) ψ(α₀) − ∑ (αₖ − 1) ψ(αₖ)."""
         return self._out(F.dirichlet_entropy(*self.params()))
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """``lgamma(a0) - sum(lgamma(alpha)) + sum((alpha - 1) log pi)``."""
+        """ln Γ(α₀) − ∑ ln Γ(αₖ) + ∑ (αₖ − 1) ln πₖ."""
         value = torch.as_tensor(value, dtype=self.dtype, device=self.device)
         shape = self._check_value_shape(value)
         return F.dirichlet_log_prob(value, *self.params()).expand(shape)
 
     def natural_params(self) -> tuple[Tensor]:
-        """``(alpha - 1,)``."""
+        """(α − 1,)."""
         (alpha,) = self.params()
         return (self._out(alpha - 1, 1),)
 
     def log_normalizer(self) -> Tensor:
-        """``A = sum(lgamma(alpha)) - lgamma(a0)``."""
+        """A = ∑ ln Γ(αₖ) − ln Γ(α₀)."""
         return self._out(F.dirichlet_log_normalizer(*self.params()))
 
     def expected_stats(self) -> DirichletExpectations:
-        """``(E[log pi],)``."""
+        """(E[ln π],)."""
         return DirichletExpectations(self.mean_log)
 
     @classmethod
     def from_natural(cls, eta_log_x: Tensor) -> Self:
-        """Dirichlet with natural parameters ``(alpha - 1,)``."""
+        """Dirichlet with natural parameters (α − 1,)."""
         return cls._new(eta_log_x + 1)
 
     def to_torch(self) -> torch.distributions.Dirichlet:
@@ -127,9 +126,9 @@ class Dirichlet(Distribution):
     ) -> Self:
         """Maximum-likelihood (type-II) Dirichlet from mean log-probabilities.
 
-        Maximises ``n (lgamma(a0) - sum(lgamma(alpha)))
-        + sum((alpha - 1) sum_log_x)`` with
-        :func:`optix.special.fit_dirichlet`, started at ``init``.
+        Maximises n (ln Γ(α₀) − ∑ ln Γ(αₖ)) + ∑ (αₖ − 1) ∑ ln xₖ with
+        [`fit_dirichlet`][optix.special.fit_dirichlet], started at
+        ``init``.
 
         Parameters
         ----------
@@ -138,7 +137,7 @@ class Dirichlet(Distribution):
         init : Dirichlet or (..., K) Tensor
             Starting point (required: Newton's method only converges
             locally; pass the current estimate). Returned where
-            ``n == 0``.
+            n = 0.
         niter : int
             Iterations.
 

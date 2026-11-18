@@ -1,4 +1,4 @@
-"""Closed-form Kullback-Leibler divergences ``KL(q || p)``."""
+"""Closed-form Kullback-Leibler divergences KL(q ‖ p)."""
 
 import torch
 from torch import Tensor
@@ -9,7 +9,7 @@ from ._stable import stirling_residual as _res
 
 
 def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
-    """``KL(Dir(a) || Dir(b))``.
+    """KL(Dir(a) ‖ Dir(b)).
 
     Parameters
     ----------
@@ -24,16 +24,18 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
 
     Notes
     -----
-    ``KL = lgamma(a0) - lgamma(b0) - sum(lgamma(a) - lgamma(b))
-    + sum((a - b) (digamma(a) - digamma(a0)))``, rewritten with
-    :func:`stirling_residual` ``r``, :func:`log_minus_digamma` ``lmd``
-    and :func:`ratio_minus_log` ``g`` as::
+    With a₀ = ∑ aₖ and b₀ = ∑ bₖ,
+    KL = ln Γ(a₀) − ln Γ(b₀) − ∑ (ln Γ(aₖ) − ln Γ(bₖ))
+    + ∑ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀)), rewritten with
+    [`stirling_residual`][optix.special.stirling_residual] r,
+    [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
+    [`ratio_minus_log`][optix.special.ratio_minus_log] g as
 
-        sum(b g(a / b) + log(a / b) / 2) - (b0 g(a0 / b0) + log(a0 / b0) / 2)
-        + r(a0) - r(b0) - sum(r(a) - r(b))
-        - sum((a - b) lmd(a)) + (a0 - b0) lmd(a0)
+    ∑ (bₖ g(aₖ/bₖ) + ½ ln(aₖ/bₖ)) − (b₀ g(a₀/b₀) + ½ ln(a₀/b₀))
+    + r(a₀) − r(b₀) − ∑ (r(aₖ) − r(bₖ))
+    − ∑ (aₖ − bₖ) lmd(aₖ) + (a₀ − b₀) lmd(a₀)
 
-    so that the ``lgamma`` terms of large concentrations cancel exactly.
+    so that the ln Γ terms of large concentrations cancel exactly.
     """
     a0 = a.sum(-1)
     b0 = b.sum(-1)
@@ -53,7 +55,7 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
 def kl_gamma(
     shape_q: Tensor, rate_q: Tensor, shape_p: Tensor, rate_p: Tensor
 ) -> Tensor:
-    """``KL(Gamma(shape_q, rate_q) || Gamma(shape_p, rate_p))``, elementwise.
+    """KL(Gamma(shape_q, rate_q) ‖ Gamma(shape_p, rate_p)), elementwise.
 
     Parameters
     ----------
@@ -69,16 +71,18 @@ def kl_gamma(
 
     Notes
     -----
-    ``KL = (aq - ap) digamma(aq) - lgamma(aq) + lgamma(ap)
-    + ap log(bq / bp) + aq (bp - bq) / bq``, rewritten with
-    :func:`stirling_residual` ``r``, :func:`log_minus_digamma` ``lmd`` and
-    :func:`ratio_minus_log` ``g`` as::
+    With shapes a and rates b,
+    KL = (a_q − a_p) ψ(a_q) − ln Γ(a_q) + ln Γ(a_p)
+    + a_p ln(b_q/b_p) + a_q (b_p − b_q) / b_q, rewritten with
+    [`stirling_residual`][optix.special.stirling_residual] r,
+    [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
+    [`ratio_minus_log`][optix.special.ratio_minus_log] g as
 
-        ap (g(aq / ap) + g(bp / bq)) + log(aq / ap) / 2
-        + (aq - ap) ((bp - bq) / bq - lmd(aq)) + r(ap) - r(aq)
+    a_p (g(a_q/a_p) + g(b_p/b_q)) + ½ ln(a_q/a_p)
+    + (a_q − a_p) ((b_p − b_q) / b_q − lmd(a_q)) + r(a_p) − r(a_q)
 
-    which has no cancellation between large ``lgamma`` / ``digamma``
-    values (float32 stays accurate at shapes ``~1e6``).
+    which has no cancellation between large ln Γ / ψ values (float32
+    stays accurate at shapes ≈ 1e6).
     """
     aq, bq, ap, bp = map(torch.as_tensor, (shape_q, rate_q, shape_p, rate_p))
     return (
@@ -93,7 +97,7 @@ def kl_gamma(
 def kl_normal(
     mean_q: Tensor, var_q: Tensor, mean_p: Tensor, var_p: Tensor
 ) -> Tensor:
-    """``KL(N(mean_q, var_q) || N(mean_p, var_p))``, elementwise.
+    """KL(N(mean_q, var_q) ‖ N(mean_p, var_p)), elementwise.
 
     Parameters
     ----------

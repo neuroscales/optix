@@ -17,20 +17,6 @@ __all__ = ["Histogram"]
 class Histogram(Reducer):
     """Per-pixel fixed-range histogram with underflow and overflow bins.
 
-    Parameters
-    ----------
-    lo, hi : Tensor or float
-        Range, as scalars or per-pixel maps (typically from a
-        :class:`MinMax` pass). Fixed at construction.
-    bins : int
-        Number of regular bins between ``lo`` and ``hi``.
-    dim : int or tuple of int or None
-        Reduced dims of each chunk (see :class:`Reducer`).
-    count_dtype : torch.dtype
-        Integer dtype of the counts (default int64, which cannot
-        overflow in practice; int32 halves the memory but overflows past
-        ``2^31 - 1`` counts in one bin).
-
     Attributes
     ----------
     counts : (bins + 2, *item) Tensor
@@ -44,8 +30,8 @@ class Histogram(Reducer):
     order. A zero-width range (``hi == lo``, dead pixels) puts every value
     equal to ``lo`` into the first regular bin.
 
-    The state holds ``(bins + 2) * prod(item)`` counts: 64 bins on a
-    2048 x 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
+    The state holds (bins + 2) · ∏(item) counts: 64 bins on a
+    2048 × 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
     warning is emitted when it exceeds the configured chunk ``memory``.
     """
 
@@ -60,6 +46,23 @@ class Histogram(Reducer):
         dim: int | Sequence[int] | None = 0,
         count_dtype: torch.dtype = torch.int64,
     ) -> None:
+        """Create an empty histogram.
+
+        Parameters
+        ----------
+        lo, hi : Tensor or float
+            Range, as scalars or per-pixel maps (typically from a
+            [`MinMax`][optix.stats.MinMax] pass). Fixed at construction.
+        bins : int
+            Number of regular bins between ``lo`` and ``hi``.
+        dim : int or tuple of int or None
+            Reduced dims of each chunk (see
+            [`Reducer`][optix.stats.Reducer]).
+        count_dtype : torch.dtype
+            Integer dtype of the counts (default int64, which cannot
+            overflow in practice; int32 halves the memory but overflows
+            past 2³¹ − 1 counts in one bin).
+        """
         if bins < 1:
             raise ValueError(f"bins must be >= 1, got {bins}")
         super().__init__(dim=dim)
@@ -147,7 +150,7 @@ class Histogram(Reducer):
         return self
 
     def merge(self, other: "Histogram") -> Self:
-        """Merge another :class:`Histogram` with identical edges."""
+        """Merge another [`Histogram`][optix.stats.Histogram] (same edges)."""
         state = self._other_state(other)
         if other.bins != self.bins:
             raise ValueError("Cannot merge histograms with different bins")
