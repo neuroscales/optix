@@ -55,6 +55,69 @@ def _segments(
     return out
 
 
+def plan_grid(
+    shape: Sequence[int],
+    specs: Sequence[tuple[int, int] | None],
+    pad: bool = False,
+    order: Sequence[int] | None = None,
+) -> list[Plan]:
+    """Plan a blocked iteration with a spec per axis.
+
+    Parameters
+    ----------
+    shape : sequence of int
+        Shape of the source.
+    specs : sequence of (int, int) or None
+        Per axis: None to iterate it one integer index at a time, or
+        ``(block, halo)`` with ``block >= 1`` and ``halo >= 0``.
+    pad : bool
+        See :func:`plan_blocks`.
+    order : sequence of int, optional
+        Nesting of the iteration, outermost axis first (default: C order).
+
+    Returns
+    -------
+    list of Plan
+        ``read`` and ``index`` are full-length, in storage order; ``inner``
+        and ``pad`` cover the blocked axes, in storage order. The ``index``
+        regions partition the array exactly.
+    """
+    shape = tuple(int(s) for s in shape)
+    n = len(shape)
+    if len(specs) != n:
+        raise ValueError("Need one spec per axis")
+    order = tuple(range(n)) if order is None else tuple(order)
+    if sorted(order) != list(range(n)):
+        raise ValueError(f"order {order} is not a permutation")
+    segs: dict[int, list] = {}
+    blocked = []
+    for axis, (size, spec) in enumerate(zip(shape, specs, strict=True)):
+        if spec is None:
+            segs[axis] = list(range(size))
+            continue
+        b, h = spec
+        if b < 1 or h < 0:
+            raise ValueError("Need block >= 1 and halo >= 0")
+        segs[axis] = _segments(size, b, h, pad)
+        blocked.append(axis)
+    plans = []
+    for combo in itertools.product(*(segs[a] for a in order)):
+        per = dict(zip(order, combo, strict=True))
+
+        def part(axis: int, k: int, per: dict = per) -> int | slice:
+            return per[axis] if specs[axis] is None else per[axis][k]
+
+        plans.append(
+            Plan(
+                read=tuple(part(a, 0) for a in range(n)),
+                index=tuple(part(a, 1) for a in range(n)),
+                inner=tuple(per[a][2] for a in blocked),
+                pad=tuple(per[a][3] for a in blocked),
+            )
+        )
+    return plans
+
+
 def plan_blocks(
     shape: Sequence[int],
     lead: int,
@@ -90,22 +153,8 @@ def plan_blocks(
         raise ValueError("block and halo must cover the non-leading dims")
     if any(b < 1 for b in block) or any(h < 0 for h in halo):
         raise ValueError("Need block >= 1 and halo >= 0")
-    segs = [
-        _segments(n, b, h, pad)
-        for n, b, h in zip(shape[lead:], block, halo, strict=True)
-    ]
-    plans = []
-    for combo in itertools.product(*(range(n) for n in shape[:lead]), *segs):
-        ints, parts = combo[:lead], combo[lead:]
-        plans.append(
-            Plan(
-                read=(*ints, *(p[0] for p in parts)),
-                index=(*ints, *(p[1] for p in parts)),
-                inner=tuple(p[2] for p in parts),
-                pad=tuple(p[3] for p in parts),
-            )
-        )
-    return plans
+    specs = [None] * lead + list(zip(block, halo, strict=True))
+    return plan_grid(shape, specs, pad)
 
 
 def read_amplification(regions: Sequence[slice], chunk: int, n: int) -> float:

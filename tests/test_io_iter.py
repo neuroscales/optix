@@ -80,12 +80,13 @@ def test_frame_batches_reassemble(batch):
     y = np.random.default_rng(0).normal(size=(2, 3, 11, 4, 5)).astype("f4")
     out = torch.zeros(y.shape)
     chunks = frame_batches(y, batch=batch)
-    for index, data in chunks:
-        assert data.shape[1:] == (4, 5)
-        store(out, index, data)
+    for chunk in chunks:
+        assert chunk.data.shape[1:] == (4, 5)
+        chunk.store(out, chunk.data)
     np.testing.assert_array_equal(out.numpy(), y)
     if batch is None:
-        assert len(chunks) == 6
+        # leading dims are samples: merged into one chunk when they fit
+        assert len(chunks) == 1
     else:
         assert len(chunks) == 6 * -(-11 // batch)
 
@@ -202,8 +203,9 @@ def test_row_tiles_other_axis():
     for index, data in row_tiles(y, ndim=3, axis=-3, batch=1):
         out[index] = data.numpy()
     np.testing.assert_allclose(out, y, rtol=1e-6)
-    with pytest.raises(ValueError):
-        row_tiles(y, ndim=2, axis=1)
+    # axis is a position among the spatial axes
+    with pytest.raises(ValueError, match="not a spatial axis"):
+        row_tiles(y, ndim=2, axis=2)
 
 
 def test_row_tiles_frame_chunked_zarr_warns():

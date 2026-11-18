@@ -432,3 +432,46 @@ def test_tile_reduce_3d_and_amplification_warning():
     z[:] = np.ones((8, 16, 4), dtype="f4")
     with pytest.warns(RuntimeWarning, match="Row tiles"):
         median_mad(z, batch=1)
+
+
+# --- layouts ----------------------------------------------------------------
+
+
+def test_reduce_with_layout_and_groups():
+    from optix.io import Layout, labeled
+    from optix.stats import reduce_groups
+
+    dt = resolve_backend()["dtype"]
+    y = torch.randn(2, 3, 4, 5, 6, dtype=dt)  # t, c, z, y, x
+    Y = labeled(y, axes="tczyx", spatial="xy", group="c")
+    with pytest.raises(ValueError, match="reduce_groups"):
+        reduce(Y, Moments(1))
+    template = Moments(2)
+    groups = reduce_groups(Y, template, batch=3)
+    assert template.empty and list(groups) == [(0,), (1,), (2,)]
+    for (c,), (m,) in groups.items():
+        ref = y[:, c].reshape(8, 5, 6).transpose(-1, -2)
+        torch.testing.assert_close(m.mean.to(dt), ref.mean(0))
+    # no group axes: samples t and z pooled, spatial in layout order
+    (m,) = reduce(y[:, 0], Moments(1), layout=Layout("tzyx", spatial="xy"))
+    torch.testing.assert_close(m.mean.to(dt), y[:, 0].mean((0, 1)).T)
+
+
+def test_order_statistics_per_group():
+    from optix.io import labeled
+
+    dt = resolve_backend()["dtype"]
+    y = torch.randn(3, 2, 5, 4, 6, dtype=dt)  # t, c, z, y, x
+    Y = labeled(y, axes="tczyx", spatial="yx", group="c")
+    med, mad = median_mad(Y, batch=1)
+    assert med.shape == (2, 4, 6)
+    flat = y.transpose(0, 1).reshape(2, 15, 4, 6)
+    ref = flat.median(1).values
+    torch.testing.assert_close(med, ref)
+    torch.testing.assert_close(
+        mad, (flat - ref[:, None]).abs().median(1).values
+    )
+    ks = order_statistics(Y, [1, 15], batch=2)
+    assert ks.shape == (2, 2, 4, 6)
+    torch.testing.assert_close(ks[0], flat.amin(1))
+    torch.testing.assert_close(ks[1], flat.amax(1))

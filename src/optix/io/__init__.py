@@ -1,7 +1,9 @@
 """Lazy, chunked access to array-likes (Tensor, numpy, memmap, zarr, ...).
 
-Data are laid out as ``(*batch, frames, *spatial)``; functions take
-``ndim`` = number of trailing spatial dims.
+Axis roles (spatial, sample, group) are declared with a :class:`Layout`,
+either attached to the data with :func:`labeled` or passed as
+``layout=``. Without one, data are ``(*samples, *spatial)`` with ``ndim``
+trailing spatial dims.
 """
 
 from ._arrays import (
@@ -14,12 +16,23 @@ from ._arrays import (
     prepare_out,
     store,
 )
-from ._iter import Chunks, blocks, chunk_length, frame_batches, row_tiles
+from ._iter import (
+    Chunk,
+    Chunks,
+    blocks,
+    chunk_length,
+    frame_batches,
+    row_tiles,
+)
+from ._layout import Labeled, Layout, labeled
 
 __all__ = [
     "ArrayLike",
+    "Chunk",
     "Chunks",
     "Index",
+    "Labeled",
+    "Layout",
     "WritableArrayLike",
     "as_tensor",
     "blocks",
@@ -27,6 +40,7 @@ __all__ = [
     "chunks_of",
     "flush",
     "frame_batches",
+    "labeled",
     "prepare_out",
     "row_tiles",
     "store",

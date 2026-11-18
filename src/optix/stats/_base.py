@@ -7,9 +7,9 @@ from typing import ClassVar, Self
 import torch
 from torch import Tensor
 
-from ..io import ArrayLike, frame_batches
+from ..io import ArrayLike, Layout, frame_batches
 
-__all__ = ["Reducer", "reduce"]
+__all__ = ["Reducer", "reduce", "reduce_groups"]
 
 
 def _reduced_dims(dim: int | Sequence[int] | None, ndim: int) -> tuple:
@@ -150,18 +150,25 @@ class Reducer:
 
 
 def reduce(
-    Y: ArrayLike, *reducers: Reducer, ndim: int = 2, **chunk_options: object
+    Y: ArrayLike,
+    *reducers: Reducer,
+    ndim: int | None = None,
+    layout: Layout | None = None,
+    **chunk_options: object,
 ) -> tuple[Reducer, ...]:
     """One pass over frame batches feeding every reducer.
 
     Parameters
     ----------
-    Y : (*batch, frames, *spatial) array-like
+    Y : array-like or Labeled
         Data.
     *reducers : Reducer
         Reducers to update with each ``(n, *spatial)`` frame batch.
-    ndim : int
-        Number of trailing spatial dims.
+    ndim : int, optional
+        Without a layout: number of trailing spatial dims (default 2).
+    layout : Layout, optional
+        Axis roles (see :func:`optix.io.frame_batches`). It must not have
+        group axes: use :func:`reduce_groups`.
     **chunk_options
         Forwarded to :func:`optix.io.frame_batches` (``overhead``,
         ``memory``, ``batch``, ``dtype``, ``device``, ``prefetch``, ...).
@@ -169,10 +176,51 @@ def reduce(
     Returns
     -------
     tuple of Reducer
-        The same reducers, updated.
+        The same reducers, updated with every sample.
     """
+    chunks = frame_batches(Y, ndim=ndim, layout=layout, **chunk_options)
+    if chunks.group_shape:
+        raise ValueError(
+            "reduce() pools every sample; the layout has group axes "
+            f"{chunks.group_shape}: use reduce_groups()"
+        )
     with torch.no_grad():
-        for _, data in frame_batches(Y, ndim=ndim, **chunk_options):
+        for _, data in chunks:
             for reducer in reducers:
                 reducer.update(data)
     return reducers
+
+
+def reduce_groups(
+    Y: ArrayLike,
+    *reducers: Reducer,
+    ndim: int | None = None,
+    layout: Layout | None = None,
+    **chunk_options: object,
+) -> dict[tuple[int, ...], tuple[Reducer, ...]]:
+    """One pass over frame batches, with one copy of the reducers per group.
+
+    Parameters
+    ----------
+    Y, ndim, layout, **chunk_options
+        See :func:`reduce`; the layout may have group axes.
+    *reducers : Reducer
+        Templates: each group gets its own :meth:`~Reducer.copy`. The
+        templates themselves are not updated.
+
+    Returns
+    -------
+    dict of tuple of int to tuple of Reducer
+        Keyed by group position (``()`` without group axes), in iteration
+        order. Groups without samples are absent.
+    """
+    chunks = frame_batches(Y, ndim=ndim, layout=layout, **chunk_options)
+    out: dict[tuple[int, ...], tuple[Reducer, ...]] = {}
+    with torch.no_grad():
+        for chunk in chunks:
+            key = chunk.group
+            if key not in out:
+                out[key] = tuple(r.copy() for r in reducers)
+            for reducer in out[key]:
+                reducer.update(chunk.data)
+    return out
