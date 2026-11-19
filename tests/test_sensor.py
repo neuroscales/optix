@@ -87,6 +87,33 @@ def test_scmos_recovers_maps(sensor, robust):
     assert abs(e.mean().item() - 300) < 10
 
 
+def test_scmos_supplement_equations(sensor):
+    # Supplementary Note, Eq. 2.1-2.5: temporal variances divide by M, and
+    # the gain is the unweighted least-squares slope through the origin.
+    shape = sensor.offset.shape
+    dark = _stack(sensor, 0, 5, shape, seed=1)
+    levels = [_stack(sensor, e, 4, shape, seed=e) for e in (100, 400, 900)]
+    est = SCMOSCalibration(dtype=F64).fit(levels, dark=dark)
+    s = est.estimates["sensor"]
+    o = dark.mean(0)
+    var = (dark**2).mean(0) - o**2  # Eq. 2.2
+    big_a = torch.stack([y.var(0, correction=0) - var for y in levels])
+    big_b = torch.stack([y.mean(0) - o for y in levels])
+    g = (big_b * big_a).sum(0) / (big_b * big_b).sum(0)  # Eq. 2.5
+    torch.testing.assert_close(s.offset, o)
+    torch.testing.assert_close(s.variance, var)
+    torch.testing.assert_close(s.gain, g)
+    assert est.is_faithful
+    unbiased = SCMOSCalibration(ddof=1, dtype=F64).fit(levels, dark=dark)
+    torch.testing.assert_close(
+        unbiased.estimates["sensor"].variance, dark.var(0)
+    )
+    assert not unbiased.is_faithful
+    assert SCMOSCalibration(faithful=False).options["ddof"] == 1
+    with pytest.raises(ValueError, match="ddof"):
+        SCMOSCalibration(ddof=2)
+
+
 def test_scmos_confidence_mask(sensor):
     shape = sensor.offset.shape
     dark = _stack(sensor, 0, 100, shape, seed=1)
