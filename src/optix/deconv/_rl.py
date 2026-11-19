@@ -23,7 +23,10 @@ from ..io import (
 from ._fft import PaddedConvolution
 
 __all__ = [
+    "BiggsAndrews",
     "RichardsonLucy",
+    "biggs_andrews",
+    "biggs_andrews_alpha",
     "chi2_probability",
     "richardson_lucy",
     "rl_block",
@@ -31,6 +34,7 @@ __all__ = [
 ]
 
 _OVERHEAD = 12.0  # working buffers per loaded voxel (FFT grid, ratios, ...)
+_OVERHEAD_ACCEL = 16.0  # + previous iterate, two changes, prediction
 
 
 def rl_step(
@@ -114,6 +118,36 @@ def chi2_probability(data: Tensor, mu: Tensor) -> float:
     return float(torch.special.gammaincc(nu / 2, chi2.cpu() / 2))
 
 
+def biggs_andrews_alpha(g: Tensor, g_prev: Tensor) -> float:
+    """Acceleration parameter of Biggs and Andrews (1997, Eq. 10).
+
+        αₖ = ∑ gₖ₋₁ · gₖ₋₂ / ∑ gₖ₋₂ · gₖ₋₂,   clipped to [0, 1],
+
+    with gₖ = ψ(yₖ) − yₖ the change made by the k-th iteration ψ. A
+    negative value is set to 0, which stops the extrapolation until the
+    successive changes point the same way again; the upper bound keeps
+    the predicted step from growing exponentially. The sums are
+    accumulated in float64.
+
+    Parameters
+    ----------
+    g : Tensor
+        Last change gₖ₋₁.
+    g_prev : Tensor
+        Change before it, gₖ₋₂.
+
+    Returns
+    -------
+    float
+        αₖ ∈ [0, 1]; 0 when gₖ₋₂ = 0.
+    """
+    num = float((g * g_prev).sum(dtype=torch.float64))
+    den = float(g_prev.square().sum(dtype=torch.float64))
+    if not den > 0 or not num > 0:
+        return 0.0
+    return min(num / den, 1.0)
+
+
 def rl_block(
     data: Tensor,
     op: PaddedConvolution,
@@ -124,8 +158,10 @@ def rl_block(
     max_iter: int = 100,
     background: Tensor | float = 0.0,
     damping: float = 1.0,
+    accelerate: bool = False,
+    trace: dict | None = None,
 ) -> tuple[Tensor, int]:
-    """Richardson–Lucy iterations on one block.
+    """Richardson–Lucy iterations on one block, optionally accelerated.
 
     Parameters
     ----------
@@ -149,6 +185,20 @@ def rl_block(
     damping : float
         Fraction ε ∈ (0, 1] of the correction applied (see
         [`rl_step`][optix.deconv.utils.rl_step]).
+    accelerate : bool
+        Biggs–Andrews vector extrapolation (see
+        [`BiggsAndrews`][optix.deconv.BiggsAndrews]): the iteration is
+        applied to the prediction yₖ = xₖ + αₖ (xₖ − xₖ₋₁), clipped at 0,
+        with αₖ from
+        [`biggs_andrews_alpha`][optix.deconv.utils.biggs_andrews_alpha].
+        The first update (from the uniform start) is not part of the
+        extrapolation history, so the first prediction is made at the
+        fourth update.
+    trace : dict, optional
+        Filled with per-update diagnostics: `"alpha"` (list of αₖ, 0 for
+        plain updates), `"clipped"` (number of predictions with negative
+        pixels set to 0) and `"effective"` (estimated number of
+        unaccelerated iterations, ∑ₖ ηₖ, Biggs and Andrews 1997, Eq. 12).
 
     Returns
     -------
@@ -165,13 +215,38 @@ def rl_block(
     f = torch.zeros_like(norm)
     f = torch.where(valid, f + start, f)
     limit = max_iter if n_iter is None else n_iter
+    alphas: list[float] = []
+    clipped = 0
+    effective = 0.0
+    eta = 1.0
+    f_prev: Tensor | None = None  # xₖ₋₁
+    g1: Tensor | None = None  # gₖ₋₁
+    g2: Tensor | None = None  # gₖ₋₂
     n = 0
     while n < limit:
-        mu = _expected(f, op, background)
-        if n_iter is None and chi2_probability(data, mu) >= alpha:
-            break
-        f = rl_step(
-            f,
+        a = gamma = 0.0
+        if accelerate and g2 is not None:
+            a = biggs_andrews_alpha(g1, g2)
+            if a > 0:
+                # γₖ = (αₖ βₖ)², βₖ = ∑ gₖ₋₁·gₖ₋₂ / ∑ gₖ₋₁·gₖ₋₁ (Eqs. 11, 13)
+                den = float(g1.square().sum(dtype=torch.float64))
+                num = float((g1 * g2).sum(dtype=torch.float64))
+                gamma = (a * num / den) ** 2 if den > 0 else 0.0
+        mu = None
+        if n_iter is None:
+            mu = _expected(f, op, background)
+            if chi2_probability(data, mu) >= alpha:
+                break
+        if a > 0:
+            y = f + a * (f - f_prev)
+            if (y < 0).any():
+                clipped += 1
+                y.clamp_(min=0)
+            mu = None
+        else:
+            y = f
+        new = rl_step(
+            y,
             data,
             op,
             inv_norm=inv_norm,
@@ -179,7 +254,20 @@ def rl_block(
             damping=damping,
             mu=mu,
         )
+        if accelerate:
+            if n > 0:  # the first update only sets the starting image
+                g1, g2 = new - y, g1
+            f_prev = f
+        f = new
+        alphas.append(a)
+        # ηₖ = 1 + γₖ ηₖ₋₁ (Eq. 12)
+        eta = 1.0 + gamma * eta
+        effective += eta
         n += 1
+    if trace is not None:
+        trace["alpha"] = alphas
+        trace["clipped"] = clipped
+        trace["effective"] = effective
     return f, n
 
 
@@ -313,6 +401,7 @@ class RichardsonLucy(Estimator):
         "block": None,
     }
     recommended = dict(paper)
+    _accelerate = False
 
     def __init__(
         self,
@@ -524,6 +613,8 @@ class RichardsonLucy(Estimator):
         level = total / math.prod(spatial)
         self.level = level.clamp(min=torch.finfo(backend["dtype"]).tiny)
         self.history.extras["iterations"] = []
+        if self._accelerate:
+            self.history.extras["effective_iterations"] = []
 
     def _apply(
         self, data: ArrayLike, out: WritableArrayLike | None
@@ -550,11 +641,17 @@ class RichardsonLucy(Estimator):
         ops: dict[tuple[int, ...], PaddedConvolution] = {}
         n_iter = self.options["n_iter"]
         iterations = self.history.extras.setdefault("iterations", [])
+        effective = (
+            self.history.extras.setdefault("effective_iterations", [])
+            if self._accelerate
+            else []
+        )
+        trace: dict = {}
         chunks = blocks(
             data,
             self.options["block"],
             halo,
-            overhead=_OVERHEAD,
+            overhead=_OVERHEAD_ACCEL if self._accelerate else _OVERHEAD,
             contiguous=True,
             align=chunks_of(out),
             **backend,
@@ -575,8 +672,12 @@ class RichardsonLucy(Estimator):
                 max_iter=int(self.options["max_iter"]),
                 background=blk.background,
                 damping=float(self.options["damping"]),
+                accelerate=self._accelerate,
+                trace=trace,
             )
             iterations.append(float(n))
+            if self._accelerate:
+                effective.append(float(trace["effective"]))
             chunk.store(out, op.crop(f)[chunk.inner])
         flush(out)
         return out
@@ -587,6 +688,131 @@ class RichardsonLucy(Estimator):
     def _load_extra_state(self, state: dict[str, object]) -> None:
         self.psf = state.get("psf")
         self.level = state.get("level")
+
+
+class BiggsAndrews(RichardsonLucy):
+    """Richardson–Lucy deconvolution accelerated by vector extrapolation.
+
+    The iteration ψ of [`RichardsonLucy`][optix.deconv.RichardsonLucy]
+    (same model, start, stopping rule, blocks and extensions) is applied
+    to a point predicted from the last two iterates (Biggs and Andrews
+    1997, "technique II"):
+
+        yₖ = xₖ + αₖ hₖ,        hₖ = xₖ − xₖ₋₁,
+        xₖ₊₁ = yₖ + gₖ,         gₖ = ψ(yₖ) − yₖ,
+
+    with the acceleration parameter
+
+        αₖ = ∑ gₖ₋₁ · gₖ₋₂ / ∑ gₖ₋₂ · gₖ₋₂,   0 ≤ αₖ ≤ 1,
+
+    the least-squares projection of the latest change on the one before
+    (first-order extrapolation, Eq. 10). The safeguards of the paper:
+    αₖ < 0 is set to 0, which suspends the extrapolation until successive
+    changes agree again; αₖ is capped at 1 so that the predicted step
+    cannot grow exponentially; and the prediction is kept non-negative,
+    negative pixels of yₖ being set to 0 (the paper requires the check
+    but leaves the correction open). No extrapolation is made until two
+    changes are known.
+
+    **Start.** From the uniform start, the first Richardson–Lucy update
+    gives Hᵀy/Hᵀ1, the PSF-correlated data h ⋆ g that the paper uses as
+    its starting image; the extrapolation history starts there, which
+    also gives the paper's "few unaccelerated iterations" from a constant
+    start. The first prediction is therefore made at the fourth update,
+    and up to three iterations the result is plain Richardson–Lucy.
+
+    **Acceleration factor.** The estimated number of unaccelerated
+    iterations equivalent to the accelerated ones, ∑ₖ ηₖ with
+
+        ηₖ = 1 + ∑ⱼ₌₁ᵏ ∏ₘ₌ₖ₋ⱼ₊₁ᵏ γₘ,   γₖ = (αₖ βₖ)²,
+        βₖ = ∑ gₖ₋₁ · gₖ₋₂ / ∑ gₖ₋₁ · gₖ₋₁,
+
+    (Eqs. 11–13) is recorded per block in
+    `history.extras["effective_iterations"]`.
+
+    **Blocks.** Each block keeps its own extrapolation history and its
+    own αₖ, so block-wise and whole-image results agree less closely than
+    for plain Richardson–Lucy.
+
+    **Stopping rule.** Not specified in the paper, which compares
+    restorations at fixed iteration counts; the default is Lucy's χ²
+    rule of [`RichardsonLucy`][optix.deconv.RichardsonLucy], evaluated on
+    the iterates xₖ. Accelerated iterations amplify noise sooner, so the
+    stopping rule or `n_iter` matters more than for the plain iteration.
+
+    !!! references "References"
+
+        1. Biggs DSC, Andrews M. *Acceleration of iterative image
+           restoration algorithms.* Appl Opt **36**(8):1766-1775, 1997.
+           [doi:10.1364/AO.36.001766](https://doi.org/10.1364/AO.36.001766)
+        2. Richardson WH. *Bayesian-based iterative method of image
+           restoration.* J Opt Soc Am **62**(1):55-59, 1972.
+           [doi:10.1364/JOSA.62.000055](https://doi.org/10.1364/JOSA.62.000055)
+        3. Lucy LB. *An iterative technique for the rectification of
+           observed distributions.* Astron J **79**(6):745-754, 1974.
+           [doi:10.1086/111605](https://doi.org/10.1086/111605)
+
+        ??? quote "BibTeX"
+
+            ```bibtex
+            @article{biggs1997acceleration,
+              author  = {Biggs, David S. C. and Andrews, Mark},
+              title   = {Acceleration of iterative image restoration
+                         algorithms},
+              journal = {Applied Optics},
+              volume  = {36},
+              number  = {8},
+              pages   = {1766--1775},
+              year    = {1997},
+              doi     = {10.1364/AO.36.001766}
+            }
+            @article{richardson1972bayesian,
+              author  = {Richardson, William Hadley},
+              title   = {Bayesian-Based Iterative Method of Image
+                         Restoration},
+              journal = {Journal of the Optical Society of America},
+              volume  = {62},
+              number  = {1},
+              pages   = {55--59},
+              year    = {1972},
+              doi     = {10.1364/JOSA.62.000055}
+            }
+            @article{lucy1974iterative,
+              author  = {Lucy, L. B.},
+              title   = {An iterative technique for the rectification of
+                         observed distributions},
+              journal = {The Astronomical Journal},
+              volume  = {79},
+              number  = {6},
+              pages   = {745--754},
+              year    = {1974},
+              doi     = {10.1086/111605}
+            }
+            ```
+
+    Examples
+    --------
+    >>> import torch
+    >>> from optix.deconv import BiggsAndrews
+    >>> psf = torch.ones(5, 5)
+    >>> data = torch.poisson(torch.full((64, 64), 10.0))
+    >>> est = BiggsAndrews(psf, n_iter=10).fit(data)
+    >>> est.apply(data).shape
+    torch.Size([64, 64])
+    """
+
+    tags = Tags(
+        targets=("deconvolution",),
+        streaming="halo",
+        noise="poisson",
+        reference=(
+            "doi:10.1364/AO.36.001766, doi:10.1364/JOSA.62.000055, "
+            "doi:10.1086/111605"
+        ),
+    )
+    paper = dict(RichardsonLucy.paper)
+    recommended = dict(paper)
+    _accelerate = True
 
 
 def richardson_lucy(
@@ -628,5 +854,49 @@ def richardson_lucy(
         `out`, the deconvolved images.
     """
     est = RichardsonLucy(psf, layout=layout, **options)
+    est.fit(data, init=sensor)
+    return est.apply(data, out)
+
+
+def biggs_andrews(
+    data: ArrayLike,
+    psf: Tensor,
+    *,
+    out: WritableArrayLike | None = None,
+    sensor: SensorEstimate | None = None,
+    layout: Layout | None = None,
+    **options: object,
+) -> WritableArrayLike:
+    """Accelerated Richardson–Lucy deconvolution of `data`.
+
+    Shortcut for `BiggsAndrews(psf, **options).fit(data,
+    init=sensor).apply(data, out)`; see
+    [`BiggsAndrews`][optix.deconv.BiggsAndrews] for the acceleration and
+    [`RichardsonLucy`][optix.deconv.RichardsonLucy] for the model, the
+    defaults and the extensions.
+
+    Parameters
+    ----------
+    data : array-like or Labeled
+        Images; `(*samples, *spatial)` without a layout, with as many
+        spatial dims as the PSF.
+    psf : Tensor
+        Point spread function, centred at index `K // 2`.
+    out : writable array-like, optional
+        Output (tensor, numpy, zarr, ...). Default: a new tensor.
+    sensor : SensorEstimate, optional
+        Camera model; the data are converted to electrons.
+    layout : Layout, optional
+        Axis roles.
+    **options
+        Options of [`BiggsAndrews`][optix.deconv.BiggsAndrews]
+        (`n_iter`, `background`, `damping`, `halo`, `faithful`, ...).
+
+    Returns
+    -------
+    writable array-like
+        `out`, the deconvolved images.
+    """
+    est = BiggsAndrews(psf, layout=layout, **options)
     est.fit(data, init=sensor)
     return est.apply(data, out)
