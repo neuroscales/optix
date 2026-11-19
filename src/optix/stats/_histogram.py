@@ -17,36 +17,22 @@ __all__ = ["Histogram"]
 class Histogram(Reducer):
     """Per-pixel fixed-range histogram with underflow and overflow bins.
 
-    Parameters
-    ----------
-    lo, hi : Tensor or float
-        Range, as scalars or per-pixel maps (typically from a
-        :class:`MinMax` pass). Fixed at construction.
-    bins : int
-        Number of regular bins between ``lo`` and ``hi``.
-    dim : int or tuple of int or None
-        Reduced dims of each chunk (see :class:`Reducer`).
-    count_dtype : torch.dtype
-        Integer dtype of the counts (default int64, which cannot
-        overflow in practice; int32 halves the memory but overflows past
-        ``2^31 - 1`` counts in one bin).
-
     Attributes
     ----------
     counts : (bins + 2, *item) Tensor
-        ``counts[0]`` counts values below ``lo``, ``counts[-1]`` values
-        above ``hi`` (and NaNs), ``counts[1:-1]`` the regular bins. A value
-        equal to ``hi`` goes into the last regular bin.
+        `counts[0]` counts values below `lo`, `counts[-1]` values
+        above `hi` (and NaNs), `counts[1:-1]` the regular bins. A value
+        equal to `hi` goes into the last regular bin.
 
     Notes
     -----
     Integer counts make the result exactly independent of chunking and
-    order. A zero-width range (``hi == lo``, dead pixels) puts every value
-    equal to ``lo`` into the first regular bin.
+    order. A zero-width range (`hi == lo`, dead pixels) puts every value
+    equal to `lo` into the first regular bin.
 
-    The state holds ``(bins + 2) * prod(item)`` counts: 64 bins on a
-    2048 x 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
-    warning is emitted when it exceeds the configured chunk ``memory``.
+    The state holds (bins + 2) · ∏(item) counts: 64 bins on a
+    2048 × 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
+    warning is emitted when it exceeds the configured chunk `memory`.
     """
 
     _state = ("counts", "lo", "hi")
@@ -60,6 +46,23 @@ class Histogram(Reducer):
         dim: int | Sequence[int] | None = 0,
         count_dtype: torch.dtype = torch.int64,
     ) -> None:
+        """Create an empty histogram.
+
+        Parameters
+        ----------
+        lo, hi : Tensor or float
+            Range, as scalars or per-pixel maps (typically from a
+            [`MinMax`][optix.stats.MinMax] pass). Fixed at construction.
+        bins : int
+            Number of regular bins between `lo` and `hi`.
+        dim : int or tuple of int or None
+            Reduced dims of each chunk (see
+            [`Reducer`][optix.stats.Reducer]).
+        count_dtype : torch.dtype
+            Integer dtype of the counts (default int64, which cannot
+            overflow in practice; int32 halves the memory but overflows
+            past 2³¹ − 1 counts in one bin).
+        """
         if bins < 1:
             raise ValueError(f"bins must be >= 1, got {bins}")
         super().__init__(dim=dim)
@@ -102,9 +105,9 @@ class Histogram(Reducer):
         Parameters
         ----------
         x : Tensor
-            Chunk; the dims in ``self.dim`` are reduced.
+            Chunk; the dims in `self.dim` are reduced.
         weight : Tensor, optional
-            Boolean mask or integer counts, broadcastable to ``x``.
+            Boolean mask or integer counts, broadcastable to `x`.
 
         Returns
         -------
@@ -147,7 +150,7 @@ class Histogram(Reducer):
         return self
 
     def merge(self, other: "Histogram") -> Self:
-        """Merge another :class:`Histogram` with identical edges."""
+        """Merge another [`Histogram`][optix.stats.Histogram] (same edges)."""
         state = self._other_state(other)
         if other.bins != self.bins:
             raise ValueError("Cannot merge histograms with different bins")
@@ -173,7 +176,7 @@ class Histogram(Reducer):
         Returns
         -------
         (bins + 2, *item) Tensor
-            ``cdf[j]`` = fraction of values in bins ``0..j`` (float64; NaN
+            `cdf[j]` = fraction of values in bins `0..j` (float64; NaN
             where nothing was counted).
         """
         cum = self._edges_cumulative()
@@ -190,9 +193,9 @@ class Histogram(Reducer):
         Returns
         -------
         (*item) or (Q, *item) Tensor
-            Quantiles (dtype of ``lo``). The error is bounded by one bin
-            width inside ``[lo, hi]``; ranks falling in the underflow or
-            overflow bins are clamped to ``lo`` / ``hi``. NaN where nothing
+            Quantiles (dtype of `lo`). The error is bounded by one bin
+            width inside `[lo, hi]`; ranks falling in the underflow or
+            overflow bins are clamped to `lo` / `hi`. NaN where nothing
             was counted.
         """
         cum = self._edges_cumulative()  # cum[j] = count below edge j

@@ -1,4 +1,4 @@
-"""Closed-form Kullback-Leibler divergences ``KL(q || p)``."""
+"""Closed-form Kullback-Leibler divergences KL(q ‖ p)."""
 
 import torch
 from torch import Tensor
@@ -9,12 +9,12 @@ from ._stable import stirling_residual as _res
 
 
 def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
-    """``KL(Dir(a) || Dir(b))``.
+    """KL(Dir(a) ‖ Dir(b)).
 
     Parameters
     ----------
     a, b : (..., K) Tensor
-        Concentration parameters of ``q`` and ``p`` (last dim =
+        Concentration parameters of `q` and `p` (last dim =
         categories).
 
     Returns
@@ -24,16 +24,20 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
 
     Notes
     -----
-    ``KL = lgamma(a0) - lgamma(b0) - sum(lgamma(a) - lgamma(b))
-    + sum((a - b) (digamma(a) - digamma(a0)))``, rewritten with
-    :func:`stirling_residual` ``r``, :func:`log_minus_digamma` ``lmd``
-    and :func:`ratio_minus_log` ``g`` as::
+    With a₀ = ∑ₖ aₖ and b₀ = ∑ₖ bₖ,
+    KL = log Γ(a₀) − log Γ(b₀) − ∑ₖ (log Γ(aₖ) − log Γ(bₖ)) +
+    ∑ₖ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀)), rewritten with
+    [`stirling_residual`][optix.special.stirling_residual] r,
+    [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
+    [`ratio_minus_log`][optix.special.ratio_minus_log] g as
 
-        sum(b g(a / b) + log(a / b) / 2) - (b0 g(a0 / b0) + log(a0 / b0) / 2)
-        + r(a0) - r(b0) - sum(r(a) - r(b))
-        - sum((a - b) lmd(a)) + (a0 - b0) lmd(a0)
+    ```text
+    ∑ₖ (bₖ g(aₖ/bₖ) + ½ log(aₖ/bₖ)) − (b₀ g(a₀/b₀) + ½ log(a₀/b₀))
+    + r(a₀) − r(b₀) − ∑ₖ (r(aₖ) − r(bₖ))
+    − ∑ₖ (aₖ − bₖ) lmd(aₖ) + (a₀ − b₀) lmd(a₀)
+    ```
 
-    so that the ``lgamma`` terms of large concentrations cancel exactly.
+    so that the log Γ terms of large concentrations cancel exactly.
     """
     a0 = a.sum(-1)
     b0 = b.sum(-1)
@@ -53,14 +57,14 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
 def kl_gamma(
     shape_q: Tensor, rate_q: Tensor, shape_p: Tensor, rate_p: Tensor
 ) -> Tensor:
-    """``KL(Gamma(shape_q, rate_q) || Gamma(shape_p, rate_p))``, elementwise.
+    """KL(Gamma(shape_q, rate_q) ‖ Gamma(shape_p, rate_p)), elementwise.
 
     Parameters
     ----------
     shape_q, rate_q : Tensor
-        Shape and rate of ``q``.
+        Shape and rate of `q`.
     shape_p, rate_p : Tensor
-        Shape and rate of ``p``.
+        Shape and rate of `p`.
 
     Returns
     -------
@@ -69,16 +73,24 @@ def kl_gamma(
 
     Notes
     -----
-    ``KL = (aq - ap) digamma(aq) - lgamma(aq) + lgamma(ap)
-    + ap log(bq / bp) + aq (bp - bq) / bq``, rewritten with
-    :func:`stirling_residual` ``r``, :func:`log_minus_digamma` ``lmd`` and
-    :func:`ratio_minus_log` ``g`` as::
+    With shapes a and rates b,
 
-        ap (g(aq / ap) + g(bp / bq)) + log(aq / ap) / 2
-        + (aq - ap) ((bp - bq) / bq - lmd(aq)) + r(ap) - r(aq)
+    ```text
+    KL = (a_q − a_p) ψ(a_q) − log Γ(a_q) + log Γ(a_p)
+         + a_p log(b_q/b_p) + a_q (b_p − b_q) / b_q
+    ```
 
-    which has no cancellation between large ``lgamma`` / ``digamma``
-    values (float32 stays accurate at shapes ``~1e6``).
+    rewritten with [`stirling_residual`][optix.special.stirling_residual] r,
+    [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
+    [`ratio_minus_log`][optix.special.ratio_minus_log] g as
+
+    ```text
+    a_p (g(a_q/a_p) + g(b_p/b_q)) + ½ log(a_q/a_p)
+    + (a_q − a_p) ((b_p − b_q) / b_q − lmd(a_q)) + r(a_p) − r(a_q)
+    ```
+
+    which has no cancellation between large log Γ / ψ values (float32
+    stays accurate at shapes ≈ 1e6).
     """
     aq, bq, ap, bp = map(torch.as_tensor, (shape_q, rate_q, shape_p, rate_p))
     return (
@@ -93,14 +105,14 @@ def kl_gamma(
 def kl_normal(
     mean_q: Tensor, var_q: Tensor, mean_p: Tensor, var_p: Tensor
 ) -> Tensor:
-    """``KL(N(mean_q, var_q) || N(mean_p, var_p))``, elementwise.
+    """KL(N(mean_q, var_q) ‖ N(mean_p, var_p)), elementwise.
 
     Parameters
     ----------
     mean_q, var_q : Tensor
-        Mean and variance of ``q``.
+        Mean and variance of `q`.
     mean_p, var_p : Tensor
-        Mean and variance of ``p``.
+        Mean and variance of `p`.
 
     Returns
     -------

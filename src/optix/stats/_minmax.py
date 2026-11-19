@@ -1,6 +1,7 @@
 """Streaming per-pixel minimum and maximum."""
 
 import math
+from collections.abc import Sequence
 from typing import Self
 
 import torch
@@ -14,26 +15,32 @@ __all__ = ["MinMax"]
 class MinMax(Reducer):
     """Per-pixel minimum and maximum.
 
-    Parameters
-    ----------
-    dim : int or tuple of int or None
-        Reduced dims of each chunk (see :class:`Reducer`).
-
     Attributes
     ----------
     min, max : Tensor
-        Running extrema (``+inf`` / ``-inf`` where nothing was seen).
+        Running extrema (`+inf` / `-inf` where nothing was seen).
 
     Notes
     -----
-    NaNs propagate: mask them out with ``weight`` instead. ``weight`` is a
+    NaNs propagate: mask them out with `weight` instead. `weight` is a
     boolean mask (nonzero = keep).
     """
 
     _state = ("min", "max")
 
+    def __init__(self, *, dim: int | Sequence[int] | None = 0) -> None:
+        """Create an empty reducer.
+
+        Parameters
+        ----------
+        dim : int or tuple of int or None
+            Reduced dims of each chunk (see
+            [`Reducer`][optix.stats.Reducer]).
+        """
+        super().__init__(dim=dim)
+
     def update(self, x: Tensor, *, weight: Tensor | None = None) -> Self:
-        """Add a chunk of data; ``weight`` is an optional boolean mask."""
+        """Add a chunk of data; `weight` is an optional boolean mask."""
         x = x.detach()
         if not x.is_floating_point():
             x = x.to(torch.get_default_dtype())
@@ -54,7 +61,7 @@ class MinMax(Reducer):
         return self
 
     def merge(self, other: "MinMax") -> Self:
-        """Merge another :class:`MinMax` into this one."""
+        """Merge another [`MinMax`][optix.stats.MinMax] into this one."""
         state = self._other_state(other)
         if state["min"] is None:
             return self
