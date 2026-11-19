@@ -91,6 +91,16 @@ def test_frame_batches_reassemble(batch):
         assert len(chunks) == 6 * -(-11 // batch)
 
 
+def test_frame_batches_select():
+    data = torch.arange(10 * 3 * 4.0).reshape(10, 3, 4)
+    chunks = frame_batches(data, batch=2)
+    picked = chunks.select([3, 1])
+    assert len(picked) == 2 and len(chunks) == 5
+    got = [c.data for c in picked]
+    assert torch.equal(got[0], data[6:8]) and torch.equal(got[1], data[2:4])
+    assert len(list(chunks)) == 5
+
+
 def test_frame_batches_memory_budget():
     y = np.zeros((20, 4, 4), dtype=np.uint16)
     chunks = frame_batches(y, memory=4 * 16 * 3, dtype=torch.float32)

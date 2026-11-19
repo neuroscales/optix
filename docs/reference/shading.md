@@ -13,6 +13,7 @@ Estimators of the flat field, dark field and per-frame baseline, and the correct
         - BaSiC
         - CIDRE
         - DarkFlatCalibration
+        - GammaMixture
         - IlluminationFunction
 
 ## Transforms
