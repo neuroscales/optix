@@ -2,12 +2,15 @@
 
 import math
 from collections.abc import Sequence
+from numbers import Number
 from typing import TYPE_CHECKING, ClassVar, Self
 
+import numpy as np
 import torch
 from torch import Tensor
 
 from .._config import resolve_backend
+from ..io import ArrayLike, as_tensor, chunk_length
 from ._base import _fmt, _normalise
 
 if TYPE_CHECKING:
@@ -870,3 +873,110 @@ class NormalStats(SuffStats):
                 "order >= 2"
             )
         return cls._new(moments.count, moments.mean, moments.m2)
+
+
+class _Required:
+    """Default of `dim` in the `fit` classmethods: required with data."""
+
+    def __repr__(self) -> str:
+        return "REQUIRED"
+
+
+REQUIRED = _Required()
+
+#: Chunk-sized temporaries held while reducing one chunk (data, mask,
+#: log, weighted product).
+_OVERHEAD = 4.0
+
+
+def _native_dtype(data: object) -> torch.dtype | None:
+    """Floating torch dtype of an array-like, None if not floating."""
+    dtype = getattr(data, "dtype", None)
+    try:
+        dtype = np.dtype(dtype) if dtype is not None else None
+    except TypeError:
+        return None
+    if dtype is None or dtype.kind != "f":
+        return None
+    return torch.from_numpy(np.empty(0, dtype)).dtype
+
+
+def _stream(
+    kind: type[SuffStats],
+    data: ArrayLike,
+    weight: object,
+    dim: int | Sequence[int] | None,
+    event_ndim: int,
+) -> SuffStats:
+    """Statistics of an array-like, merged over chunks of a reduced dim."""
+    shape = tuple(int(s) for s in data.shape)
+    batch_ndim = len(shape) - event_ndim
+    if batch_ndim < 0:
+        raise ValueError(
+            f"{kind.__name__}: data of shape {shape} have fewer than "
+            f"{event_ndim} event dims"
+        )
+    dims = _batch_dims(kind.__name__, dim, batch_ndim)
+    backend = resolve_backend(dtype=_native_dtype(data))
+    if not dims or shape[dims[0]] == 0:
+        x = as_tensor(data[(slice(None),) * len(shape)], **backend)
+        if weight is not None:
+            weight = as_tensor(weight, **backend)
+        return kind.from_samples(x, weight, dim=dims)
+    split = dims[0]
+    length = shape[split]
+    item = shape[:split] + shape[split + 1 :]
+    step = chunk_length(
+        item, dtype=backend["dtype"], overhead=_OVERHEAD, maximum=length
+    )
+    if weight is not None:
+        weight = as_tensor(weight, **backend).expand(shape[:batch_ndim])
+    total = None
+    for start in range(0, length, step):
+        index = [slice(None)] * len(shape)
+        index[split] = slice(start, min(start + step, length))
+        x = as_tensor(data[tuple(index)], **backend)
+        w = None if weight is None else weight[tuple(index[:batch_ndim])]
+        part = kind.from_samples(x, w, dim=dims, dtype=torch.float64)
+        total = part if total is None else total + part
+    return total.to(dtype=backend["dtype"])
+
+
+def _as_stats(
+    kind: type[SuffStats],
+    where: str,
+    data: object,
+    weight: object,
+    dim: object,
+    event_ndim: int,
+) -> SuffStats:
+    """`data` itself if it is statistics, else its statistics.
+
+    Tensors, numbers and nested sequences are reduced in one go with
+    `kind.from_samples`; other array-likes (numpy, memmap, zarr, ...)
+    are read in chunks along the first reduced dim and merged.
+    """
+    if isinstance(data, SuffStats):
+        if not isinstance(data, kind):
+            raise TypeError(
+                f"{where}: expected {kind.__name__} or data, got "
+                f"{type(data).__name__}"
+            )
+        if weight is not None or dim is not REQUIRED:
+            raise TypeError(
+                f"{where}: weight and dim apply to data, not to "
+                f"{kind.__name__}"
+            )
+        return data
+    eager = isinstance(data, Tensor | Number | list | tuple)
+    lazy = isinstance(data, ArrayLike) and not isinstance(data, str | bytes)
+    if not (eager or lazy):
+        raise TypeError(
+            f"{where}: expected {kind.__name__}, a Tensor or an array-like, "
+            f"got {type(data).__name__}"
+        )
+    if dim is REQUIRED:
+        raise TypeError(f"{where}: dim= is required when fitting data")
+    if eager:
+        return kind.from_samples(data, weight, dim=dim)
+    return _stream(kind, data, weight, dim, event_ndim)

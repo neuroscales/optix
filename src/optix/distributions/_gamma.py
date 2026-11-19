@@ -1,6 +1,7 @@
 """Gamma distribution."""
 
-from typing import NamedTuple, Self
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, NamedTuple, Self
 
 import torch
 from torch import Tensor
@@ -8,7 +9,10 @@ from torch import Tensor
 from ..special import fit_gamma_shape
 from . import functional as F
 from ._base import Distribution, _register_kl
-from ._stats import GammaStats
+from ._stats import REQUIRED, GammaStats, _as_stats
+
+if TYPE_CHECKING:
+    from ..io import ArrayLike
 
 __all__ = ["Gamma", "GammaExpectations"]
 
@@ -205,16 +209,18 @@ class Gamma(Distribution):
     @classmethod
     def fit(
         cls,
-        stats: GammaStats,
+        data: "GammaStats | Tensor | ArrayLike",
+        weight: Tensor | None = None,
         *,
+        dim: int | Sequence[int] | None = REQUIRED,
         mean: Tensor | float | None = None,
         init: "Gamma | None" = None,
         niter: int = 16,
     ) -> Self:
-        """Maximum-likelihood Gamma from accumulated statistics.
+        """Maximum-likelihood Gamma from samples or accumulated statistics.
 
-        With x̄ = `sum_x` / n and l̄ = `sum_log_x` / n, the shape ν solves
-        log ν − ψ(ν) = c (see
+        With n = ∑ₙ wₙ, x̄ = ∑ₙ wₙ xₙ / n and l̄ = ∑ₙ wₙ log xₙ / n, the
+        shape ν solves log ν − ψ(ν) = c (see
         [`fit_gamma_shape`][optix.special.fit_gamma_shape]) with
 
         - `mean` free: μ = x̄ and c = log x̄ − l̄;
@@ -223,10 +229,23 @@ class Gamma(Distribution):
 
         Parameters
         ----------
-        stats : GammaStats
-            Accumulated statistics (preferably float64 at class level:
-            the Jensen gap c ≈ 1 / (2ν) loses its digits in float32
-            for large ν).
+        data : GammaStats, Tensor or array-like
+            Either accumulated statistics, or positive samples xₙ > 0.
+            Samples are reduced with
+            [`GammaStats.from_samples`][optix.distributions.GammaStats.from_samples].
+            A Tensor is reduced in one go. Other array-likes (numpy
+            arrays, memory maps, zarr or h5py arrays, ...) are read in
+            chunks along the first reduced dim, sized by the memory
+            budget of [`config`][optix.config], and their statistics
+            are merged in float64. Statistics are best accumulated in
+            float64: in float32, the Jensen gap c ≈ 1 / (2ν) loses its
+            digits for large ν.
+        weight : Tensor, optional
+            Non-negative frequency weights (or a boolean mask) of the
+            samples, broadcastable to `data`. Samples only.
+        dim : int or sequence of int or None
+            Reduced dims of the samples (`None`: all, `()`: none).
+            Required with samples; not accepted with statistics.
         mean : Tensor or float, optional
             Fixed mean; only the shape is fitted.
         init : Gamma, optional
@@ -237,10 +256,18 @@ class Gamma(Distribution):
         Returns
         -------
         Gamma
-            Stored in the mean / shape parameterisation (μ, ν), batch
-            shape `stats.batch_shape` (broadcast with `mean` and
+            Stored in the mean / shape parameterisation (μ, ν), with the
+            batch shape of the statistics (broadcast with `mean` and
             `init`). Gradients stay finite where n = 0.
+
+        Raises
+        ------
+        TypeError
+            If `data` is neither a
+            [`GammaStats`][optix.distributions.GammaStats] nor
+            array-like, or if `dim` is missing with samples.
         """
+        stats = _as_stats(GammaStats, "Gamma.fit", data, weight, dim, 0)
         n, sx, slx = stats.astuple()
         n = n.to(sx.dtype)  # int64 / float64 count
         ok = n > 0
