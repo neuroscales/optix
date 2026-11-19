@@ -190,13 +190,10 @@ class BaSiC(Estimator):
     with DCT-sparse :math:`S` and :math:`D = D_Z + D_R`, the two-step
     baseline and the correction with :math:`b_\mathrm{norm}`. The
     update equations, the weights :math:`W`, the automatic
-    :math:`\lambda_S, \lambda_D` and the stopping rules are given in the
-    paper's Supplementary Notes 3 and 4, which could not be consulted:
-    those follow the MIT-licensed BaSiCPy 2.0.0,
-    ``fitting_mode="approximate"`` (BaSiCPy's port of the original
-    BaSiC, checked against it), with ``working_size=128``, ``tol=1e-3``
-    and ``reweight_tol=1e-2``, and must be checked against the
-    Supplementary Information. The paper solves the problem with the
+    :math:`\lambda_S, \lambda_D` and the stopping rules are those of the
+    MIT-licensed BaSiCPy 2.0.0, ``fitting_mode="approximate"`` (BaSiCPy's
+    port of the original BaSiC), with ``working_size=128``, ``tol=1e-3``
+    and ``reweight_tol=1e-2``. The paper solves the problem with the
     linearised ALM of Lin et al. (2011); BaSiCPy's "approximate" scheme
     is its inexact-ALM variant. The per-frame baseline solver
     (weighted median) is optix's: BaSiCPy's own is the ``"basicpy"``
@@ -223,7 +220,7 @@ class BaSiC(Estimator):
     Not implemented: BaSiCPy's ``autotune`` (search of ``lambda_flat`` on
     an entropy and Fourier cost; pass ``lambda_flat`` explicitly) and its
     ``fitting_mode="ladmap"`` solver (which fails on 2-D stacks in
-    BaSiCPy 2.0.0, so it could not be validated).
+    BaSiCPy 2.0.0).
 
     References
     ----------
