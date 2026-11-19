@@ -137,7 +137,7 @@ _RESERVED = {
     "faithful",
     "dtype",
     "device",
-    "layout",
+    "layout",  # routed to `self.layout` by `_resolve`, not an option
     "__class__",
     "kwargs",
 }
@@ -196,7 +196,8 @@ class Estimator:
     Subclasses define `tags` (which registers them), the `paper` and
     `recommended` presets, spell out their options as keyword-only
     parameters defaulting to None, and call
-    `self._resolve(faithful, locals())`. They implement `_fit` and
+    `self._resolve(faithful, locals())`, which also routes a `layout`
+    parameter to `self.layout`. They implement `_fit` and
     `_apply`; the public [`fit`][optix.Estimator.fit] /
     [`apply`][optix.Estimator.apply] run them under `torch.no_grad()`.
 
@@ -259,17 +260,32 @@ class Estimator:
         **options
             Hyper-parameters (the base's view of the subclass's options).
         """
-        if layout is not None and not isinstance(layout, Layout):
-            raise TypeError(f"layout must be a Layout, got {layout!r}")
         self.dtype = _parse_dtype(dtype)
         self.device = _parse_device(device)
-        self.layout = layout
+        self.layout = None
+        self._set_layout(layout)
         self.estimates: dict[str, Estimate] = {}
         self.history = History()
         self._resolve(faithful, options)
 
+    def _set_layout(self, layout: Layout | None) -> None:
+        """Validate `layout` and store it in `self.layout` (None keeps it)."""
+        if layout is None:
+            return
+        if not isinstance(layout, Layout):
+            raise TypeError(f"layout must be a Layout, got {layout!r}")
+        self.layout = layout
+
     def _resolve(self, faithful: bool, params: Mapping[str, object]) -> None:
-        """Resolve options against the preset selected by `faithful`."""
+        """Resolve options against the preset selected by `faithful`.
+
+        `layout` is not an option: when `params` holds one (the
+        subclass's `locals()`), it goes to `self.layout`, so it is kept
+        even if the subclass did not pass it on to `Estimator.__init__`.
+        The other reserved names (`faithful`, `dtype`, `device`, ...)
+        and private names are skipped.
+        """
+        self._set_layout(params.get("layout"))
         preset = self.paper if faithful else self.recommended
         options = {}
         for name, value in params.items():
@@ -423,8 +439,12 @@ class Estimator:
     ) -> Estimate | None:
         """First estimate of type `cls` in `init`, cloned and moved.
 
-        Fields must broadcast to `shape` (scalars do); `None` fields
-        are left for the data-driven initialisation.
+        The spatial maps must broadcast to `shape` (scalars do). The
+        per-sample fields (`cls._per_sample`, e.g. the per-frame
+        `ShadingEstimate.baseline`) are not checked against `shape`:
+        the caller matches them to its samples. `None` fields are left
+        for the data-driven initialisation; `meta` (e.g.
+        `baseline_units`) is kept.
         """
         for estimate in self._init_estimates(init):
             if isinstance(estimate, cls):
@@ -432,7 +452,7 @@ class Estimator:
                 picked = estimate.clone().to(**backend)
                 if shape is not None:
                     for name, value in picked._fields().items():
-                        if value is None:
+                        if value is None or name in picked._per_sample:
                             continue
                         try:
                             torch.broadcast_shapes(value.shape, tuple(shape))
