@@ -42,6 +42,7 @@ def rl_step(
     background: Tensor | float = 0.0,
     damping: float = 1.0,
     mu: Tensor | None = None,
+    back: Callable[[Tensor], Tensor] | None = None,
 ) -> Tensor:
     """One Richardson–Lucy update on a block.
 
@@ -66,15 +67,20 @@ def rl_step(
         Fraction ε ∈ (0, 1] of the multiplicative correction applied.
     mu : Tensor, optional
         H f + b if already computed (e.g. for a stopping test).
+    back : callable, optional
+        Back projector B, block `(..., *L)` to object `(..., *N)`, used in
+        place of Hᵀ (an unmatched back projector); `inv_norm` is then
+        1 / B1. Default: Hᵀ.
 
     Returns
     -------
     Tensor
-        Updated estimate, non-negative.
+        Updated estimate, non-negative (negative values of an unmatched
+        update are set to 0).
     """
     if mu is None:
         mu = _expected(f, op, background)
-    c = op.adjoint(data / mu) * inv_norm
+    c = (op.adjoint if back is None else back)(data / mu) * inv_norm
     if damping != 1.0:
         c = 1.0 - damping + damping * c
     return (f * c).clamp_(min=0)
@@ -124,6 +130,7 @@ def rl_block(
     max_iter: int = 100,
     background: Tensor | float = 0.0,
     damping: float = 1.0,
+    back: Callable[[Tensor], Tensor] | None = None,
 ) -> tuple[Tensor, int]:
     """Richardson–Lucy iterations on one block.
 
@@ -149,6 +156,9 @@ def rl_block(
     damping : float
         Fraction ε ∈ (0, 1] of the correction applied (see
         [`rl_step`][optix.deconv.utils.rl_step]).
+    back : callable, optional
+        Unmatched back projector B used in place of Hᵀ, normalised by B1
+        (see [`rl_step`][optix.deconv.utils.rl_step]). Default: Hᵀ.
 
     Returns
     -------
@@ -161,6 +171,8 @@ def rl_block(
     norm = op.norm
     valid = norm > norm.max() * torch.finfo(norm.dtype).eps * 16
     tiny = torch.finfo(norm.dtype).tiny
+    if back is not None:
+        norm = back(norm.new_ones(op.shape))
     inv_norm = torch.where(valid, 1 / norm.clamp(min=tiny), 0)
     f = torch.zeros_like(norm)
     f = torch.where(valid, f + start, f)
@@ -178,6 +190,7 @@ def rl_block(
             background=background,
             damping=damping,
             mu=mu,
+            back=back,
         )
         n += 1
     return f, n
@@ -548,7 +561,6 @@ class RichardsonLucy(Estimator):
         out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
         maps = self._maps(data, backend)
         ops: dict[tuple[int, ...], PaddedConvolution] = {}
-        n_iter = self.options["n_iter"]
         iterations = self.history.extras.setdefault("iterations", [])
         chunks = blocks(
             data,
@@ -566,20 +578,27 @@ class RichardsonLucy(Estimator):
                 ops[key] = PaddedConvolution(psf, key)
             op = ops[key]
             start = float(self.level[chunk.group + chunk.samples].squeeze())
-            f, n = rl_block(
-                blk.data,
-                op,
-                start,
-                n_iter=None if n_iter is None else int(n_iter),
-                alpha=float(self.options["alpha"]),
-                max_iter=int(self.options["max_iter"]),
-                background=blk.background,
-                damping=float(self.options["damping"]),
-            )
+            f, n = self._solve(blk, op, start)
             iterations.append(float(n))
             chunk.store(out, op.crop(f)[chunk.inner])
         flush(out)
         return out
+
+    def _solve(
+        self, blk: _Block, op: PaddedConvolution, level: float
+    ) -> tuple[Tensor, int]:
+        """Deconvolve one block (core + halo) from the start level."""
+        n_iter = self.options["n_iter"]
+        return rl_block(
+            blk.data,
+            op,
+            level,
+            n_iter=None if n_iter is None else int(n_iter),
+            alpha=float(self.options["alpha"]),
+            max_iter=int(self.options["max_iter"]),
+            background=blk.background,
+            damping=float(self.options["damping"]),
+        )
 
     def _extra_state(self) -> dict[str, object]:
         return {"psf": self.psf, "level": self.level}
