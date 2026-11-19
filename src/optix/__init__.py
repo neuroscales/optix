@@ -7,6 +7,7 @@ from . import (
     io,
     models,
     sensor,
+    shading,
     special,
     stats,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "models",
     "sensor",
     "set_config",
+    "shading",
     "special",
     "stats",
 ]
