@@ -30,6 +30,7 @@ nav = [
     "reference/special.md",
     "reference/sensor.md",
     "reference/shading.md",
+    "reference/deconv.md",
     "reference/destripe.md",
     "reference/models.md",
     "reference/distributions.md",
