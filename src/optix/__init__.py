@@ -2,6 +2,7 @@
 
 from . import (
     basis,
+    destripe,
     distributions,
     estimates,
     io,
@@ -22,6 +23,7 @@ __all__ = [
     "__version__",
     "basis",
     "config",
+    "destripe",
     "distributions",
     "estimates",
     "estimators",
