@@ -7,7 +7,7 @@ from typing import Self
 import torch
 from torch import Tensor
 
-from ._base import Reducer
+from ._base import Reducer, state_dtype
 
 __all__ = ["Moments"]
 
@@ -154,7 +154,7 @@ class Moments(Reducer):
             return self
         sdt = self.state_dtype
         if sdt is None:
-            sdt = torch.float32 if x.device.type == "mps" else torch.float64
+            sdt = state_dtype(x.device)
         if weight is None:
             n = math.prod(x.shape[d] for d in dims)
             count = torch.tensor(n, dtype=sdt, device=x.device)

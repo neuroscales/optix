@@ -1,6 +1,7 @@
 """Tests of the Gamma-mixture model (optix.shading.mix)."""
 
 import importlib.util
+import math
 import pathlib
 import warnings
 
@@ -9,7 +10,7 @@ import pytest
 import torch
 
 import optix
-from optix.estimates import SensorEstimate
+from optix.estimates import SensorEstimate, ShadingEstimate
 from optix.io import Layout, labeled
 from optix.models import (
     random_sensor,
@@ -172,11 +173,11 @@ def test_recovery():
     assert error.mean() < 0.06 and error.max() < 0.2
     assert _rel(classes.parameters[:2, 0], truth["means"]) < 0.1
     assert (classes.parameters[:2, 1] - truth["shapes"]).abs().max() < 0.6
-    assert torch.isnan(classes.parameters[2, 1])
+    assert classes.parameters.shape == (2, 2)
     assert abs(classes.weights.sum().item() - 1) < 1e-6
     z, _ = est.classify(data, per_class=True)
     labels = truth["labels"]
-    fg = est.apply(data)
+    fg = est.apply(data, output="foreground")
     assert ((fg > 0.5) == (labels < 2)).float().mean() > 0.95
     # bright class: well separated
     bright = labels == 1
@@ -208,7 +209,10 @@ def small():
 def _fit(data, **kw):
     kw.setdefault("max_iterations", 4)
     layout = kw.pop("layout", None)
-    return GammaMixture(nclass=2, gain=2.0, **kw).fit(data, layout=layout)
+    init = kw.pop("init", None)
+    return GammaMixture(nclass=2, gain=2.0, **kw).fit(
+        data, layout=layout, init=init
+    )
 
 
 def test_streaming_matches_in_memory(small):
@@ -271,7 +275,7 @@ def test_groups_are_independent_fits(small):
     flat = est.estimates["shading"].flat
     assert flat.shape == (2, 24, 24)
     assert est.concentration_.shape == (2, 16, 3)
-    assert est.estimates["classification"].parameters.shape == (2, 3, 2)
+    assert est.estimates["classification"].parameters.shape == (2, 2, 2)
     for c, data in enumerate((small, other)):
         ref = _fit(data)
         assert torch.allclose(
@@ -348,3 +352,375 @@ def test_options():
     assert GammaMixture(faithful=True).is_faithful
     assert not GammaMixture(lam=2.0).is_faithful
     assert GammaMixture.tags.targets == ("shading", "sensor", "classification")
+
+
+# -- more parity cases: halving, early stop, one class, continuous data,
+# degenerate spread
+def _parity_case(data, *, niter, compile=False, **kw):
+    """Fit the port and the prototype with the same options; compare."""
+    gp = _prototype()
+    dtype = _working_dtype()
+    ctor = {"nclass", "gain", "noise", "quantization"}
+    old = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)
+    try:
+        ref = gp.GammaMixtureModel(
+            data, **{k: v for k, v in kw.items() if k in ctor}
+        )
+        ref.fit(
+            niter=niter,
+            classify=False,
+            **{k: v for k, v in kw.items() if k not in ctor},
+        )
+    finally:
+        torch.set_default_dtype(old)
+    with optix.config(compile=compile and optix.get_config().compile):
+        est = GammaMixture(max_iterations=niter, **kw).fit(data)
+    tol = _TOL[dtype]
+    history = torch.tensor(est.history.objective, dtype=torch.float64)
+    expected = torch.tensor(ref.history, dtype=torch.float64)
+    assert history.shape == expected.shape
+    assert _rel(history, expected) < tol
+    sensor = est.estimates["sensor"]
+    classes = est.estimates["classification"]
+    nclass = kw.get("nclass", 1)
+    assert classes.parameters.shape == (nclass, 2)
+    assert _rel(sensor.offset, ref.param.C) < tol
+    assert _rel(sensor.variance, ref.param.V) < 10 * tol
+    assert _rel(est.estimates["shading"].flat, ref.param.M) < tol
+    assert _rel(classes.parameters[:, 0], ref.prior.mu) < 10 * tol
+    assert _rel(classes.parameters[:, 1], ref.prior.nu) < 10 * tol
+    assert _rel(classes.concentration, ref.prior.alpha) < 10 * tol
+    return est
+
+
+def test_parity_step_halving():
+    # an overshooting step (lr = 2.5) forces the halving branch
+    data, _ = _simulate(shape=(16, 24, 24))
+    est = _parity_case(data, niter=8, nclass=2, gain=2.0, lr=2.5)
+    assert sum(est.history.extras["halvings"]) > 0
+
+
+def test_parity_early_stop():
+    data, _ = _simulate(shape=(16, 24, 24))
+    est = _parity_case(data, niter=40, nclass=2, gain=2.0, tol=1e-3)
+    assert est.history.converged
+    assert len(est.history.objective) < 40
+
+
+def test_parity_one_class():
+    data, _ = _simulate(shape=(16, 24, 24), means=(80.0,), shapes=(2.0,))
+    _parity_case(data, niter=6, nclass=1, gain=2.0)
+
+
+def test_parity_continuous_data():
+    data, _ = _simulate(shape=(16, 24, 24))
+    gen = torch.Generator().manual_seed(0)
+    data = data + torch.rand(data.shape, generator=gen, dtype=data.dtype)
+    _parity_case(data, niter=6, nclass=2, gain=2.0, quantization=0.0)
+
+
+def test_parity_degenerate_spread():
+    # Every pixel holds the same values in a different order: the lower
+    # order statistics are all equal (zero initial spread), and the
+    # fallback scale (median absolute deviation) is the same whether it
+    # is taken per pixel or over tiles.
+    gen = torch.Generator().manual_seed(4)
+    nframes, npix = 30, 24 * 24
+    with torch.random.fork_rng():
+        torch.manual_seed(4)
+        tissue = torch.distributions.Gamma(2.0, 2.0 / 80.0).sample((18,))
+    values = torch.cat([torch.zeros(12), tissue.round().clamp_min(1)])
+    order = torch.rand(npix, nframes, generator=gen).argsort(-1)
+    data = (100 + values[order]).T.reshape(nframes, 24, 24)
+    data = data.to(_working_dtype())
+    _parity_case(data, niter=6, nclass=2, gain=2.0)
+
+
+# -- porting fixes -------------------------------------------------------
+def _peak_bytes(fn):
+    """Peak of the bytes allocated by `fn()` (CPU allocator, exact)."""
+    from torch.profiler import ProfilerActivity, profile
+    from torch.profiler._memory_profiler import Action
+
+    with profile(
+        activities=[ProfilerActivity.CPU],
+        profile_memory=True,
+        record_shapes=True,
+        with_stack=True,
+    ) as prof:
+        fn()
+    current = peak = 0
+    for _, action, _, size in prof._memory_profile().timeline:
+        if action == Action.CREATE:
+            current += size
+        elif action == Action.DESTROY:
+            current -= size
+        peak = max(peak, current)
+    return peak
+
+
+@pytest.mark.parametrize("nclass", [1, 3])
+def test_local_step_memory_within_budget(nclass, monkeypatch):
+    # Frame batches are sized from the declared number of chunk-sized
+    # temporaries: the local step must not hold more (no float64 copy of
+    # the statistics, a budget that grows with the number of classes).
+    from optix.shading.mix import _model
+    from optix.shading.mix._gamma import GammaComponent
+
+    seen = {}
+    frame_batches = _model.frame_batches
+
+    def spy(*args, **kwargs):
+        seen["overhead"] = kwargs["overhead"]
+        return frame_batches(*args, **kwargs)
+
+    monkeypatch.setattr(_model, "frame_batches", spy)
+    n, height, width = 4, 64, 64
+    gen = torch.Generator().manual_seed(0)
+    data = (100 + 3 * torch.randn(n, height, width, generator=gen)).round()
+    backend = dict(dtype=torch.float32, device=torch.device("cpu"))
+    with optix.config(compile=False), torch.no_grad():
+        fit = _model.MixtureFit(
+            data,
+            Layout.default(3, 2),
+            component=GammaComponent(24, (1.0, 1e3)),
+            nclass=nclass,
+            noise="full",
+            order=(8, 8),
+            gain=2.0,
+            quantization=1.0,
+            alpha=torch.ones(nclass + 1),
+            params=torch.ones(nclass, 2),
+            v_prior=None,
+            v_dof=5.0,
+            lam=1.0,
+            gain_sd=0.1,
+            backend=backend,
+        )
+        fit.param.C.fill_(100.0)
+        fit.param.V.fill_(9.0)
+        fit.prior.params = torch.tensor(
+            [[50.0 * (k + 1), 2.0] for k in range(nclass)]
+        )
+        fit.frames()
+        elogpi = fit._elogpi(torch.ones(n, nclass + 1))
+        peak = _peak_bytes(lambda: fit._latent_chunk(data, elogpi))
+    assert peak / (data.numel() * 4) <= seen["overhead"]
+
+
+def test_init_from_invalid_estimates(small):
+    ref = _fit(small, max_iterations=2)
+    sensor = ref.estimates["sensor"]
+    variance = sensor.variance.clone()
+    variance[0, 0] = 0
+    variance[1, 1] = math.nan
+    bad = SensorEstimate(offset=sensor.offset, variance=variance)
+    with pytest.warns(RuntimeWarning, match="variance"):
+        est = _fit(small, max_iterations=2, init=bad)
+    assert np.isfinite(est.history.objective).all()
+    assert est.estimates["sensor"].variance.isfinite().all()
+    assert est.estimates["shading"].flat.isfinite().all()
+    flat = torch.ones(24, 24, dtype=small.dtype)
+    flat[3, 3] = 0
+    with pytest.raises(ValueError, match="flat"):
+        _fit(small, max_iterations=1, init=ShadingEstimate(flat=flat))
+
+
+def test_non_finite_bound_stops(small):
+    data = small.clone()
+    data[3, 5, 5] = math.nan
+    with pytest.warns(RuntimeWarning, match="not finite"):
+        est = _fit(data, max_iterations=5)
+    assert not est.history.converged
+    assert "not finite" in est.history.reason
+    assert len(est.history.objective) < 5
+
+
+def test_fixed_flat_is_used_exactly(small):
+    # A sharp vignette that the DCT basis cannot represent, held fixed
+    yy, xx = torch.meshgrid(
+        torch.linspace(-1, 1, 24, dtype=torch.float64),
+        torch.linspace(-1, 1, 24, dtype=torch.float64),
+        indexing="ij",
+    )
+    flat = (-0.5 * (yy.square() + xx.square()) / 0.3**2).exp() + 0.2
+    flat[5, 7] = 3.0
+    expected = flat / flat.log().mean().exp()
+    shading = ShadingEstimate(flat=(2 * flat).to(small.dtype))
+    # lr = 2.5 forces step halvings
+    est = _fit(
+        small,
+        max_iterations=6,
+        learn_modulation=False,
+        lr=2.5,
+        init=shading,
+    )
+    assert sum(est.history.extras["halvings"]) > 0
+    out = est.estimates["shading"].flat.to(torch.float64)
+    assert torch.allclose(out, expected, rtol=1e-5)
+
+
+def test_accumulators_follow_state_dtype(small, monkeypatch):
+    # Devices without float64 (MPS) accumulate in float32, as optix.stats
+    # does: emulate one on the CPU and check that no float64 tensor is
+    # created by the fit.
+    from torch.utils._python_dispatch import (
+        TorchDispatchMode,
+        _disable_current_modes,
+    )
+
+    from optix.shading.mix import _model
+
+    if _working_dtype() != torch.float32:
+        pytest.skip("needs a float32 working dtype")
+    from optix.distributions import _stats
+
+    for module in (_model, _stats):
+        monkeypatch.setattr(
+            module, "state_dtype", lambda device: torch.float32, raising=False
+        )
+    quantile = torch.quantile
+
+    def outside(*args, **kwargs):  # torch's own float64 internals
+        with _disable_current_modes():
+            return quantile(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "quantile", outside)
+
+    class NoFloat64(TorchDispatchMode):
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            out = func(*args, **(kwargs or {}))
+            for t in torch.utils._pytree.tree_leaves(out):
+                if isinstance(t, torch.Tensor) and t.dtype == torch.float64:
+                    raise AssertionError(f"float64 result of {func}")
+            return out
+
+    est = GammaMixture(nclass=2, gain=2.0, max_iterations=3)
+    with optix.config(compile=False):
+        layout = Layout.default(3, 2)
+        model = est._model(
+            small,
+            layout,
+            dict(dtype=torch.float32, device=torch.device("cpu")),
+            alpha=torch.ones(3),
+            gain=2.0,
+        )
+        with NoFloat64():
+            model.init()
+            model.run(
+                niter=3,
+                tol=1e-6,
+                learn_modulation=True,
+                learn_alpha=True,
+                lr=1.0,
+                max_halvings=4,
+                max_log_step=0.5,
+            )
+    assert np.isfinite(model.history).all()
+
+
+# -- maintainer decisions ------------------------------------------------
+def test_apply_outputs(small):
+    est = _fit(small)
+    sensor = est.estimates["sensor"]
+    flat = est.estimates["shading"].flat
+    corrected = est.apply(small)
+    assert torch.allclose(
+        corrected, (small - sensor.offset) / flat, rtol=1e-5, atol=1e-4
+    )
+    zp, up, _ = est.predict(small, mean=True)
+    zc, _, _ = est.predict(small, per_class=True)
+    fg = est.apply(small, output="foreground")
+    assert torch.allclose(fg, zp, atol=1e-6)
+    classes = est.apply(small, output="classes")
+    assert classes.shape == (2, *small.shape)
+    assert torch.allclose(classes, zc, atol=1e-6)
+    mean = est.apply(small, output="mean")
+    assert torch.allclose(mean, up, rtol=1e-5, atol=1e-4)
+    out = np.zeros(small.shape, dtype=np.float32)
+    est.apply(small, out, output="foreground")
+    assert np.allclose(out, zp.numpy(), atol=1e-6)
+    with pytest.raises(ValueError, match="output"):
+        est.apply(small, output="probabilities")
+
+
+def test_parameters_hold_tissue_classes_only(small):
+    est = _fit(small, max_iterations=1)
+    classes = est.estimates["classification"]
+    assert classes.parameters.shape == (2, 2)
+    assert classes.parameters.isfinite().all()
+    assert classes.weights.shape == classes.concentration.shape == (3,)
+    with pytest.raises(ValueError, match="parameters of shape"):
+        GammaMixture(nclass=3, max_iterations=1).fit(small, init=est)
+
+
+def test_detect_quantization():
+    from optix.shading.mix._model import detect_quantization
+
+    layout = Layout.default(3, 2)
+    gen = torch.Generator().manual_seed(0)
+    counts = torch.poisson(torch.full((20, 24, 24), 50.0), generator=gen)
+    # integer dtype: one ADU
+    assert detect_quantization(counts.to(torch.int16), layout) == 1.0
+    assert detect_quantization(counts.numpy().astype(np.uint16), layout) == 1
+    # integer values stored as floats, with an offset and a scale
+    for scale in (1.0, 0.5, 0.1, 3.0):
+        data = (counts * scale + 7.25).to(torch.float32)
+        delta = detect_quantization(data, layout)
+        assert abs(delta - scale) < 1e-4 * scale, (scale, delta)
+    # continuous data
+    smooth = counts + torch.rand(counts.shape, generator=gen)
+    assert detect_quantization(smooth, layout) == 0.0
+    jitter = torch.rand(counts.shape, generator=gen, dtype=torch.float64)
+    assert detect_quantization(counts.double() + jitter, layout) == 0.0
+    # a few frame batches are read, not the whole array
+    probe = _Lazy((counts * 0.5).numpy())
+    with optix.config(batch=2):
+        assert detect_quantization(probe, layout) == 0.5
+    assert sum(s[0] for s in probe.shapes) <= 8
+
+
+def test_quantization_auto_and_warning(small):
+    half = small * 0.5
+    auto = _fit(half, quantization="auto", max_iterations=2)
+    fixed = _fit(half, quantization=0.5, max_iterations=2)
+    assert np.allclose(auto.history.objective, fixed.history.objective)
+    assert not auto.is_faithful
+    assert GammaMixture().options["quantization"] == 1.0
+    noisy = small + 0.3
+    noisy[::2] += 0.2
+    with pytest.warns(UserWarning, match="integer"):
+        _fit(noisy, max_iterations=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _fit(small, max_iterations=1)
+        _fit(small.to(torch.int32), max_iterations=1)
+        _fit(noisy, max_iterations=1, quantization=0.0)
+
+
+def _quiet(seed=0):
+    gen = torch.Generator().manual_seed(seed)
+    labels = torch.rand(16, 24, 24, generator=gen) > 0.7
+    with torch.random.fork_rng():
+        torch.manual_seed(seed)
+        signal = torch.distributions.Gamma(2.0, 0.025).sample((16, 24, 24))
+    noise = 0.2 * torch.randn(16, 24, 24, generator=gen)
+    data = (100 + noise + labels * signal).round()
+    return data.to(_working_dtype()), labels
+
+
+def test_quiet_data_warning_and_spread_floor():
+    # Read noise well below one ADU: most empty pixels repeat one value,
+    # and the initial spread of the background is zero.
+    data, labels = _quiet()
+    with pytest.warns(RuntimeWarning, match="quantisation variance"):
+        GammaMixture(gain=1.0, max_iterations=2).fit(data)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        floored = GammaMixture(
+            gain=1.0, max_iterations=10, spread_floor=True
+        ).fit(data)
+    assert not GammaMixture(spread_floor=True).is_faithful
+    fg = floored.apply(data, output="foreground") > 0.5
+    assert abs(fg.float().mean() - labels.float().mean()) < 0.05

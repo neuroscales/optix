@@ -9,7 +9,16 @@ from torch import Tensor
 
 from ..io import ArrayLike, Layout, frame_batches
 
-__all__ = ["Reducer", "reduce", "reduce_groups"]
+__all__ = ["Reducer", "reduce", "reduce_groups", "state_dtype"]
+
+
+def state_dtype(device: torch.device | str | None) -> torch.dtype:
+    """Default dtype of accumulators on `device`.
+
+    float64, except on devices without it (MPS), where it is float32.
+    """
+    device = torch.device("cpu" if device is None else device)
+    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def _reduced_dims(dim: int | Sequence[int] | None, ndim: int) -> tuple:

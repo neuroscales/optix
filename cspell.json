@@ -536,7 +536,10 @@
     "κᵐᵃᵈₙ",
     "κᵐᵃᵈₙᵢ",
     "σ̂ᵐᵃᵈ",
-    "σ̂ᵐᵃᵈᵢ"
+    "σ̂ᵐᵃᵈᵢ",
+    "randperm",
+    "pytree",
+    "sdt"
   ],
   "language": "en,en-GB",
   "ignorePaths": ["tests/reference/**"]

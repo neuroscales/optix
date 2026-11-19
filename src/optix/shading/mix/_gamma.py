@@ -48,6 +48,10 @@ def cubic_mode(
     polished by `polish` Newton steps on P.
     """
     # Every in-place operation below acts on a temporary of this function.
+    # In float32, the mode loses accuracy when shot noise is negligible
+    # (γ·m·û / v ≲ 5·10⁻³, e.g. γ ≈ 0.02 with v ≈ 10⁵): the cubic then
+    # degenerates and x − a/3 cancels. Such settings are not realistic for
+    # this model, and the prototype's mode is kept as is.
     tiny = torch.finfo(R0.dtype).tiny
     c = M * gain  # γm
     M2 = M.square()

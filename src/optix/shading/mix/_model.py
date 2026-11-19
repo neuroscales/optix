@@ -1,6 +1,6 @@
 """Variational fit of a mixture model on one group of pictures.
 
-The estimator ([`GammaMixture`][optix.shading.mix.GammaMixture]) runs one
+The estimator ([`GammaMixture`][optix.shading.GammaMixture]) runs one
 `MixtureFit` per group. This module holds the inference loop, the
 background class and the sensor / shading updates; everything that
 depends on the distribution of the tissue signal (its prior, the
@@ -30,10 +30,12 @@ expectations, summed over frames), with
 """
 
 import math
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -48,8 +50,15 @@ from ...io import (
 )
 from ...special import fit_dirichlet
 from ...stats import tile_reduce
+from ...stats._base import state_dtype
 
-__all__ = ["Component", "MixtureFit", "fit_modulation"]
+__all__ = [
+    "Component",
+    "MixtureFit",
+    "detect_quantization",
+    "fit_modulation",
+    "is_integer_valued",
+]
 
 HCC, GC, XU, G1, AU, HVV, GV, WU, G2, BU = range(10)
 NSTATS = 10
@@ -57,9 +66,13 @@ NSTATS = 10
 _DIRICHLET_BOUNDS = (1e-3, 1e3)
 _DIRICHLET_ITER = 32
 _MAX_SAMPLES = 1_000_000
-# Chunk-sized temporaries of the local step (two (10, n, H, W) stacks of
-# statistics plus the quadrature temporaries).
+# Chunk-sized temporaries of the local step: the running (10, n, H, W)
+# statistics, those of the class being integrated and the quadrature
+# temporaries (`_OVERHEAD`), plus log p(y, z = k) and E[T(u) | y, z = k]
+# of every tissue class, kept until the responsibilities are normalised
+# (`_OVERHEAD_CLASS` per class).
 _OVERHEAD = 40.0
+_OVERHEAD_CLASS = 3.5
 
 
 class Component(Protocol):
@@ -95,8 +108,9 @@ class Component(Protocol):
     def fit(self, weight: Tensor, stats: Tensor, previous: Tensor) -> Tensor:
         """New `(K, P)` parameters from the weighted sums of T(u).
 
-        `weight` is `(K,)`, `stats` `(K, nstats)` (float64); classes
-        without weight keep `previous`.
+        `weight` is `(K,)`, `stats` `(K, nstats)` (in the accumulator
+        dtype, float64 where available); classes without weight keep
+        `previous`.
         """
         ...
 
@@ -194,6 +208,8 @@ class MixtureFit:
         self.sample_shape = tuple(sample)
         self.spatial_shape = tuple(spatial)
         self.backend = backend
+        # float64 accumulators, except on devices without float64 (MPS)
+        self.state_dtype = state_dtype(backend.get("device"))
         self.component = component
         self.nclass = nclass
         self.full = noise == "full"
@@ -246,7 +262,7 @@ class MixtureFit:
         return frame_batches(
             source,
             layout=layout,
-            overhead=_OVERHEAD,
+            overhead=_OVERHEAD + _OVERHEAD_CLASS * self.nclass,
             contiguous=True,
             **self.backend,
         )
@@ -261,6 +277,7 @@ class MixtureFit:
         threshold: float = 3.0,
         modulation: bool = True,
         *,
+        spread_floor: bool = False,
         offset: Tensor | None = None,
         variance: Tensor | None = None,
         flat: Tensor | None = None,
@@ -270,11 +287,16 @@ class MixtureFit:
 
         `classes` is `(params, frac, alpha)`: parameters and fractions of
         the tissue classes, and (optionally) the prior concentrations.
+        With `spread_floor`, the initial standard deviation of an empty
+        pixel is at least Δ/√12 (v ≥ Δ²/12). A given flat field is used
+        as is (normalised to a geometric mean of one) when `modulation`
+        is False, and projected onto the DCT basis otherwise.
         """
         prm, prior, post = self.param, self.prior, self.post
         backend = self.backend
         height, width = self.spatial_shape
         nframes, nclass = math.prod(self.sample_shape), self.nclass
+        floor = self.quantization / math.sqrt(12) if spread_floor else 0.0
 
         # Pass 1, over row tiles holding every frame (order statistics):
         # baseline and spread from the lower order statistics of each pixel.
@@ -292,23 +314,50 @@ class MixtureFit:
             sd_typical = sd.median()
             if not sd_typical > 0:
                 sd_typical = self._typical_deviation(C)
-            sd = sd.clamp(0.25 * sd_typical, 4 * sd_typical)
+            sd_typical = sd_typical.clamp_min(floor)
+            sd = sd.clamp(0.25 * sd_typical, 4 * sd_typical).clamp_min(floor)
             V = sd.square()
         if offset is not None:
             C = offset.to(**backend).expand(height, width).clone()
+            if not C.isfinite().all():
+                raise ValueError("The initial offset must be finite")
         if variance is not None:
-            V = variance.to(**backend).expand(height, width).clone()
+            V = _valid_variance(
+                variance.to(**backend).expand(height, width), floor**2
+            )
             sd = V.sqrt()
             sd_typical = sd.median()
+        if self.dq > 0 and V.median() < 0.999 * self.dq:
+            warnings.warn(
+                f"The initial variance of an empty pixel (median "
+                f"{V.median().item():.3g}) is below the quantisation "
+                f"variance Δ²/12 = {self.dq:.3g}: the background class may "
+                f"not fit. `spread_floor=True` floors the initial spread at "
+                f"Δ/√12.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
 
         theta = torch.zeros_like(prm.theta)
         M = None
         if flat is not None:
-            logm = flat.to(**backend).expand(height, width).log()
+            flat = flat.to(**backend).expand(height, width)
+            bad = int((~(flat.isfinite() & (flat > 0))).sum())
+            if bad:
+                raise ValueError(
+                    f"The initial flat field must be positive and finite "
+                    f"({bad} pixels are not)"
+                )
+            logm = flat.log()
             theta = project(logm, [self.by, self.bx])
             theta[0, 0] = 0
             prm.theta = theta
-            M = self.modulation()
+            if modulation:
+                M = self.modulation()
+            else:
+                # m is held fixed: the given flat field itself, with a
+                # geometric mean of one (θ is only its projection)
+                M = logm.sub(logm.mean()).exp_()
 
         # Pass 2, over frame batches: initial labels and signal. Every
         # batch contributes about the same share of the (at most
@@ -324,7 +373,7 @@ class MixtureFit:
         cut = threshold * sd
         fg_count = torch.zeros((height, width), **backend)
         fg_excess = torch.zeros((height, width), **backend)
-        moments = torch.zeros(3, dtype=torch.float64, device=C.device)
+        moments = torch.zeros(3, dtype=self.state_dtype, device=C.device)
         values = []
         for chunk in chunks:
             y = chunk.data
@@ -360,7 +409,8 @@ class MixtureFit:
                     info=info,
                 )
             prm.theta = theta
-        prm.M = self.modulation()
+            M = self.modulation()
+        prm.M = M
 
         n_tissue = n_tissue.reshape(-1)
         alpha = None
@@ -371,8 +421,9 @@ class MixtureFit:
             )
             params = component.clamp(params)
         elif values.numel() >= 2 * nclass:
-            # The classes use the raw tissue values (M is close to 1, and
-            # the k-means is sensitive to small perturbations).
+            # The tissue values are raw when M is estimated here (it is
+            # close to 1, and the k-means is sensitive to small
+            # perturbations), and divided by M when the flat was given.
             params, frac = component.init(values, nclass)
         else:
             params, frac = component.default(
@@ -394,7 +445,12 @@ class MixtureFit:
         prm.C, prm.V = C, V
 
     def _typical_deviation(self, C: Tensor) -> Tensor:
-        """Median over pixels of the per-pixel median of |y − C|."""
+        """Median over pixels of the per-pixel median of |y − C|.
+
+        (The prototype takes the median of per-tile medians, which
+        depends on the tiling; both agree when every pixel has the same
+        distribution.)
+        """
         k = (math.prod(self.sample_shape) + 1) // 2
         dev = torch.empty_like(C)
         tiles = row_tiles(
@@ -428,11 +484,11 @@ class MixtureFit:
         elogpi = self._elogpi(post.alpha)
 
         self._stats, self._counts, self._class_stats = None, None, None
-        f64 = dict(dtype=torch.float64, device=prm.C.device)
-        stats = torch.zeros((NSTATS, height, width), **f64)
+        acc = dict(dtype=self.state_dtype, device=prm.C.device)
+        stats = torch.zeros((NSTATS, height, width), **acc)
         counts = prm.C.new_zeros((*self.sample_shape, nk + 1))
-        class_stats = torch.zeros((nk, self.component.nstats), **f64)
-        bound = torch.zeros((), **f64)
+        class_stats = torch.zeros((nk, self.component.nstats), **acc)
+        bound = torch.zeros((), **acc)
         for chunk in self.frames():
             ep = elogpi[chunk.samples].reshape(-1, nk + 1)
             st, bnd, cnt, cs = self._latent_chunk(chunk.data, ep)
@@ -490,6 +546,7 @@ class MixtureFit:
         acc[HVV].copy_(V).square_().reciprocal_().mul_(0.5)
         acc[GV].copy_(R0).square_().add_(dq).sub_(V).div_(V.square())
         acc[GV].mul_(0.5)
+        del R0
         logjoint = [None] * (nk + 1)
         logjoint[nk] = logZ
 
@@ -506,20 +563,27 @@ class MixtureFit:
             acc.mul_(pz_prv).add_(st.mul_(pz_new))
             logjoint[k] = logZY
             suffs.append(suff)
+            del logZ0, logpY, suff, st, logZY, pz_prv, pz_new
 
-        f64 = torch.float64
+        # Each class is freed once its responsibilities are used
+        sdt = self.state_dtype
         nstats = self.component.nstats
         sum_Z = Y.new_zeros((len(Y), nk + 1))
-        class_stats = torch.zeros((nk, nstats), dtype=f64, device=Y.device)
+        class_stats = torch.zeros((nk, nstats), dtype=sdt, device=Y.device)
         for k in range(nk + 1):
-            Zk = (logjoint[k] - logZ).exp_()
+            Zk = logjoint[k].sub_(logZ).exp_()
+            logjoint[k] = None
             sum_Z[:, k] = Zk.sum((-2, -1))
             if k < nk:
                 for j, t in enumerate(suffs[k]):
-                    class_stats[k, j] = (Zk * t).sum(dtype=f64)
+                    class_stats[k, j] = t.mul_(Zk).sum().to(sdt)
+                suffs[k] = None
+            del Zk
 
-        stats = acc.sum(-3, dtype=f64)  # sum over frames
-        bound = logZ.sum(dtype=f64)
+        # Sums over the chunk in the working dtype (a float64 sum would
+        # first cast the whole chunk), accumulated across chunks in `sdt`
+        stats = acc.sum(-3).to(sdt)  # sum over frames
+        bound = logZ.sum().to(sdt)
         return stats, bound, sum_Z, class_stats
 
     def _loglik(
@@ -644,9 +708,10 @@ class MixtureFit:
             raise RuntimeError("Run update_latent() first")
         prior, post = self.prior, self.post
         post.alpha = (prior.alpha + self._counts).reshape(post.alpha.shape)
-        weight = self._counts[..., :-1].reshape(-1, self.nclass).sum(0)
+        weight = self._counts[..., :-1].reshape(-1, self.nclass)
+        weight = weight.sum(0, dtype=self.state_dtype)
         post.params = self.component.fit(
-            weight.to(torch.float64), self._class_stats, post.params
+            weight, self._class_stats, post.params
         )
 
     def update_prior(self, alpha: bool = True) -> None:
@@ -691,7 +756,7 @@ class MixtureFit:
             halvings = 0
             while (
                 previous is not None
-                and bound < last - slack
+                and not bound >= last - slack  # also when not finite
                 and halvings < max_halvings
             ):
                 halvings += 1
@@ -699,10 +764,19 @@ class MixtureFit:
                 _halve_(prm.V, previous[1])
                 _halve_(prm.theta, previous[2])
                 _loghalve_(prm.gain, previous[3])
-                prm.M = self.modulation()
+                if learn_modulation:  # otherwise m stays as given
+                    prm.M = self.modulation()
                 self.history.pop()
                 bound = self.update_latent()
             self.halvings.append(halvings)
+            if not math.isfinite(bound):
+                warnings.warn(
+                    f"The bound is not finite at iteration {n} (non-finite "
+                    f"data or initial values?): the fit stopped.",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                return False, f"the bound is not finite at iteration {n}"
             if callback is not None:
                 callback(n, bound)
             if abs(bound - last) < slack:
@@ -755,7 +829,7 @@ class MixtureFit:
         layout: Layout,
         alpha: Tensor,
         *,
-        out: WritableArrayLike | Sequence[WritableArrayLike],
+        out: WritableArrayLike | Sequence[WritableArrayLike] | None,
         out_mean: WritableArrayLike | None,
         per_class: bool,
         niter: int,
@@ -765,7 +839,8 @@ class MixtureFit:
 
         `alpha` is `(*sample, K+1)`: q(π) of each frame (updated in place
         by `niter` q(z) / q(π) iterations with fixed likelihoods). `out` is
-        one output (foreground probability) or one per tissue class.
+        one output (foreground probability), one per tissue class, or
+        None (only the mean).
         """
         mean = out_mean is not None
         _, _, spatial = layout.shape_of(source)
@@ -802,9 +877,9 @@ class MixtureFit:
             logZ = torch.logaddexp(logtissue, logbg)
             # From the tissue terms directly (not as 1 − p(bg)), so that
             # small foreground probabilities keep their precision.
-            if per_class:
+            if per_class or out is None:
                 z = logfg.sub_(logZ).exp_()
-                for k, target in enumerate(out):
+                for k, target in enumerate(out or ()):
                     chunk.store(target, z[k])
                 if mean:
                     chunk.store(out_mean, z.mul_(EU).sum(0))
@@ -880,3 +955,155 @@ def fit_modulation(
         w = torch.where(res > outlier * scale, 0, w)
     theta[0, 0] = 0
     return theta
+
+
+def _valid_variance(variance: Tensor, floor: float = 0.0) -> Tensor:
+    """A given variance map, made positive and finite.
+
+    Values that are not positive and finite are replaced by the median of
+    the others, and every value is clamped to at least 1/16 of it (the
+    clamp of the data-driven initialisation) and to `floor`.
+    """
+    ok = variance.isfinite() & (variance > 0)
+    if not ok.any():
+        raise ValueError("The initial variance has no positive, finite value")
+    typical = variance[ok].median()
+    low = max(typical.item() / 16, floor)
+    valid = torch.where(ok, variance, typical).clamp_min_(low)
+    changed = int((valid != variance).sum())
+    if changed:
+        warnings.warn(
+            f"{changed} values of the initial variance were not positive "
+            f"and finite, or below 1/16 of its median: they were replaced "
+            f"or clamped",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+    return valid
+
+
+# -- quantisation of the data ----------------------------------------------
+def _storage(source: ArrayLike) -> tuple[bool, float]:
+    """Whether `source` stores integers, and the epsilon of its floats."""
+    dtype = getattr(source, "dtype", None)
+    if isinstance(dtype, torch.dtype):
+        if dtype.is_floating_point or dtype.is_complex:
+            return False, torch.finfo(dtype).eps
+        return True, 0.0
+    try:
+        dtype = np.dtype(dtype) if dtype is not None else None
+    except TypeError:
+        dtype = None
+    if dtype is not None and dtype.kind in "iub":
+        return True, 0.0
+    if dtype is not None and dtype.kind == "f":
+        return False, float(np.finfo(dtype).eps)
+    return False, float(np.finfo(np.float32).eps)
+
+
+def _sample(
+    source: ArrayLike,
+    layout: Layout,
+    samples: int,
+    batches: int,
+    seed: int,
+) -> Tensor:
+    """Finite values drawn at random from a few random frame batches."""
+    chunks = frame_batches(
+        source,
+        layout=layout,
+        overhead=_OVERHEAD,  # batches no larger than those of the fit
+        dtype=torch.float64,
+        device="cpu",
+    )
+    gen = torch.Generator().manual_seed(seed)
+    pick = torch.randperm(len(chunks), generator=gen)[:batches]
+    per = -(-samples // max(len(pick), 1))
+    parts = [torch.zeros(0, dtype=torch.float64)]
+    for chunk in chunks.select(pick.sort().values.tolist()):
+        x = chunk.data.reshape(-1)
+        if x.numel() > per:
+            x = x[torch.randint(x.numel(), (per,), generator=gen)]
+        parts.append(x)
+    x = torch.cat(parts)
+    return x[x.isfinite()]
+
+
+def detect_quantization(
+    source: ArrayLike,
+    layout: Layout,
+    *,
+    samples: int = 100_000,
+    batches: int = 4,
+    seed: int = 0,
+    fraction: float = 0.99,
+) -> float:
+    """Width Δ of the quantisation bins of the data (0: continuous).
+
+    Integer data give Δ = 1. Otherwise about `samples` values are drawn
+    at random (seeded) from `batches` frame batches, and Δ is the
+    smallest positive gap between their sorted distinct values, refined
+    by least squares. Δ is accepted only if at least `fraction` of the
+    values are integer multiples of Δ from the smallest one, to within
+    1 % of Δ plus the rounding error of the stored floats; otherwise
+    (and when Δ is below 10⁻⁶ of the largest value, or not resolved by
+    the float precision) the data are treated as continuous.
+    """
+    integer, eps = _storage(source)
+    if integer:
+        return 1.0
+    x = _sample(source, layout, samples, batches, seed)
+    if x.numel() < 2:
+        return 0.0
+    y = x - x.min()
+    levels = torch.unique(y)  # sorted
+    if levels.numel() < 2:
+        return 0.0
+    delta = levels.diff().min().item()
+    scale = x.abs().max().item()
+    err = 4 * eps * scale  # rounding error of one value
+    # A Δ that the floats do not resolve, or finer than 10⁻⁶ of the
+    # values (whose δ = Δ²/12 is negligible), is not a quantisation
+    if delta <= max(16 * err, 1e-6 * scale):
+        return 0.0
+    # Least squares on the levels whose multiple of Δ is unambiguous,
+    # over a range that grows as Δ gets more accurate
+    reach = delta / (8 * err) if err > 0 else math.inf
+    for _ in range(4):
+        k = (levels / delta).round()
+        near = ((levels / delta - k).abs() <= 0.25) & (k > 0) & (k <= reach)
+        if not near.any():
+            break
+        kk = k[near]
+        delta = (kk * levels[near]).sum().item() / kk.square().sum().item()
+        reach *= kk.max().item()
+    r = y / delta
+    tol = 0.01 + err / delta
+    ok = ((r - r.round()).abs() <= tol).double().mean().item()
+    return delta if ok >= fraction else 0.0
+
+
+def is_integer_valued(
+    source: ArrayLike,
+    layout: Layout,
+    *,
+    samples: int = 100_000,
+    batches: int = 4,
+    seed: int = 0,
+    fraction: float = 0.99,
+) -> bool:
+    """Whether (nearly) all the values of the data are integers.
+
+    Integer data are; otherwise the values sampled as in
+    `detect_quantization` are tested, to within 0.01 plus the rounding
+    error of the stored floats.
+    """
+    integer, eps = _storage(source)
+    if integer:
+        return True
+    x = _sample(source, layout, samples, batches, seed)
+    if not x.numel():
+        return True
+    tol = x.abs().mul_(4 * eps).add_(0.01)
+    ok = ((x - x.round()).abs() <= tol).double().mean().item()
+    return ok >= fraction

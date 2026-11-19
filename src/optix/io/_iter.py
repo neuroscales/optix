@@ -1,5 +1,6 @@
 """Chunked iteration over array-likes, with optional prefetching."""
 
+import copy as _copy
 import math
 import queue
 import threading
@@ -451,6 +452,23 @@ class Chunks:
 
     def __len__(self) -> int:
         return len(self._plans)
+
+    def select(self, indices: Sequence[int]) -> "Chunks":
+        """The chunks at `indices` only (in that order), still lazy.
+
+        Parameters
+        ----------
+        indices : sequence of int
+            Positions in this sequence of chunks.
+
+        Returns
+        -------
+        Chunks
+            Only those chunks are read when it is iterated.
+        """
+        new = _copy.copy(self)
+        new._plans = [self._plans[i] for i in indices]
+        return new
 
     def _load_host(self) -> Iterator[tuple[Plan, Tensor, bool]]:
         """Host side only: slice and convert to CPU tensors."""

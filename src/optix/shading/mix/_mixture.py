@@ -2,6 +2,7 @@
 
 import itertools
 import math
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -13,11 +14,12 @@ from ...estimates import Classification, SensorEstimate, ShadingEstimate
 from ...io import ArrayLike, Labeled, Layout, WritableArrayLike, prepare_out
 from ...io._arrays import chunks_of, flush
 from ._gamma import GammaComponent
-from ._model import MixtureFit
+from ._model import MixtureFit, detect_quantization, is_integer_valued
 
 __all__ = ["GammaMixture"]
 
 _NOISE = ("full", "constant")
+_OUTPUTS = ("corrected", "foreground", "classes", "mean")
 
 _PRESET: dict[str, object] = {
     "nclass": 1,
@@ -36,6 +38,7 @@ _PRESET: dict[str, object] = {
     "max_log_step": 0.5,
     "bg_fraction": 0.5,
     "threshold": 3.0,
+    "spread_floor": False,
     "concentration": 1.0,
     "v_prior": None,
     "v_dof": 5.0,
@@ -146,10 +149,12 @@ class GammaMixture(Estimator):
       per-pixel unknowns (c, v) are eliminated exactly, which leaves a
       small dense system in θ. A step that lowers the bound is halved.
 
-    Data are integer-valued: each observation is replaced by a uniform
+    Data are quantised: each observation is replaced by a uniform
     distribution over its quantisation bin of width Δ, so that every
     squared residual becomes r² + Δ²/12 and the bound stays finite when a
-    pixel takes the same value in many pictures.
+    pixel takes the same value in many pictures. Δ = 1 (integer data in
+    ADU) by default; `quantization="auto"` detects it from a sample of
+    the data.
 
     The gain γ is held at its nominal value (`gain`, or the gain of an
     initial [`SensorEstimate`][optix.estimates.SensorEstimate]): in this
@@ -166,15 +171,18 @@ class GammaMixture(Estimator):
           with `flat` = m (`meta["flat_norm"] == "geomean"`) and
           `dark` = c.
         - `"classification"`:
-          [`Classification`][optix.estimates.Classification] of the K + 1
-          classes (background last): `concentration` α, `weights`
-          α / ∑α, and `parameters` `(K + 1, 2)` holding the mean μ and
-          shape ν of each tissue class (NaN shape for the background).
+          [`Classification`][optix.estimates.Classification]:
+          `concentration` α and `weights` α / ∑α of the K + 1 classes
+          (background last), and `parameters` `(K, 2)` holding the mean μ
+          and the shape ν of each tissue class.
     concentration_ : Tensor
         `(*group, *sample, K + 1)` concentrations of q(π) of the
         training pictures.
     theta_ : Tensor
-        `(*group, ky, kx)` DCT coefficients of log m.
+        `(*group, ky, kx)` DCT coefficients of log m (of its projection
+        on the basis when a given flat field is held fixed).
+    quantization_ : Tensor
+        `(*group,)` width Δ of the quantisation bins used by the fit.
 
     Notes
     -----
@@ -201,10 +209,11 @@ class GammaMixture(Estimator):
     >>> from optix.models import simulate_sensor
     >>> sensor = random_sensor((32, 32), gain=2.0, offset_sd=0.0, seed=0)
     >>> draw = simulate_gamma_mixture((20, 32, 32), [100.0], [2.0], seed=0)
-    >>> data = simulate_sensor(draw.signal / 2.0, sensor, seed=1)
+    >>> data = simulate_sensor(draw.signal / 2.0, sensor, seed=1).round()
     >>> mixture = GammaMixture(gain=2.0, max_iterations=5).fit(data)
     >>> offset = mixture.estimates["sensor"].offset
-    >>> foreground = mixture.apply(data)
+    >>> corrected = mixture.apply(data)
+    >>> foreground = mixture.apply(data, output="foreground")
     """
 
     tags = Tags(
@@ -227,7 +236,7 @@ class GammaMixture(Estimator):
         gain: float | None = None,
         nodes: int | None = None,
         nu_bounds: tuple[float, float] | None = None,
-        quantization: float | None = None,
+        quantization: float | str | None = None,
         max_iterations: int | None = None,
         tol: float | None = None,
         learn_modulation: bool | None = None,
@@ -237,6 +246,7 @@ class GammaMixture(Estimator):
         max_log_step: float | None = None,
         bg_fraction: float | None = None,
         threshold: float | None = None,
+        spread_floor: bool | None = None,
         concentration: float | tuple[float, ...] | None = None,
         v_prior: float | None = None,
         v_dof: float | None = None,
@@ -263,15 +273,23 @@ class GammaMixture(Estimator):
             Nominal gain γ in ADU per electron. Default: the (mean) gain
             of an initial `SensorEstimate`, else 1.
         nodes : int
-            Number of Gauss-Hermite nodes of the integral over u.
-            Default 24.
+            Number of Gauss-Hermite nodes of the integral over u (per
+            class, pixel and picture). The cost of the fit grows in
+            proportion. The integral is least accurate when a shape ν is
+            close to 1 (about 5·10⁻³ on log p(y | z) with 24 nodes,
+            10⁻³ with 48); more nodes make it more accurate. Default 24.
         nu_bounds : (float, float)
             Bounds on the Gamma shapes. The lower bound of 1 (default)
             prevents a tissue class from developing a spike at zero and
             competing with the background. Default (1, 10³).
-        quantization : float
+        quantization : float or "auto"
             Width Δ of one quantisation bin, in ADU (1 for integer data,
-            the default; 0 treats the data as continuous).
+            the default; 0 treats the data as continuous). `"auto"`
+            detects it on a sample of about 10⁵ values from a few frame
+            batches of each group: 1 for an integer dtype, else the
+            smallest gap between distinct values if nearly all of them are
+            multiples of it, else 0. With Δ = 1, a warning is emitted when
+            that sample is not integer-valued.
         max_iterations : int
             Maximum number of iterations. Default 100.
         tol : float
@@ -295,6 +313,11 @@ class GammaMixture(Estimator):
         threshold : float
             Number of background standard deviations above c beyond
             which a value is initially labelled as tissue. Default 3.
+        spread_floor : bool
+            Floor the initial standard deviation of an empty pixel at
+            the quantisation scale Δ/√12 (so that v ≥ Δ²/12), for data
+            whose read noise is well below one bin. Default False (a
+            warning is emitted when the initial v is below Δ²/12).
         concentration : float or sequence of float
             Initial Dirichlet concentrations α of the K + 1 proportions
             (background last). Default 1.
@@ -321,10 +344,15 @@ class GammaMixture(Estimator):
             raise ValueError(f"noise must be one of {_NOISE}: {opt['noise']}")
         if int(opt["nclass"]) < 1:
             raise ValueError(f"nclass must be >= 1: {opt['nclass']}")
-        if opt["quantization"] < 0:
+        q = opt["quantization"]
+        if isinstance(q, str):
+            if q != "auto":
+                raise ValueError(f"quantization must be 'auto' or >= 0: {q}")
+        elif q < 0:
             raise ValueError("quantization must be non-negative")
         self.concentration_: Tensor | None = None
         self.theta_: Tensor | None = None
+        self.quantization_: Tensor | None = None
 
     # -- helpers -----------------------------------------------------------
     def _order(self) -> tuple[int, int]:
@@ -364,8 +392,11 @@ class GammaMixture(Estimator):
         *,
         alpha: Tensor,
         gain: float,
+        quantization: float | None = None,
     ) -> MixtureFit:
         opt = self.options
+        if quantization is None:
+            quantization = opt["quantization"]
         nclass = int(opt["nclass"])
         component = GammaComponent(int(opt["nodes"]), tuple(opt["nu_bounds"]))
         return MixtureFit(
@@ -376,7 +407,7 @@ class GammaMixture(Estimator):
             noise=opt["noise"],
             order=self._order(),
             gain=gain,
-            quantization=float(opt["quantization"]),
+            quantization=float(quantization),
             alpha=alpha,
             params=torch.ones(nclass, len(component.names)),
             v_prior=opt["v_prior"],
@@ -438,17 +469,34 @@ class GammaMixture(Estimator):
 
         sub = _drop_groups(layout, ndim)
         offsets, variances, flats, thetas, alphas = [], [], [], [], []
-        params, concentrations = [], []
+        params, concentrations, quantizations = [], [], []
         converged = []
+        warned = False
         self.history.reason = ""
         for g in groups:
             source = _fix(raw, dict(zip(gpos, g, strict=True)))
+            quantization = opt["quantization"]
+            if quantization == "auto":
+                quantization = detect_quantization(source, sub)
+            elif quantization == 1 and not warned:
+                if not is_integer_valued(source, sub):
+                    warned = True
+                    warnings.warn(
+                        "quantization=1 assumes integer-valued data (in "
+                        "ADU), but these data are not integer-valued: "
+                        "pass quantization='auto', or the width of their "
+                        "quantisation bins (0 for continuous data).",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+            quantizations.append(float(quantization))
             model = self._model(
                 source,
                 sub,
                 backend,
                 alpha=self._prior_alpha(backend),
                 gain=gain,
+                quantization=quantization,
             )
             offset = field(shading, "dark", g)
             if offset is None:
@@ -457,6 +505,7 @@ class GammaMixture(Estimator):
                 bg_fraction=float(opt["bg_fraction"]),
                 threshold=float(opt["threshold"]),
                 modulation=bool(opt["learn_modulation"]),
+                spread_floor=bool(opt["spread_floor"]),
                 offset=offset,
                 variance=field(sensor, "variance", g),
                 flat=field(shading, "flat", g),
@@ -519,15 +568,16 @@ class GammaMixture(Estimator):
             return torch.stack(items).reshape(*group_shape, *items[0].shape)
 
         offset = stack(offsets)
-        # Background row: mean 0, shape undefined
-        background = torch.tensor([0.0, math.nan], **backend)
-        parameters = stack([torch.cat([p, background[None]]) for p in params])
+        parameters = stack(params)  # tissue classes only
         alpha = stack(concentrations)
         gain_map = torch.as_tensor(gain, **backend)
         if group_shape:
             gain_map = gain_map.expand(*group_shape, 1, 1).clone()
         self.concentration_ = stack(alphas)
         self.theta_ = stack(thetas)
+        self.quantization_ = torch.tensor(
+            quantizations, dtype=torch.float64
+        ).reshape(group_shape)
         model_meta = {
             "model": "y ~ N(offset + flat * u, variance + gain * flat * u)",
             "noise": opt["noise"],
@@ -576,15 +626,18 @@ class GammaMixture(Estimator):
         sensor = self.estimates["sensor"].to(**backend)
         shading = self.estimates["shading"].to(**backend)
         classes = self.estimates["classification"].to(**backend)
-        nclass = int(self.options["nclass"])
         gain = torch.as_tensor(sensor.gain)
         gain = float(gain.reshape(*gain.shape[: len(g)], -1)[g].mean())
+        quantization = None
+        if self.quantization_ is not None:
+            quantization = float(self.quantization_[g])
         model = self._model(
             source,
             layout,
             backend,
             alpha=classes.concentration[g],
             gain=gain,
+            quantization=quantization,
         )
         _, _, spatial = layout.shape_of(source)
         maps = (*classes.concentration.shape[: len(g)], *spatial)
@@ -592,7 +645,7 @@ class GammaMixture(Estimator):
         prm.C = torch.broadcast_to(sensor.offset, maps)[g].clone()
         prm.V = torch.broadcast_to(sensor.variance, maps)[g].clone()
         prm.M = torch.broadcast_to(shading.flat, maps)[g].clone()
-        prior.params = classes.parameters[g][:nclass].clone()
+        prior.params = classes.parameters[g].clone()
         prior.alpha = classes.concentration[g].clone()
         return model
 
@@ -607,6 +660,7 @@ class GammaMixture(Estimator):
         out_mean: WritableArrayLike | None,
         niter: int,
         tol: float,
+        probabilities: bool = True,
     ) -> tuple[WritableArrayLike, WritableArrayLike | None, Tensor]:
         self._fitted()
         if not isinstance(data, Labeled):
@@ -622,12 +676,13 @@ class GammaMixture(Estimator):
                 f"Data have maps of shape {group_shape + spatial}, the fit "
                 f"has {fitted}"
             )
-        out = prepare_out(
-            out,
-            (nclass, *shape) if per_class else shape,
-            like=raw,
-            dtype=self.dtype,
-        )
+        if probabilities:
+            out = prepare_out(
+                out,
+                (nclass, *shape) if per_class else shape,
+                like=raw,
+                dtype=self.dtype,
+            )
         if mean:
             out_mean = prepare_out(out_mean, shape, like=raw, dtype=self.dtype)
         if alpha is None:
@@ -643,7 +698,9 @@ class GammaMixture(Estimator):
             fixed = dict(zip(gpos, g, strict=True))
             source = _fix(raw, fixed)
             model = self._group_model(g, source, sub, backend)
-            if per_class:
+            if not probabilities:
+                target = None
+            elif per_class:
                 shifted = {a + 1: i for a, i in fixed.items()}
                 target = [_fix(out, {0: k, **shifted}) for k in range(nclass)]
             else:
@@ -658,10 +715,15 @@ class GammaMixture(Estimator):
                 niter=niter,
                 tol=tol,
             )
-        flush(out)
+        if probabilities:
+            flush(out)
         if mean:
             flush(out_mean)
-        return out, (out_mean if mean else None), alpha
+        return (
+            out if probabilities else None,
+            out_mean if mean else None,
+            alpha,
+        )
 
     def classify(
         self,
@@ -676,13 +738,13 @@ class GammaMixture(Estimator):
 
         Uses the fitted parameters and the q(π) of each training picture
         (`concentration_`). See
-        [`predict`][optix.shading.mix.GammaMixture.predict] for new
+        [`predict`][optix.shading.GammaMixture.predict] for new
         pictures.
 
         Parameters
         ----------
         data : array-like or Labeled
-            The data given to [`fit`][optix.shading.mix.GammaMixture.fit].
+            The data given to [`fit`][optix.shading.GammaMixture.fit].
         per_class : bool
             False: the foreground probability p(z ≠ background | y), of
             the shape of `data`. True: p(z = c | y) for each tissue class,
@@ -746,7 +808,7 @@ class GammaMixture(Estimator):
         data : array-like or Labeled
             Pictures with the spatial (and group) shape of the fit.
         per_class, mean, out, out_mean
-            See [`classify`][optix.shading.mix.GammaMixture.classify].
+            See [`classify`][optix.shading.GammaMixture.classify].
         niter : int
             Maximum number of q(z) / q(π) iterations per batch.
         tol : float
@@ -771,20 +833,104 @@ class GammaMixture(Estimator):
             tol=tol,
         )
 
+    def apply(
+        self,
+        data: ArrayLike,
+        out: WritableArrayLike | None = None,
+        *,
+        output: str = "corrected",
+    ) -> WritableArrayLike:
+        """Correct the data, or classify them with the fitted model.
+
+        Parameters
+        ----------
+        data : array-like or Labeled
+            Pictures with the spatial (and group) shape of the fit.
+        out : writable array-like, optional
+            Output (tensor, numpy, zarr, ...). Default: a new tensor.
+        output : {"corrected", "foreground", "classes", "mean"}
+            - `"corrected"` (default): the data without the background and
+              the modulation, x = (y − c) / m, with c the fitted offset
+              (camera offset plus background, `estimates["sensor"].offset`)
+              and m the flat field (geometric mean 1,
+              `estimates["shading"].flat`). x is the signal u plus noise,
+              in ADU, of the shape of `data`.
+            - `"foreground"`: p(z ≠ background | y), of the shape of
+              `data`.
+            - `"classes"`: p(z = c | y) of each tissue class,
+              `(K, *data.shape)`.
+            - `"mean"`: E[u | y] (0 in the background), of the shape of
+              `data`.
+
+            The probabilities and the mean are those of
+            [`predict`][optix.shading.GammaMixture.predict], with its
+            defaults.
+
+        Returns
+        -------
+        writable array-like
+            `out`.
+        """
+        if output not in _OUTPUTS:
+            raise ValueError(f"output must be one of {_OUTPUTS}: {output!r}")
+        if not isinstance(data, Labeled):
+            data = self._labeled(data, self.layout)
+        with torch.no_grad():
+            if output == "corrected":
+                return self._apply(data, out)
+            if output == "mean":
+                _, mean, _ = self._responsibilities(
+                    data,
+                    alpha=None,
+                    per_class=False,
+                    mean=True,
+                    out=None,
+                    out_mean=out,
+                    niter=20,
+                    tol=1e-3,
+                    probabilities=False,
+                )
+                return mean
+            z, _, _ = self.predict(
+                data, per_class=output == "classes", out=out
+            )
+            return z
+
     def _apply(
         self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
-        """Foreground probability p(z ≠ background | y) (see `predict`)."""
-        z, _, _ = self.predict(data, out=out)
-        return z
+        """Corrected data (y − c) / m."""
+        self._fitted()
+        shading = self.estimates["shading"]
+        layout = self._layout_of(data)
+        group_shape, _, spatial = layout.shape_of(data)
+        fitted = tuple(shading.flat.shape)
+        if tuple(group_shape) + tuple(spatial) != fitted:
+            raise ValueError(
+                f"Data have maps of shape {group_shape + spatial}, the fit "
+                f"has {fitted}"
+            )
+        flat, dark = shading.flat, shading.dark
+
+        def fn(chunk: object, batch: Tensor) -> Tensor:
+            return batch.sub_(dark[chunk.group].to(batch)).div_(
+                flat[chunk.group].to(batch)
+            )
+
+        return self._apply_frames(data, out, fn, overhead=1.0)
 
     # -- state ---------------------------------------------------------------
     def _extra_state(self) -> dict[str, object]:
-        return {"concentration": self.concentration_, "theta": self.theta_}
+        return {
+            "concentration": self.concentration_,
+            "theta": self.theta_,
+            "quantization": self.quantization_,
+        }
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
         self.concentration_ = state.get("concentration")
         self.theta_ = state.get("theta")
+        self.quantization_ = state.get("quantization")
 
 
 def _class_init(
@@ -797,12 +943,12 @@ def _class_init(
     if classes is None or classes.parameters is None:
         return None
     params = classes.parameters
-    if params.shape[-2:] != (nclass + 1, 2):
+    if params.shape[-2:] != (nclass, 2):
         raise ValueError(
             f"init Classification has parameters of shape "
-            f"{tuple(params.shape)}, expected (*group, {nclass + 1}, 2)"
+            f"{tuple(params.shape)}, expected (*group, {nclass}, 2)"
         )
-    params = torch.broadcast_to(params, (*group_shape, nclass + 1, 2))[g]
+    params = torch.broadcast_to(params, (*group_shape, nclass, 2))[g]
     weights = classes.weights
     if weights is None:
         weights = torch.ones(nclass + 1, dtype=params.dtype)
@@ -811,4 +957,4 @@ def _class_init(
     alpha = classes.concentration
     if alpha is not None:
         alpha = torch.broadcast_to(alpha, (*group_shape, nclass + 1))[g]
-    return params[:nclass], frac, alpha
+    return params, frac, alpha
