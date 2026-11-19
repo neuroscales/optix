@@ -212,3 +212,24 @@ def test_kl_float32_large_parameters(big):
         rtol=1e-4,
         atol=1e-10,
     )
+
+
+def test_fit_dirichlet_bounds():
+    # identical rows: the likelihood increases without bound in α₀
+    elogpi = torch.tensor([0.2, 0.3, 0.5], dtype=torch.float64).log()
+    start = torch.ones(3, dtype=torch.float64)
+    alpha = fit_dirichlet(elogpi, start, 32, bounds=(1e-3, 10.0))
+    assert alpha.max() == 10.0 and alpha.min() >= 1e-3
+    # interior optimum: the bounds change nothing
+    torch.manual_seed(0)
+    x = (
+        torch.distributions.Dirichlet(torch.tensor([2.0, 3.0, 5.0]))
+        .sample((4000,))
+        .double()
+    )
+    e = x.log().mean(0)
+    free = fit_dirichlet(e, torch.ones(3, dtype=torch.float64), 32)
+    boxed = fit_dirichlet(
+        e, torch.ones(3, dtype=torch.float64), 32, bounds=(1e-3, 1e3)
+    )
+    torch.testing.assert_close(free, boxed)

@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-from optix.basis import dct_basis, dct_bending, project, reconstruct
+from optix.basis import dct_basis, dct_bending, gram, project, reconstruct
 
 
 def test_orthonormal(device, dtype):
@@ -111,3 +111,25 @@ def test_bending_2d_matches_prototype_formula():
     w = dct_bending([ny, nx], [ny, nx], dtype=torch.float64)
     torch.testing.assert_close(w, ref, rtol=1e-12, atol=1e-12)
     assert not torch.allclose(w, ly[:, None] ** 2 + lx[None, :] ** 2)
+
+
+def test_gram_matches_dense():
+    torch.manual_seed(0)
+    bases = [
+        dct_basis(7, 3, dtype=torch.float64),
+        dct_basis(5, 4, dtype=torch.float64),
+    ]
+    w = torch.rand(2, 7, 5, dtype=torch.float64)
+    dense = torch.kron(bases[0], bases[1])  # (35, 12), row-major pixels
+    expected = dense.T @ (w.reshape(2, -1, 1) * dense)
+    torch.testing.assert_close(gram(w, bases), expected)
+    # normal equations of a weighted fit
+    x = torch.randn(7, 5, dtype=torch.float64)
+    coef = torch.linalg.solve(
+        gram(w[0], bases), project(w[0] * x, bases).flatten()
+    )
+    ref = torch.linalg.lstsq(
+        w[0].reshape(-1, 1).sqrt() * dense,
+        w[0].reshape(-1).sqrt() * x.reshape(-1),
+    ).solution
+    torch.testing.assert_close(coef, ref)

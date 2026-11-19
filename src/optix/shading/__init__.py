@@ -7,10 +7,12 @@ from . import utils
 from ._basic import BaSiC
 from ._darkflat import DarkFlatCalibration, correct
 from ._illumination import IlluminationFunction
+from .mix import GammaMixture
 
 __all__ = [
     "BaSiC",
     "DarkFlatCalibration",
+    "GammaMixture",
     "IlluminationFunction",
     "correct",
     "utils",
