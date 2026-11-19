@@ -2,7 +2,8 @@
 
 Implements Section III-A to III-C (non-clipped) and V-A / VI-A (clipped
 and robust variants: the estimators are the same, only their model
-changes) of Foi et al. (2008), see [`PoissonGaussian`][].
+changes) of Foi et al. (2008), see
+[`PoissonGaussian`][optix.sensor.PoissonGaussian].
 
 Every image here is in the normalised units of the paper (data range
 [0, 1], Section IV-A) and batched as `(n, H, W)`.

@@ -13,6 +13,7 @@ from ._arrays import (
     as_tensor,
     chunks_of,
     flush,
+    integer_range,
     prepare_out,
     store,
 )
@@ -22,6 +23,7 @@ from ._iter import (
     blocks,
     chunk_length,
     frame_batches,
+    group_frames,
     row_tiles,
 )
 from ._layout import Labeled, Layout, labeled
@@ -39,7 +41,9 @@ __all__ = [
     "chunk_length",
     "chunks_of",
     "flush",
+    "integer_range",
     "frame_batches",
+    "group_frames",
     "labeled",
     "prepare_out",
     "row_tiles",

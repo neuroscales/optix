@@ -21,6 +21,7 @@ __all__ = [
     "as_tensor",
     "chunks_of",
     "flush",
+    "integer_range",
     "prepare_out",
     "store",
 ]
@@ -356,3 +357,12 @@ def flush(out: object) -> None:
     fn = getattr(out, "flush", None)
     if callable(fn):
         fn()
+
+
+def integer_range(dtype: object) -> tuple[float, float]:
+    """`(min, max)` of an integer dtype (torch or numpy-like)."""
+    if isinstance(dtype, torch.dtype):
+        info = torch.iinfo(dtype)
+    else:
+        info = np.iinfo(np.dtype(dtype))
+    return float(info.min), float(info.max)

@@ -7,6 +7,7 @@ import warnings
 from collections.abc import Iterable, Iterator, Sequence
 from typing import TypeVar
 
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -18,6 +19,7 @@ from ._arrays import (
     _finish,
     _host,
     _same_storage,
+    as_tensor,
     chunks_of,
     store,
 )
@@ -30,6 +32,7 @@ __all__ = [
     "blocks",
     "chunk_length",
     "frame_batches",
+    "group_frames",
     "row_tiles",
 ]
 
@@ -971,3 +974,55 @@ def blocks(
         contiguous=contiguous,
         **opt["backend"],
     )
+
+
+def group_frames(
+    data: ArrayLike,
+    layout: Layout | None = None,
+    frame: int = 0,
+    *,
+    dtype: torch.dtype | None = None,
+    device: torch.device | None = None,
+) -> Iterator[tuple[tuple[int, ...], Tensor]]:
+    """Load one frame of each group.
+
+    Parameters
+    ----------
+    data : array-like or Labeled
+    layout : Layout, optional
+        Default: that of a labelled `data`, else `(*samples, H, W)`.
+    frame : int
+        Index of the frame in the flattened sample axes (storage order).
+
+    Yields
+    ------
+    group : tuple of int
+        Position along the group axes (layout order).
+    image : Tensor
+        The frame, with its spatial axes in layout order. Only this frame
+        is read.
+    """
+    raw = data.array if isinstance(data, Labeled) else data
+    if layout is None:
+        layout = (
+            data.layout
+            if isinstance(data, Labeled)
+            else Layout.default(len(data.shape), 2)
+        )
+    shape = tuple(int(s) for s in data.shape)
+    gpos, spos, xpos = layout.positions(len(shape))
+    sshape = tuple(shape[p] for p in spos)
+    nsamples = math.prod(sshape)
+    if not -nsamples <= frame < nsamples:
+        raise IndexError(f"frame {frame} out of range ({nsamples} frames)")
+    sidx = np.unravel_index(frame % max(nsamples, 1), sshape)
+    remaining = sorted(xpos)
+    perm = [remaining.index(p) for p in xpos]
+    for g in np.ndindex(*(shape[p] for p in gpos)):
+        index: list[object] = [slice(None)] * len(shape)
+        for p, i in zip(gpos, g, strict=True):
+            index[p] = int(i)
+        for p, i in zip(spos, sidx, strict=True):
+            index[p] = int(i)
+        image = as_tensor(raw[tuple(index)], dtype=dtype, device=device)
+        yield tuple(int(i) for i in g), image.permute(perm)

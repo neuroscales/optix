@@ -118,7 +118,8 @@ def exact_inverse_table(
     s2 : (S,) Tensor
         Grid of σ² (normalised: σ̂²/α²).
     ymax : float
-        Largest y of the table; above, [`inverse_anscombe`][] uses the
+        Largest y of the table; above,
+        [`inverse_anscombe`][optix.sensor.inverse_anscombe] uses the
         closed form Ĩ_0(D) − σ².
     ny, nd, nquad : int
         Sizes of the y grid, of the D grid and of the quadrature.
@@ -218,7 +219,7 @@ def inverse_anscombe(
     d : Tensor
         Transformed (typically denoised) data D.
     alpha, sigma, mu : Tensor or float
-        As in [`anscombe`][].
+        As in [`anscombe`][optix.sensor.anscombe].
     method : {"exact", "closed-form", "asymptotic", "algebraic"}
         The inverses of Mäkitalo & Foi 2013:
 
@@ -227,11 +228,14 @@ def inverse_anscombe(
           E{f_σ | 0, σ} (the ML inverse, Eq. (14)); outside the table
           (y > ymax), the paper's asymptotic form I_0(D) − σ² (Section
           III-E, Eq. (15)) with the closed form of I_0;
-        - `"closed-form"`: [`closed_form_inverse`][], Eq. (21);
+        - `"closed-form"`:
+          [`closed_form_inverse`][optix.sensor.utils.closed_form_inverse],
+          Eq. (21);
         - `"asymptotic"`: D²/4 − 1/8 − σ², Eq. (22);
         - `"algebraic"`: D²/4 − 3/8 − σ² (biased).
     table : tuple, optional
-        `(sgrid, dgrid, table)` from [`exact_inverse_table`][] (with
+        `(sgrid, dgrid, table)` from
+        [`exact_inverse_table`][optix.sensor.utils.exact_inverse_table] (with
         `sgrid` the uniform grid of normalised σ²), to reuse; default:
         built for the range of σ/α.
 
@@ -283,8 +287,9 @@ class GeneralizedAnscombe(CalibrationEstimator):
     Model (Mäkitalo & Foi 2013, Eq. (1)): z = α·Poisson(y/α) + 𝒩(μ, σ²),
     i.e. a camera with gain α (ADU per electron), offset μ and read
     variance σ² (a [`SensorEstimate`][optix.estimates.SensorEstimate]).
-    [`apply`][optix.sensor.GeneralizedAnscombe.apply] computes
-    [`anscombe`][], [`inverse`][optix.sensor.GeneralizedAnscombe.inverse]
+    [`apply`][optix.Estimator.apply] computes
+    [`anscombe`][optix.sensor.anscombe],
+    [`inverse`][optix.sensor.GeneralizedAnscombe.inverse]
     its inverse.
 
     !!! note
@@ -372,7 +377,8 @@ class GeneralizedAnscombe(CalibrationEstimator):
         alpha, sigma, mu : float, optional
             Noise parameters; alternatively `fit(init=sensor)`.
         inverse : {"exact", "closed-form", "asymptotic", "algebraic"}
-            Inverse used by `inverse` (see [`inverse_anscombe`][]); all
+            Inverse used by `inverse` (see
+            [`inverse_anscombe`][optix.sensor.inverse_anscombe]); all
             four are defined in Mäkitalo & Foi 2013. Paper: `"exact"`.
         per_pixel : bool
             Extension: use the per-pixel maps of the sensor estimate.

@@ -10,14 +10,15 @@ from torch import Tensor
 
 from .._estimator import Estimator, Tags
 from ..estimates import SensorEstimate
-from ..io import ArrayLike, Labeled, Layout, frame_batches
-from ._foi import (
-    SegmentStats,
-    from_normalized,
+from ..io import (
+    ArrayLike,
+    Labeled,
+    Layout,
+    frame_batches,
     group_frames,
     integer_range,
-    sensor_estimate,
 )
+from ._foi import SegmentStats, from_normalized, sensor_estimate
 from ._foi_fit import (
     Pairs,
     covariance,
@@ -238,7 +239,7 @@ class PoissonGaussian(Estimator):
             Extension (not in the paper): merge the level-set statistics
             of every frame of a group (streamed with
             [`frame_batches`][optix.io.frame_batches] and
-            [`SegmentStats`][optix.sensor.SegmentStats]) before the fit.
+            [`SegmentStats`][optix.sensor.utils.SegmentStats]) before the fit.
             Default False.
         differencing : bool
             Extension (not in the paper): use consecutive frame pairs;

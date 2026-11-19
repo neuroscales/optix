@@ -8,7 +8,8 @@ from torch import Tensor
 from .._estimator import Tags
 from ..estimates import SensorEstimate
 from ..io import ArrayLike, WritableArrayLike
-from ._base import MAD_TO_SD, CalibrationEstimator, PixelStats
+from ..stats import PixelStats
+from ._base import MAD_TO_SD, CalibrationEstimator
 
 __all__ = ["SCMOSCalibration", "gain_regression"]
 
@@ -115,10 +116,10 @@ class SCMOSCalibration(CalibrationEstimator):
       variance excess vᵏ − var on the mean excess D̄ᵏ − o over the
       illumination levels k = 1, …, K, D̄ᵏ and vᵏ being the per-pixel
       temporal mean and variance of the stack at level k (Eq. 2.3–2.5;
-      see [`gain_regression`][optix.sensor.gain_regression]). The paper
+      see [`gain_regression`][optix.sensor.utils.gain_regression]). The paper
       used 15 levels of 20,000 frames, ≈ 20 to 200 photons per pixel.
 
-    [`apply`][optix.sensor.SCMOSCalibration.apply] converts data to
+    [`apply`][optix.Estimator.apply] converts data to
     photoelectrons, (ADU − o)/g.
 
     !!! note "Gain estimate"
@@ -194,7 +195,8 @@ class SCMOSCalibration(CalibrationEstimator):
         Parameters
         ----------
         robust : {"none", "huber", "theil-sen"}
-            Regression of the gain (see [`gain_regression`][]). Default:
+            Regression of the gain (see
+            [`gain_regression`][optix.sensor.utils.gain_regression]). Default:
             `"none"` (ordinary least squares through the origin).
         confidence : float, optional
             Extension: flag as `defective` the pixels whose relative

@@ -11,8 +11,9 @@ from .._config import resolve_backend
 from .._estimator import Tags
 from ..estimates import SensorEstimate
 from ..io import ArrayLike, Layout, frame_batches
-from ..stats import Moments
-from ._base import CalibrationEstimator, PixelStats, _layout
+from ..stats import Moments, PixelStats
+from ..stats._pixel import _layout
+from ._base import CalibrationEstimator
 from ._scmos import gain_regression
 
 __all__ = [
@@ -329,7 +330,8 @@ class PhotonTransferCurve(CalibrationEstimator):
 
     - every level and the dark stack: μ_y and σ²_y from the **first two
       images** (Eqs. (16), (18), with the mean-difference correction and
-      1/(2NM) normalisation), see [`pair_stats`][];
+      1/(2NM) normalisation), see
+      [`pair_stats`][optix.sensor.utils.pair_stats];
     - saturation μ_y.sat: the largest mean gray value whose two images
       have at most `saturation_fraction` (0.2 %) of their pixels at the
       maximum value (Section 6.6); the maximum is `max_value`, or the
@@ -338,20 +340,24 @@ class PhotonTransferCurve(CalibrationEstimator):
       σ²_y − σ²_y.dark on μ_y − μ_y.dark over the levels from the smallest
       up to `fit_range` (70 %) of μ_y.sat − μ_y.dark (Eq. (50));
     - linearity of the photon-transfer curve: local slopes K_i of a cubic
-      B-spline regression ([`bspline_slopes`][]) over
+      B-spline regression
+      ([`bspline_slopes`][optix.sensor.utils.bspline_slopes]) over
       [0, μ_y.sat − μ_y.dark] at the points of the gain fit; the linear
       model holds if mean |K_i − K|/K < 3 % (Eq. (51));
     - read noise σ_d = √(σ²_y.dark − σ²_q)/K (Eq. (53)); if
       σ²_y.dark < 0.24 DN², only the upper limit σ_d < 0.40/K (Eq. (54));
     - DSNU and PRNU (Section 8, Eqs. (33)-(36), (65)-(67)) from the
-      highpass-filtered ([`emva_highpass`][]) mean images ⟨y⟩ of the dark
+      highpass-filtered
+      ([`emva_highpass`][optix.sensor.utils.emva_highpass]) mean images
+      ⟨y⟩ of the dark
       stack and of the level closest to 50 % saturation:
       s²_y = s²_measured − σ²_y.stack/L, DSNU = s_y.dark/K (electrons),
       PRNU = √(s²_y.50 − s²_y.dark)/(μ_y.50 − μ_y.dark);
     - with `exposure` (photons per pixel): responsivity R (Eq. (49), slope
       through the origin over the gain-fit range), quantum efficiency
       η = R/K (Eq. (52)) and the linearity error LE
-      ([`linearity_error`][], Eqs. (58)-(63)).
+      ([`linearity_error`][optix.sensor.utils.linearity_error],
+      Eqs. (58)-(63)).
 
     Statistics are per group (Section 6.7: each channel separately). Every
     stack is streamed once.
@@ -359,7 +365,8 @@ class PhotonTransferCurve(CalibrationEstimator):
     !!! note "Interpretations (optix choices, not stated by the standard)"
         - The saturation is chosen among the measured levels (the standard
           sets the exposure to reach 0.1-0.2 %).
-        - The highpass border crop (see [`emva_highpass`][]).
+        - The highpass border crop (see
+          [`emva_highpass`][optix.sensor.utils.emva_highpass]).
         - The temporal-noise correction σ²_y.stack/L of Eq. (36) is applied
           to the highpass-filtered image unchanged.
         - The B-spline check uses the mean of |K_i − K|/K (the text) while
