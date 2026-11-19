@@ -1,8 +1,8 @@
 """Array-like protocols, tensor conversion and output storage.
 
 optix never imports zarr, h5py or dask: array-likes are duck-typed. Only
-basic indexing is used on them: full-length tuples of ``int`` and step-1
-``slice``.
+basic indexing is used on them: full-length tuples of `int` and step-1
+`slice`.
 """
 
 import warnings
@@ -31,9 +31,9 @@ Index = tuple[int | slice, ...]
 
 @runtime_checkable
 class ArrayLike(Protocol):
-    """Anything with ``.shape`` and basic ``__getitem__``.
+    """Anything with `.shape` and basic `__getitem__`.
 
-    Tensor, ndarray, memmap, ``zarr.Array``, ``h5py.Dataset``, dask array.
+    Tensor, ndarray, memmap, `zarr.Array`, `h5py.Dataset`, dask array.
     """
 
     @property
@@ -44,7 +44,7 @@ class ArrayLike(Protocol):
 
 @runtime_checkable
 class WritableArrayLike(ArrayLike, Protocol):
-    """An :class:`ArrayLike` that also supports ``__setitem__``."""
+    """An [`ArrayLike`][optix.io.ArrayLike] that supports `__setitem__`."""
 
     def __setitem__(self, index: Index, value: object) -> None: ...
 
@@ -77,7 +77,7 @@ def _host(
 ) -> tuple[Tensor, bool, bool]:
     """Convert an (already sliced) array-like to a CPU tensor.
 
-    Returns the tensor, whether it may share memory with ``source`` (the
+    Returns the tensor, whether it may share memory with `source` (the
     user's array), and whether it aliases a read-only buffer.
     """
     a = np.asarray(x)
@@ -137,15 +137,15 @@ def as_tensor(
     Parameters
     ----------
     x : array-like
-        Tensor, ndarray, memmap, or anything ``numpy.asarray`` accepts
+        Tensor, ndarray, memmap, or anything `numpy.asarray` accepts
         (calling it is what triggers zarr / h5py / dask I/O).
     dtype, device : optional
-        Working backend (see ``resolve_backend``; the device follows a
+        Working backend (see `resolve_backend`; the device follows a
         Tensor input when unset). Boolean, integer and floating data are
         cast to the working floating dtype, complex data to the complex
         dtype of matching precision.
     copy : bool
-        If True, the result never shares memory with ``x``.
+        If True, the result never shares memory with `x`.
 
     Returns
     -------
@@ -246,9 +246,9 @@ def store(out: WritableArrayLike, index: Index, value: Tensor) -> None:
     out : writable array-like
         Destination.
     index : Index
-        Region of ``out`` to write.
+        Region of `out` to write.
     value : Tensor
-        Data, broadcastable to ``out[index]``.
+        Data, broadcastable to `out[index]`.
 
     Notes
     -----
@@ -258,8 +258,8 @@ def store(out: WritableArrayLike, index: Index, value: Tensor) -> None:
     single precision (float16, bfloat16) are promoted to float32 first.
     Integer values written to a narrower integer output are clamped to
     its range in the same way, instead of wrapping around. Floating values
-    written to a boolean output become ``value != 0``. An output without a
-    ``dtype`` receives the values as they are.
+    written to a boolean output become `value != 0`. An output without a
+    `dtype` receives the values as they are.
     """
     value = value.detach()
     if isinstance(out, Tensor):
@@ -281,16 +281,16 @@ def prepare_out(
     like: object = None,
     dtype: torch.dtype | str | None = None,
 ) -> WritableArrayLike:
-    """Validate a user ``out=`` or allocate an in-memory output.
+    """Validate a user `out=` or allocate an in-memory output.
 
     Parameters
     ----------
     out : writable array-like, optional
-        User-provided output; must have exactly ``shape``.
+        User-provided output; must have exactly `shape`.
     shape : tuple of int
         Required shape.
     like : object, optional
-        Input data. A new output is allocated on the device of ``like`` if
+        Input data. A new output is allocated on the device of `like` if
         it is a Tensor, else on the **CPU** (a result the size of a memmap
         input must not land on the GPU).
     dtype : optional
@@ -303,7 +303,7 @@ def prepare_out(
     Raises
     ------
     ValueError
-        If ``out`` does not have the required shape.
+        If `out` does not have the required shape.
     """
     shape = tuple(int(s) for s in shape)
     if out is not None:
@@ -327,8 +327,8 @@ def chunks_of(x: object) -> tuple[int, ...] | None:
     Returns
     -------
     tuple of int or None
-        zarr ``.shards`` (if sharded) or ``.chunks``, h5py ``.chunks``,
-        dask ``.chunksize``; None for in-memory or contiguous arrays.
+        zarr `.shards` (if sharded) or `.chunks`, h5py `.chunks`,
+        dask `.chunksize`; None for in-memory or contiguous arrays.
     """
     for attr in ("shards", "chunksize", "chunks"):
         value = getattr(x, attr, None)
@@ -347,7 +347,7 @@ def chunks_of(x: object) -> tuple[int, ...] | None:
 
 
 def flush(out: object) -> None:
-    """Call ``out.flush()`` if it exists (memmaps).
+    """Call `out.flush()` if it exists (memmaps).
 
     Parameters
     ----------

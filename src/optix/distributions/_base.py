@@ -22,7 +22,7 @@ def _is_compiling() -> bool:
 
 
 def _fmt(shape: Sequence[int]) -> str:
-    """``(8, 3)`` / ``(4,)`` / ``()``."""
+    """`(8, 3)` / `(4,)` / `()`."""
     shape = tuple(shape)
     return str(shape)
 
@@ -37,7 +37,7 @@ def _normalise(
 ) -> tuple[tuple[Tensor, ...], torch.Size, tuple[torch.Size, ...]]:
     """Convert parameters to tensors on one dtype and device.
 
-    Returns ``(raw, batch_shape, event_shapes)``. Tensors are not copied
+    Returns `(raw, batch_shape, event_shapes)`. Tensors are not copied
     unless their dtype or device changes.
     """
     tensors = [v for v in values if isinstance(v, Tensor)]
@@ -99,7 +99,7 @@ def _shapes(
 
 
 def _check_value(name: str, param: str, kind: str, value: Tensor) -> None:
-    """Raise if ``value`` violates the constraint ``kind`` (synchronises)."""
+    """Raise if `value` violates the constraint `kind` (synchronises)."""
     if kind == "real":
         ok, what = torch.isfinite(value).all(), "finite"
     elif kind == "positive":
@@ -123,39 +123,43 @@ class Distribution:
     """Base of all distributions: parameterisations, shapes and dispatch.
 
     **Parameterisations.** A family declares several parameterisations
-    (``_forms``: tuples of parameter names). An object stores exactly the
-    tensors of the one it was built with (:attr:`form`) and derives every
-    other parameter on demand (:meth:`_derive`), e.g. the precision of a
-    Normal given by its variance. ``params()`` returns the canonical
-    parameterisation (``_canonical``), which is what the
-    :mod:`~optix.distributions.functional` kernels take.
+    (`_forms`: tuples of parameter names). An object stores exactly the
+    tensors of the one it was built with
+    ([`form`][optix.distributions.Distribution.form]) and derives every
+    other parameter on demand (`_derive`), e.g. the precision of a
+    Normal given by its variance. `params()` returns the canonical
+    parameterisation (`_canonical`), which is what the
+    [`functional`][optix.distributions.functional] kernels take.
 
-    Later families declare their forms the same way, e.g. (sketch)::
+    Later families declare their forms the same way, e.g. (sketch):
 
-        class MultivariateNormal(Distribution):
-            _forms = {
-                ("mean", "covariance"): (1, 2),
-                ("mean", "precision"): (1, 2),
-                ("mean", "scale_tril"): (1, 2),
-                ("mean", "precision_tril"): (1, 2),
-            }
-            _canonical = ("mean", "precision_tril")
-            _event_ndim = 1
-            # _check_events: mean (K,) against matrices (K, K)
-            # _derive("precision_tril"): cholesky / flip trick, ...
+    ```python
+    class MultivariateNormal(Distribution):
+        _forms = {
+            ("mean", "covariance"): (1, 2),
+            ("mean", "precision"): (1, 2),
+            ("mean", "scale_tril"): (1, 2),
+            ("mean", "precision_tril"): (1, 2),
+        }
+        _canonical = ("mean", "precision_tril")
+        _event_ndim = 1
+        # _check_events: mean (K,) against matrices (K, K)
+        # _derive("precision_tril"): cholesky / flip trick, ...
 
-        class Wishart(Distribution):
-            _forms = {("df", "scale"): (0, 2), ("df", "rate"): (0, 2),
-                      ("df", "mean"): (0, 2)}   # mean = df * scale
+
+    class Wishart(Distribution):
+        _forms = {("df", "scale"): (0, 2), ("df", "rate"): (0, 2),
+                  ("df", "mean"): (0, 2)}   # mean = df * scale
+    ```
 
     and a conjugate update returns the form in which it is additive (a
-    Wishart posterior in ``(df, rate)``).
+    Wishart posterior in `(df, rate)`).
 
     **Caching.** Derived quantities are recomputed on every access unless
-    caching is switched on (``cache=True`` at construction, or
-    ``q.cache = True``). An entry is reused only while the stored tensors
+    caching is switched on (`cache=True` at construction, or
+    `q.cache = True`). An entry is reused only while the stored tensors
     keep the version counters they had when it was computed, so an
-    in-place change of a parameter (``s.mul_(2)``) invalidates it. The
+    in-place change of a parameter (`s.mul_(2)`) invalidates it. The
     cache is bypassed while compiling (traced functions have no side
     effects and never see it), when a stored tensor requires gradients (a
     cached graph would break a second backward pass) and for inference
@@ -167,36 +171,37 @@ class Distribution:
     **Shapes.** Parameters are stored with their own shapes (not expanded
     to the batch shape), so a scalar prior against per-pixel posteriors
     costs nothing; public parameter attributes and method results are
-    ``expand`` views of shape ``batch_shape + event``. **Returned tensors
-    must not be modified in place** (``clone()`` first).
+    `expand` views of shape `batch_shape + event`. **Returned tensors
+    must not be modified in place** (`clone()` first).
 
     **dtype and device** follow the parameter tensors (promoted between
     floating dtypes); the configuration is used only when no parameter is
     a floating-point tensor.
 
     Objects are immutable by convention. Values are not checked unless
-    ``validate=True`` is passed or :meth:`validate` is called (both
+    `validate=True` is passed or
+    [`validate`][optix.distributions.Distribution.validate] is called (both
     synchronise with the host).
     """
 
-    # No ``__slots__``: torch 2.3's dynamo reads the attributes of an
-    # instance of a slotted class with a plain ``getattr`` instead of
+    # No `__slots__`: torch 2.3's dynamo reads the attributes of an
+    # instance of a slotted class with a plain `getattr` instead of
     # inlining properties, which evaluates them eagerly and installs
-    # guards on short-lived tensors (``InternalTorchDynamoError`` when an
+    # guards on short-lived tensors (`InternalTorchDynamoError` when an
     # object is passed to a compiled function).
     _form: Form
     _stored: tuple[Tensor, ...]
     _batch_shape: torch.Size
     _event_shape: torch.Size
     _cache: dict[str, tuple[tuple[int, ...], Tensor]] | None
-    #: Whether value checks that synchronise are run (``validate=True``).
+    #: Whether value checks that synchronise are run (`validate=True`).
     _validate: bool
 
     #: Parameterisations: names -> event ndim of each parameter.
     _forms: ClassVar[dict[Form, tuple[int, ...]]] = {}
-    #: Parameterisation taken by the ``functional`` kernels.
+    #: Parameterisation taken by the `functional` kernels.
     _canonical: ClassVar[Form] = ()
-    #: Constraint of each parameter name (``real``, ``positive``, ...).
+    #: Constraint of each parameter name (`real`, `positive`, ...).
     _constraints: ClassVar[dict[str, str]] = {}
     #: Event ndim of every parameter name, stored or derived.
     _ndims: ClassVar[dict[str, int]] = {}
@@ -249,8 +254,8 @@ class Distribution:
 
         Default: every parameter with event dims has the same event shape
         (no broadcasting), and the distribution's event shape is its last
-        ``_event_ndim`` dims. Families whose parameters have different
-        event ranks (a mean ``(K,)`` and a precision ``(K, K)``) override
+        `_event_ndim` dims. Families whose parameters have different
+        event ranks (a mean `(K,)` and a precision `(K, K)`) override
         this.
         """
         shaped = [(n, e) for n, e in zip(form, events, strict=True) if e]
@@ -264,11 +269,11 @@ class Distribution:
 
     @classmethod
     def _new(cls, *raw: Tensor, form: Form | None = None) -> Self:
-        """Build from tensors in ``form`` (default canonical).
+        """Build from tensors in `form` (default canonical).
 
         Shapes are checked; values are never validated. Floating tensors
         are promoted to a common dtype (a no-op when they already agree).
-        Used by library code (updates, fits, ``expand``, ...).
+        Used by library code (updates, fits, `expand`, ...).
         """
         floats = [t.dtype for t in raw if t.is_floating_point()]
         if floats:
@@ -286,7 +291,7 @@ class Distribution:
     def _pick(
         name: str, given: dict[str, object], forms: Sequence[Form]
     ) -> Form:
-        """The form whose parameters are exactly the non-None ``given``."""
+        """The form whose parameters are exactly the non-None `given`."""
         names = {k for k, v in given.items() if v is not None}
         for form in forms:
             if set(form) == names:
@@ -298,7 +303,7 @@ class Distribution:
     # -- parameters ------------------------------------------------------
     @property
     def _raw(self) -> tuple[Tensor, ...]:
-        """Stored tensors, in :attr:`form` order."""
+        """Stored tensors, in `form` order."""
         return self._stored
 
     @_raw.setter
@@ -326,13 +331,13 @@ class Distribution:
             self._cache = {}
 
     def _derive(self, name: str) -> Tensor:
-        """Compute parameter ``name`` from the stored ones (unexpanded)."""
+        """Compute parameter `name` from the stored ones (unexpanded)."""
         raise AttributeError(
             f"{type(self).__name__} cannot derive {name!r} from {self._form}"
         )
 
     def _get(self, name: str) -> Tensor:
-        """Parameter ``name``, stored or derived, with its own shape."""
+        """Parameter `name`, stored or derived, with its own shape."""
         if name in self._form:
             return self._raw[self._form.index(name)]
         # test compiling first: traced code never reads the cache
@@ -350,26 +355,27 @@ class Distribution:
         return value
 
     def _view(self, name: str) -> Tensor:
-        """Parameter ``name`` expanded to ``batch_shape + its event``."""
+        """Parameter `name` expanded to `batch_shape + its event`."""
         value = self._get(name)
         e = self._ndims[name]
         return value.expand(self._batch_shape + value.shape[value.ndim - e :])
 
     def _out(self, value: Tensor, event_ndim: int = 0) -> Tensor:
-        """Expand a method result to ``batch_shape + its event``."""
+        """Expand a method result to `batch_shape + its event`."""
         event = value.shape[value.ndim - event_ndim :]
         return value.expand(self._batch_shape + event)
 
     def params(self) -> tuple[Tensor, ...]:
-        """Canonical parameters, unexpanded, for ``functional`` kernels."""
+        """Canonical parameters, unexpanded, for `functional` kernels."""
         return tuple(self._get(n) for n in self._canonical)
 
     def stored(self) -> tuple[Tensor, ...]:
-        """Stored parameters (in :attr:`form` order), unexpanded."""
+        """Stored parameters, unexpanded, in
+        [`form`][optix.distributions.Distribution.form] order."""
         return self._raw
 
     def validate(self) -> Self:
-        """Check parameter values (synchronises); return ``self``.
+        """Check parameter values (synchronises); return `self`.
 
         Skipped while compiling.
 
@@ -419,7 +425,7 @@ class Distribution:
         ----------
         batch_shape : sequence of int
             Target batch shape, broadcast-compatible with
-            :attr:`batch_shape`.
+            [`batch_shape`][optix.distributions.Distribution.batch_shape].
 
         Returns
         -------
@@ -510,59 +516,61 @@ class Distribution:
 
     @property
     def mean(self) -> Tensor:
-        """``E[x]``."""
+        """`E[x]`."""
         raise self._unsupported("mean")
 
     @property
     def variance(self) -> Tensor:
-        """``Var[x]`` (elementwise / marginal)."""
+        """Var[x] (elementwise / marginal)."""
         raise self._unsupported("variance")
 
     def entropy(self) -> Tensor:
-        """Differential (or discrete) entropy, shape ``batch_shape``."""
+        """Differential (or discrete) entropy, shape `batch_shape`."""
         raise self._unsupported("entropy")
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """Log-density at ``value`` of shape ``(*sample, *batch, *event)``."""
+        """Log-density at `value` of shape `(*sample, *batch, *event)`."""
         raise self._unsupported("log_prob")
 
     def natural_params(self) -> tuple[Tensor, ...]:
-        """Natural parameters, ordered like :meth:`expected_stats`."""
+        """Natural parameters, ordered like
+        [`expected_stats`][optix.distributions.Distribution.expected_stats]."""
         raise self._unsupported("natural_params")
 
     def log_normalizer(self) -> Tensor:
-        """Log-normalizer ``A(eta)``, shape ``batch_shape``."""
+        """Log-normalizer A(η), shape `batch_shape`."""
         raise self._unsupported("log_normalizer")
 
     def expected_stats(self) -> NamedTuple:
-        """``E[T(x)]``, ordered like :meth:`natural_params`."""
+        """E[T(x)], ordered like
+        [`natural_params`][optix.distributions.Distribution.natural_params]."""
         raise self._unsupported("expected_stats")
 
     @classmethod
     def from_natural(cls, *eta: Tensor) -> Self:
-        """Distribution with natural parameters ``eta``."""
+        """Distribution with natural parameters `eta` (η)."""
         raise NotImplementedError(
             f"{cls.__name__} does not implement from_natural"
         )
 
     def to_torch(self) -> torch.distributions.Distribution:
-        """Equivalent ``torch.distributions`` object (no validation)."""
+        """Equivalent `torch.distributions` object (no validation)."""
         raise self._unsupported("to_torch")
 
     def _kl_event_shape(self) -> torch.Size:
         """Shape that must agree between the operands of a KL.
 
         The event shape, except for families with several views of the
-        same variable (``Categorical`` labels / one-hot).
+        same variable (`Categorical` labels / one-hot).
         """
         return self._event_shape
 
     def _kl_event_desc(self) -> str:
-        """What :meth:`_kl_event_shape` is, for error messages."""
+        """What `_kl_event_shape` is, for error messages."""
         return f"event_shape {_fmt(self._event_shape)}"
 
     def _check_value_shape(self, value: Tensor) -> torch.Size:
-        """Check the event dims of ``value``; return the result shape."""
+        """Check the event dims of `value`; return the result shape."""
         e = len(self._event_shape)
         event = value.shape[value.ndim - e :] if e else torch.Size(())
         if value.ndim < e or event != self._event_shape:
@@ -584,19 +592,21 @@ class Distribution:
 
     # -- sugar -----------------------------------------------------------
     def sample(self, sample_shape: Sequence[int] = ()) -> Tensor:
-        """Samples (no gradient), delegated to :meth:`to_torch`."""
+        """Samples (no gradient), delegated to
+        [`to_torch`][optix.distributions.Distribution.to_torch]."""
         return self.to_torch().sample(torch.Size(sample_shape))
 
     def rsample(self, sample_shape: Sequence[int] = ()) -> Tensor:
-        """Reparameterised samples, delegated to :meth:`to_torch`."""
+        """Reparameterised samples, delegated to
+        [`to_torch`][optix.distributions.Distribution.to_torch]."""
         return self.to_torch().rsample(torch.Size(sample_shape))
 
     def kl(self, other: "Distribution") -> Tensor:
-        """``kl_divergence(self, other)``."""
+        """`kl_divergence(self, other)`."""
         return kl_divergence(self, other)
 
     def posterior(self, stats: "SuffStats", **known: Tensor) -> Self:
-        """``posterior(self, stats, **known)``."""
+        """`posterior(self, stats, **known)`."""
         return posterior(self, stats, **known)
 
 
@@ -639,21 +649,21 @@ def _register_posterior(
 
 
 def kl_divergence(q: Distribution, p: Distribution) -> Tensor:
-    """``KL(q || p)``, elementwise over the broadcast batch shape.
+    """KL(q ‖ p), elementwise over the broadcast batch shape.
 
     Parameters
     ----------
     q, p : Distribution
         Distributions with the same event shape and broadcastable batch
         shapes. Broadcasting is right-aligned: a prior with one value per
-        class ``(nc,)`` matches a posterior ``(*batch, nc)``; with the
-        class axis first, ``(nc, H, W)``, index the prior as
-        ``p[:, None, None]``.
+        class `(nc,)` matches a posterior `(*batch, nc)`; with the
+        class axis first, `(nc, H, W)`, index the prior as
+        `p[:, None, None]`.
 
     Returns
     -------
     Tensor
-        Shape ``broadcast(q.batch_shape, p.batch_shape)``; event dims are
+        Shape `broadcast(q.batch_shape, p.batch_shape)`; event dims are
         reduced, batch dims never are. Neither operand is expanded: the
         kernels run on each operand's own parameter shapes and only the
         final arithmetic broadcasts. The value is not clamped at zero.
@@ -692,7 +702,7 @@ def kl_divergence(q: Distribution, p: Distribution) -> Tensor:
 def posterior(
     prior: Distribution, stats: "SuffStats", **known: Tensor
 ) -> Distribution:
-    """Conjugate posterior of ``prior`` given likelihood statistics.
+    """Conjugate posterior of `prior` given likelihood statistics.
 
     Parameters
     ----------
@@ -701,17 +711,17 @@ def posterior(
     stats : SuffStats
         Weighted sufficient statistics of the observations (weights must
         be non-negative; this is not checked). Tempering is
-        ``posterior(prior, stats.scale(c))``.
+        `posterior(prior, stats.scale(c))`.
     **known : Tensor
         Fixed parameters of the likelihood, required by some pairs (e.g.
-        ``shape`` for a Gamma likelihood, ``mean`` or ``precision`` for a
+        `shape` for a Gamma likelihood, `mean` or `precision` for a
         Normal one).
 
     Returns
     -------
     Distribution
-        Same type as ``prior``, batch shape
-        ``broadcast(prior.batch_shape, stats.batch_shape, known)``, stored
+        Same type as `prior`, batch shape
+        `broadcast(prior.batch_shape, stats.batch_shape, known)`, stored
         in the parameterisation where the update is additive. No value is
         validated and nothing synchronises.
 
@@ -722,7 +732,7 @@ def posterior(
     ValueError
         If the event shapes differ or the batch shapes do not broadcast.
     TypeError
-        If a required ``known`` parameter is missing.
+        If a required `known` parameter is missing.
     """
     fn = _lookup(_POSTERIOR, type(prior), type(stats))
     name, sname = type(prior).__name__, type(stats).__name__

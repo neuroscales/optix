@@ -3,19 +3,21 @@
 Conventions
 -----------
 - Every field is a Tensor (or None) that broadcasts against the spatial
-  shape. ``None`` means "not estimated": consumers fall back to their own
+  shape. `None` means "not estimated": consumers fall back to their own
   default, never silently to zero.
-- ``ShadingEstimate.dark`` is the whole additive image of
-  ``x = (y - dark - baseline) / flat``: it **includes** the camera offset.
-  ``SensorEstimate.offset`` is the camera offset alone. A model with a
+- `ShadingEstimate.dark` is the whole additive image of
+  `x = (y - dark - baseline) / flat`: it **includes** the camera offset.
+  `SensorEstimate.offset` is the camera offset alone. A model with a
   single additive term returns it in both; corrections never subtract
   both.
-- Gains are in ADU per electron (EMVA 1288 ``K``).
+- Gains are in ADU per electron (EMVA 1288 `K`).
 - Flat fields are stored as produced by the algorithm;
-  ``meta["flat_norm"]`` records the normalisation (``"mean"`` or
-  ``"geomean"``) and :meth:`ShadingEstimate.normalize` converts.
+  `meta["flat_norm"]` records the normalisation (`"mean"` or
+  `"geomean"`) and
+  [`ShadingEstimate.normalize`][optix.estimates.ShadingEstimate.normalize]
+  converts.
 - Data-sized outputs (class probabilities, corrected stacks) are never
-  stored in an estimate: they come from ``Estimator.apply(Y, out=)``.
+  stored in an estimate: they come from `Estimator.apply(data, out=)`.
 """
 
 import copy
@@ -50,7 +52,7 @@ class Estimate:
     ----------
     meta : dict
         Provenance and conventions (estimator class, optix version,
-        resolved options, ``faithful``, units, ``flat_norm``...). Must be
+        resolved options, `faithful`, units, `flat_norm`...). Must be
         JSON-serialisable.
     """
 
@@ -82,7 +84,7 @@ class Estimate:
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Return a copy on ``device``; ``dtype`` casts floating fields only.
+        """Return a copy on `device`; `dtype` casts floating fields only.
 
         Boolean masks and integer fields keep their dtype.
         """
@@ -107,18 +109,18 @@ class Estimate:
         )
 
     def replace(self, **changes: object) -> Self:
-        """Copy with some fields replaced (``dataclasses.replace``)."""
+        """Copy with some fields replaced (`dataclasses.replace`)."""
         return dataclasses.replace(self, **changes)
 
     def allclose(self, other: "Estimate", **tol: float) -> bool:
-        """Same type, same estimated fields, and ``torch.allclose`` values.
+        """Same type, same estimated fields, and `torch.allclose` values.
 
         Parameters
         ----------
         other : Estimate
         **tol
-            ``rtol`` / ``atol`` / ``equal_nan`` for ``torch.allclose``.
-            ``meta`` is not compared.
+            `rtol` / `atol` / `equal_nan` for `torch.allclose`.
+            `meta` is not compared.
         """
         if type(other) is not type(self):
             return False
@@ -139,12 +141,12 @@ class Estimate:
         return True
 
     def to_dict(self) -> dict[str, object]:
-        """Fields and ``meta`` as a plain dict (write it where you like)."""
+        """Fields and `meta` as a plain dict (write it where you like)."""
         return {**self._fields(), "meta": self.meta}
 
     @classmethod
     def from_dict(cls, d: dict[str, object]) -> Self:
-        """Inverse of :meth:`to_dict`."""
+        """Inverse of [`to_dict`][optix.estimates.Estimate.to_dict]."""
         return cls(**d)
 
     def _payload(self) -> dict[str, object]:
@@ -168,18 +170,21 @@ class Estimate:
         return target(**payload["fields"], meta=payload["meta"])
 
     def save(self, path: str | os.PathLike) -> None:
-        """Save with ``torch.save`` (no pickled classes).
+        """Save with `torch.save` (no pickled classes).
 
         Raises
         ------
         TypeError
-            If ``meta`` is not JSON-serialisable.
+            If `meta` is not JSON-serialisable.
         """
         torch.save(self._payload(), path)
 
     @classmethod
     def load(cls, path: str | os.PathLike) -> Self:
-        """Load an estimate saved with :meth:`save` (``weights_only``)."""
+        """Load an estimate saved with [`save`][optix.estimates.Estimate.save].
+
+        Loading uses `weights_only`.
+        """
         payload = torch.load(path, weights_only=True)
         return cls._from_payload(payload)
 
@@ -194,18 +199,18 @@ def _need(estimate: Estimate, *names: str) -> None:
 
 @dataclass(eq=False)
 class SensorEstimate(Estimate):
-    """Camera model ``y = offset + gain * n + e``.
+    """Camera model `y = offset + gain * n + e`.
 
-    ``n ~ Poisson(electrons)`` and ``e ~ N(0, variance)``. The Foi
-    parametrisation is derived, not stored: ``a = gain``,
-    ``b = variance - gain * offset``.
+    `n ~ Poisson(electrons)` and `e ~ N(0, variance)`. The Foi
+    parametrisation is derived, not stored: `a = gain`,
+    `b = variance - gain * offset`.
 
     Attributes
     ----------
     offset : Tensor, optional
         Camera offset in ADU; scalar or (H, W).
     variance : Tensor, optional
-        Read-noise variance in ADU^2.
+        Read-noise variance in ADU².
     gain : Tensor, optional
         ADU per electron; scalar or (H, W).
     defective : Tensor, optional
@@ -223,12 +228,12 @@ class SensorEstimate(Estimate):
         Parameters
         ----------
         mean : Tensor
-            Expected value of ``y`` (ADU).
+            Expected value of `y` (ADU).
 
         Returns
         -------
         Tensor
-            ``variance + gain * (mean - offset)``.
+            `variance + gain * (mean - offset)`.
         """
         _need(self, "offset", "variance", "gain")
         return self.variance + self.gain * (mean - self.offset)
@@ -236,7 +241,7 @@ class SensorEstimate(Estimate):
 
 @dataclass(eq=False)
 class ShadingEstimate(Estimate):
-    """Shading model ``y = flat * x + dark + baseline``.
+    """Shading model `y = flat * x + dark + baseline`.
 
     Attributes
     ----------
@@ -262,9 +267,9 @@ class ShadingEstimate(Estimate):
         Returns
         -------
         ShadingEstimate
-            Copy with the rescaled flat and ``meta["flat_norm"] = mode``.
-            ``dark`` and ``baseline`` are unchanged (the scale moves into
-            the signal ``x``).
+            Copy with the rescaled flat and `meta["flat_norm"] = mode`.
+            `dark` and `baseline` are unchanged (the scale moves into
+            the signal `x`).
         """
         _need(self, "flat")
         if mode == "mean":
@@ -283,14 +288,14 @@ class Classification(Estimate):
     """Class model summary (provisional).
 
     Per-voxel probabilities are data-sized and come from
-    ``apply(Y, out=)``; only the class model is stored here.
+    `apply(data, out=)`; only the class model is stored here.
 
     Attributes
     ----------
     weights : Tensor, optional
         (K,) mixing weights.
     parameters : Tensor, optional
-        (K, P) class parameters (meaning recorded in ``meta``).
+        (K, P) class parameters (meaning recorded in `meta`).
     """
 
     weights: Tensor | None = None
