@@ -11,6 +11,7 @@ Estimators of the flat field, dark field and per-frame baseline, and the correct
       show_root_toc_entry: false
       members:
         - BaSiC
+        - CIDRE
         - DarkFlatCalibration
         - IlluminationFunction
 
