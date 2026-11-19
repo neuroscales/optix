@@ -11,6 +11,7 @@ from torch import Tensor
 
 from .._config import resolve_backend
 from ..io import ArrayLike, as_tensor, chunk_length
+from ..stats._base import state_dtype
 from ._base import _fmt, _normalise
 
 if TYPE_CHECKING:
@@ -89,10 +90,15 @@ def _count(
     return _sum(weight, dims).to(torch.float64)
 
 
-def _count_dtype(t: Tensor) -> torch.dtype:
-    """Storage dtype of a count: int64 if integral, else float64."""
+def _count_dtype(t: Tensor, device: torch.device | None = None) -> torch.dtype:
+    """Storage dtype of a count: int64 if integral, else float64.
+
+    float32 on devices without float64 (MPS).
+    """
     integral = not (t.is_floating_point() or t.is_complex())
-    return torch.int64 if integral else torch.float64
+    if integral:
+        return torch.int64
+    return state_dtype(t.device if device is None else device)
 
 
 def _wsum(
@@ -179,7 +185,7 @@ class SuffStats:
         others = [v for i, v in enumerate(values) if i != c]
         tensors = [v for v in others if isinstance(v, Tensor)]
         device = tensors[0].device if tensors else count.device
-        count = count.to(dtype=_count_dtype(count), device=device)
+        count = count.to(dtype=_count_dtype(count, device), device=device)
         values = list(values)
         values[c] = count
         # the count keeps its dtype; the other fields are normalised

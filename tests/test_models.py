@@ -96,3 +96,23 @@ def test_end_to_end_zarr_recovers_sensor():
         m.var(), sensor.variance + 1 / 12, rtol=0.25, atol=0
     )
     np.testing.assert_array_equal(z[0, 0], y[0, 0].numpy())
+
+
+def test_simulate_gamma_mixture():
+    from optix.models import simulate_gamma_mixture
+
+    draw = simulate_gamma_mixture(
+        (50, 32, 32), [10.0, 100.0], [3.0, 2.0], concentration=5.0, seed=0
+    )
+    assert draw.signal.shape == (50, 32, 32)
+    assert draw.proportions.shape == (50, 3)
+    bg = draw.labels == 2
+    assert (draw.signal[bg] == 0).all() and (draw.signal[~bg] > 0).all()
+    for k, (mean, shape) in enumerate([(10.0, 3.0), (100.0, 2.0)]):
+        u = draw.signal[draw.labels == k].double()
+        assert abs(u.mean() / mean - 1) < 0.03
+        assert abs(u.mean() ** 2 / u.var() / shape - 1) < 0.1
+    again = simulate_gamma_mixture(
+        (50, 32, 32), [10.0, 100.0], [3.0, 2.0], concentration=5.0, seed=0
+    )
+    assert torch.equal(again.signal, draw.signal)
