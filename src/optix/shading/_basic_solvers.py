@@ -130,7 +130,8 @@ def default_lambdas(D: Tensor, dct: Dct2) -> tuple[float, float]:
 
     λ_S = ‖𝓕(Ī_norm)‖₁ / 800 and λ_D = ‖𝓕(Ī_norm)‖₁ / 2000, with Ī_norm
     the per-pixel mean of the frames divided by its spatial mean and 𝓕
-    the orthonormal 2-D DCT.
+    the orthonormal 2-D DCT (the "Fourier transform" of the SI is the
+    DCT of the authors' implementation).
 
     Parameters
     ----------
@@ -347,18 +348,29 @@ def _ladm_solve(
     return S, Z, D_Z, I_B, E, B, it, res
 
 
-def _weights(I_B: Tensor, E: Tensor, epsilon: float, variant: str) -> Tensor:
+def _weights(
+    I_B: Tensor,
+    E: Tensor,
+    epsilon: float,
+    variant: str,
+    normalize: bool = True,
+) -> Tensor:
     """Reweighting of the sparse term.
 
-    Eq. (9): W = 1 / (|I_R / I_B| + ε), elementwise. The BaSiCPy variant
-    divides by the mean of I_B over each frame instead and normalises W
-    to mean 1.
+    Eq. (9): W = 1 / (|I_R / I_B| + ε), elementwise, then scaled to mean 1
+    over the stack when `normalize`. The BaSiCPy variant divides by the
+    mean of I_B over each frame instead, and always normalises.
     """
     if variant == "basicpy":
         W = 1 / ((E / (I_B.mean((1, 2), keepdim=True) + 1e-6)).abs() + epsilon)
         return W * (W.numel() / W.sum())
     tiny = torch.finfo(I_B.dtype).tiny
-    return 1 / ((E / I_B.abs().clamp_min(tiny)).abs() + epsilon)
+    W = 1 / ((E / I_B.abs().clamp_min(tiny)).abs() + epsilon)
+    if normalize:
+        # the λ of Supplementary Note 4 are read as tuned for weights of
+        # mean 1 (Eq. 9 itself has no normalisation)
+        W = W * (W.numel() / W.sum())
+    return W
 
 
 def basic_ladm(
@@ -376,6 +388,7 @@ def basic_ladm(
     rho: float = 1.5,
     max_mu_coef: float = 1e7,
     variant: str = "paper",
+    normalize_weights: bool = True,
 ) -> BaSiCResult:
     """BaSiC on a working stack: reweighted L1 solved by LADM.
 
@@ -413,6 +426,9 @@ def basic_ladm(
         divided by the frame mean of I_B and normalised, dark field from
         the frames with B_i < 1 shrunk with λ_D / (10 μ), and a
         reweighting score on S only).
+    normalize_weights : bool
+        Scale the weights of Eq. (9) to mean 1 ("paper" variant; the
+        "basicpy" variant always does).
 
     Returns
     -------
@@ -455,7 +471,7 @@ def basic_ladm(
         if result is None:
             result = BaSiCResult(flat, dark, baseline)
         result.update(flat, dark, baseline, it, res, change)
-        W = _weights(I_B, E, epsilon, variant)
+        W = _weights(I_B, E, epsilon, variant, normalize_weights)
         last_flat, last_dark = flat, dark
         if change <= reweight_tol:
             result.converged = True

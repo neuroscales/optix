@@ -55,6 +55,7 @@ _PRESET: dict[str, object] = {
     "sampling": "stride",
     "seed": 0,
     "variant": "paper",
+    "normalize_weights": True,
     "baseline_method": "paper",
     "sort_intensity": True,
     "baseline_norm": 0.0,
@@ -90,7 +91,8 @@ class BaSiC(Estimator):
 
     with 𝓕 the orthonormal 2-D DCT. The problem is solved by the
     linearised augmented Lagrangian method (LADM), with reweighted-L1
-    weights W = 1 / (|I_R / I_B| + ε). The default regularisation is
+    weights W = 1 / (|I_R / I_B| + ε), scaled to mean 1. The default
+    regularisation is
     λ_S = ‖𝓕(Ī)‖₁ / 800 and λ_D = ‖𝓕(Ī)‖₁ / 2000, with Ī the per-pixel
     mean frame divided by its mean. The fields are resized back
     (bilinear) to the image size; D = D_Z + D_R.
@@ -109,6 +111,9 @@ class BaSiC(Estimator):
         flat-corrected signal. `meta["flat_norm"] == "mean"` (normalised
         at the working size, before resizing) and
         `meta["baseline_units"] == "signal"`.
+        [`apply`][optix.shading.BaSiC.apply] also handles a baseline in
+        raw units (see
+        [`ShadingEstimate`][optix.estimates.ShadingEstimate]).
     fit_frames_ : (k,) Tensor
         Flat sample indices (storage order) of the fitting frames.
     fit_baseline_ : (*group, k) Tensor or None
@@ -130,9 +135,21 @@ class BaSiC(Estimator):
         or after `max_iterations`. The penalty starts at μ₀ = 12.5 / ‖I‖₂
         and grows by ρ = 1.5, capped at 10⁷ μ₀ to stay finite. Images are
         resized by bilinear interpolation with anti-aliasing, after
-        sorting. The pixels where S is above or below its mean define the
-        two regions of the dark-field contrast. The baseline step solves
-        each reweighted problem exactly (weighted median).
+        sorting. The baseline step solves each reweighted problem exactly
+        (weighted median).
+
+    !!! note "Interpretations of the paper"
+        - 𝓕 is the orthonormal 2-D DCT: the "Fourier transform" of the
+          Supplementary Information refers to the DCT of the authors'
+          implementation.
+        - The weights of Eq. (9) are scaled to mean 1, which the λ of
+          Supplementary Note 4 are taken to assume
+          (`normalize_weights=False` uses Eq. (9) as printed).
+        - The regions "S ≥ 1" and "S < 1" of the dark-field update are
+          read as S ≥ mean(S) and S < mean(S), S being unnormalised
+          there.
+        - The frames are sorted at full resolution and then resized to
+          the working size.
 
     **Extensions** (off by default):
 
@@ -150,6 +167,7 @@ class BaSiC(Estimator):
       quantile, run per batch. It is biased low where the flat field
       varies (about −11 % with a flat of ±25 %).
     - `sampling="reservoir"`: random fitting frames.
+    - `normalize_weights=False`: the weights of Eq. (9) without scaling.
 
     !!! references "References"
         1. Peng T, Thorn K, Schroeder T, Wang L, Theis FJ, Marr C, Navab N.
@@ -216,6 +234,7 @@ class BaSiC(Estimator):
         sampling: str | None = None,
         seed: int | None = None,
         variant: str | None = None,
+        normalize_weights: bool | None = None,
         baseline_method: str | None = None,
         sort_intensity: bool | None = None,
         baseline_norm: float | str | None = None,
@@ -260,6 +279,9 @@ class BaSiC(Estimator):
             Seed of the reservoir.
         variant : {"paper", "basicpy"}
             Solver details: the paper's, or BaSiCPy 2.0.0's.
+        normalize_weights : bool
+            Scale the reweighting weights to mean 1 (default True; the
+            "basicpy" variant always does).
         baseline_method : {"paper", "basicpy"}
             Baseline estimator used with `timelapse=True`.
         sort_intensity : bool
@@ -267,7 +289,8 @@ class BaSiC(Estimator):
         baseline_norm : float or "mean"
             Background B_norm added back by
             [`apply`][optix.shading.BaSiC.apply] with `timelapse` ("mean":
-            the mean fitted baseline of the group). Default 0.
+            the mean fitted baseline of the group), in the units of the
+            baseline. Default 0.
         faithful : bool
             True: the `paper` preset. False: the `recommended` preset,
             which fits the unsorted frames (`sort_intensity=False`), more
@@ -426,6 +449,7 @@ class BaSiC(Estimator):
             rho=opt["rho"],
             max_mu_coef=opt["max_mu_coef"],
             variant=opt["variant"],
+            normalize_weights=opt["normalize_weights"],
         )
         return result, lam_f, lam_d
 
@@ -612,22 +636,32 @@ class BaSiC(Estimator):
         elif timelapse:
             norm = torch.full(group_shape, float(norm), dtype=flat.dtype)
 
+        units = est.baseline_units
+
         def fn(chunk: object, batch: Tensor) -> Tensor:
-            f = flat[chunk.group].to(batch)
-            d = dark[chunk.group].to(batch)
-            x = (batch - d) / f
-            if timelapse:
-                if stored is not None:
-                    b = stored[chunk.group + chunk.samples].reshape(-1)
-                else:
-                    b = self._baseline(
-                        resize(batch, size),
-                        small_flat[chunk.group].to(batch),
-                        small_dark[chunk.group].to(batch),
-                    )
-                x = x - b.to(batch)[:, None, None]
-                x = x + norm[chunk.group].to(batch)
-            return x
+            model = ShadingEstimate(
+                flat=flat[chunk.group].to(batch),
+                dark=dark[chunk.group].to(batch),
+            )
+            if not timelapse:
+                return model.correct(batch)
+            if stored is not None:
+                b = stored[chunk.group + chunk.samples].reshape(-1)
+                b_units = units
+            else:
+                # computed on the fly, in units of the signal
+                b = self._baseline(
+                    resize(batch, size),
+                    small_flat[chunk.group].to(batch),
+                    small_dark[chunk.group].to(batch),
+                )
+                b_units = "signal"
+            return model.correct(
+                batch,
+                b.to(batch),
+                units=b_units,
+                norm=norm[chunk.group].to(batch),
+            )
 
         return self._apply_frames(data, out, fn, overhead=3.0)
 

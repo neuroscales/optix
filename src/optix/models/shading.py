@@ -74,6 +74,10 @@ def random_shading(
 def simulate_shading(x: Tensor, shading: ShadingEstimate) -> Tensor:
     """Apply a shading model: flat · x + dark + baseline.
 
+    The baseline is in the units of `shading.baseline_units` (see
+    [`ShadingEstimate`][optix.estimates.ShadingEstimate]): with
+    `"signal"`, the model is flat · (x + baseline) + dark.
+
     Parameters
     ----------
     x : (*batch, frames, H, W) Tensor
@@ -87,12 +91,4 @@ def simulate_shading(x: Tensor, shading: ShadingEstimate) -> Tensor:
     -------
     Tensor
     """
-    shading = shading.to(x.device)
-    y = x
-    if shading.flat is not None:
-        y = shading.flat * y
-    if shading.dark is not None:
-        y = y + shading.dark
-    if shading.baseline is not None:
-        y = y + shading.baseline[..., None, None]
-    return y
+    return shading.to(x.device).shade(x)

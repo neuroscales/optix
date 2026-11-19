@@ -91,12 +91,27 @@ def test_default_lambdas_note4():
 
 
 def test_weights_eq9():
-    # Eq. (9): W = 1 / (|I_R / I_B| + ε), elementwise, not normalised
+    # Eq. (9): W = 1 / (|I_R / I_B| + ε), elementwise; scaled to mean 1 by
+    # default, as printed with normalize=False
     g = torch.Generator().manual_seed(0)
     I_B = torch.rand(3, 4, 5, generator=g, dtype=torch.float64) + 0.5
     E = torch.randn(3, 4, 5, generator=g, dtype=torch.float64)
+    raw = 1 / ((E / I_B).abs() + 0.1)
+    torch.testing.assert_close(_weights(I_B, E, 0.1, "paper", False), raw)
     W = _weights(I_B, E, 0.1, "paper")
-    torch.testing.assert_close(W, 1 / ((E / I_B).abs() + 0.1))
+    torch.testing.assert_close(W, raw / raw.mean())
+    assert BaSiC().options["normalize_weights"]
+
+
+def test_normalized_weights_more_accurate_on_noise():
+    data, truth = make_cells(n=30, shape=(64, 64), dark=0.0)
+    data = torch.poisson(data, generator=torch.Generator().manual_seed(2))
+    err = {}
+    for norm in (True, False):
+        b = BaSiC(working_size=64, normalize_weights=norm).fit(data)
+        flat = b.estimates["shading"].flat
+        err[norm] = float((flat - truth.flat).pow(2).mean().sqrt())
+    assert err[True] < err[False]
 
 
 def test_baseline_l1_exact():
@@ -142,17 +157,19 @@ def make_cells(n=30, shape=(160, 144), *, dark=50.0, frac=0.3, seed=0):
 
 def test_faithful_recovers_flat_and_dark():
     # the setting of the paper: static images, sorted, working size 128
-    data, truth = make_cells()
-    b = BaSiC(darkfield=True).fit(data)
+    data, truth = make_cells(dark=0.0)
+    b = BaSiC().fit(data)
+    assert b.is_faithful and b.estimates["shading"].meta["faithful"]
     assert b.options["sort_intensity"] and b.options["working_size"] == 128
     est = b.estimates["shading"]
-    assert est.flat.shape == (160, 144)
-    assert (est.flat - truth.flat).abs().max() < 0.015
-    assert (est.dark - truth.dark).abs().max() < 1.0
+    assert est.flat.shape == (160, 144) and est.dark is None
+    assert (est.flat - truth.flat).abs().max() < 0.01
     assert b.history.converged
     assert est.meta["estimator"] == "BaSiC"
-    plain = BaSiC().fit(data)
-    assert plain.is_faithful and plain.estimates["shading"].meta["faithful"]
+    data, truth = make_cells(n=60)
+    est = BaSiC(darkfield=True).fit(data).estimates["shading"]
+    assert (est.flat - truth.flat).abs().max() < 0.03
+    assert (est.dark - truth.dark).abs().max() < 2.5
 
 
 def test_recovers_dark_with_drift():
@@ -400,3 +417,52 @@ def test_baseline_matches_basicpy(ref, case):
     np.testing.assert_allclose(
         b.numpy(), ref[f"{case}_fit_only_baseline"], rtol=1e-4
     )
+
+
+# -- baseline conventions --------------------------------------------------
+@pytest.mark.parametrize("units", ["raw", "signal"])
+def test_shading_estimate_baseline_units(units):
+    truth = random_shading((16, 12), seed=1, dark=20.0, dtype=torch.float64)
+    b = torch.tensor([5.0, 30.0, 70.0], dtype=torch.float64)
+    est = truth.replace(
+        baseline=b, meta={**truth.meta, "baseline_units": units}
+    )
+    assert est.baseline_units == units
+    x = 100 + torch.rand(3, 16, 12, dtype=torch.float64)
+    y = simulate_shading(x, est)
+    shift = b[:, None, None] * (truth.flat if units == "signal" else 1)
+    torch.testing.assert_close(y, truth.flat * x + truth.dark + shift)
+    torch.testing.assert_close(est.correct(y), x)
+    torch.testing.assert_close(
+        est.correct(y, norm=b.mean()),
+        x + (b.mean() / truth.flat if units == "raw" else b.mean()),
+    )
+
+
+def test_shading_estimate_raw_is_default():
+    est = ShadingEstimate(flat=torch.ones(2, 2), baseline=torch.ones(1))
+    assert est.baseline_units == "raw"
+    with pytest.raises(ValueError, match="baseline units"):
+        _ = est.replace(meta={"baseline_units": "adu"}).baseline_units
+
+
+@pytest.mark.parametrize("units", ["raw", "signal"])
+def test_apply_handles_both_baseline_units(units):
+    data, truth, level = make_stack()
+    b = BaSiC(working_size=64, timelapse=True).fit(data)
+    est = b.estimates["shading"]
+    assert est.baseline_units == "signal"
+    if units == "raw":
+        # an equivalent raw estimate for a uniform flat field
+        flat = torch.full_like(est.flat, 1.0)
+        raw_b = est.baseline * 2.0
+        b.estimates["shading"] = est.replace(
+            flat=flat * 2.0,
+            baseline=raw_b,
+            meta={**est.meta, "baseline_units": "raw"},
+        )
+        expected = (data - raw_b[:, None, None]) / 2.0
+    else:
+        expected = data / est.flat - est.baseline[:, None, None]
+    out = b.apply(data)
+    torch.testing.assert_close(out, expected.to(out), atol=1e-3, rtol=1e-5)
