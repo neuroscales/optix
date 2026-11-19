@@ -391,6 +391,41 @@ def test_poisson_gaussian_shift():
         RichardsonLucy(psf, poisson_gaussian=True).fit(data)
 
 
+def test_poisson_gaussian_snyder_eq15_units():
+    """Snyder et al. (1993), Eq. (15) with μ₀ → b + σ², in electrons.
+
+    ADU data y = m + g n + e, e ~ N(0, v): the shifted data are
+    (y − m)/g + v/g² and the background b/g + v/g².
+    """
+    psf = gaussian_psf(7, 1.2)
+    truth, gen = scene((40, 36), seed=11, base=3.0)
+    gain = torch.linspace(1.5, 2.5, 36, dtype=F64).expand(40, 36)
+    offset = torch.full((40, 36), 100.0, dtype=F64)
+    var_adu = torch.tensor(80.0, dtype=F64)
+    b_adu = 12.0
+    electrons = torch.poisson(blur(truth, psf) + b_adu / gain, generator=gen)
+    noise = var_adu.sqrt() * torch.randn(electrons.shape, generator=gen)
+    adu = offset + gain * electrons + noise.to(F64)
+    sensor = SensorEstimate(offset=offset, gain=gain, variance=var_adu)
+    est = RichardsonLucy(
+        psf, n_iter=1, background=b_adu, poisson_gaussian=True, dtype=F64
+    ).fit(adu, init=sensor)
+    out = est.apply(adu)
+    # Eq. (15), one step from the uniform start, β = 1
+    sigma2 = var_adu / gain.square()
+    shifted = ((adu - offset) / gain + sigma2).clamp(min=0)
+    mu0 = b_adu / gain + sigma2
+    level = float((shifted - mu0).mean())
+    torch.testing.assert_close(float(est.level), level)
+    op = PaddedConvolution(psf, adu.shape)
+    norm = op.norm
+    valid = norm > norm.max() * torch.finfo(F64).eps * 16
+    f0 = torch.where(valid, level, 0.0).to(F64)
+    f1 = f0 * op.adjoint(shifted / (op.forward(f0) + mu0))
+    f1 = torch.where(valid, f1 / norm, 0.0)
+    torch.testing.assert_close(out, op.crop(f1))
+
+
 def test_damping_keeps_flux_and_likelihood():
     """Lucy (1974, §III): a fraction ε of the correction still ascends."""
     psf = gaussian_psf(7, 1.2)
