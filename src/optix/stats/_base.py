@@ -13,7 +13,7 @@ __all__ = ["Reducer", "reduce", "reduce_groups"]
 
 
 def _reduced_dims(dim: int | Sequence[int] | None, ndim: int) -> tuple:
-    """Normalise ``dim`` against a tensor of ``ndim`` dims."""
+    """Normalise `dim` against a tensor of `ndim` dims."""
     if dim is None:
         return tuple(range(ndim))
     dims = (dim,) if isinstance(dim, int) else tuple(dim)
@@ -30,27 +30,31 @@ def _reduced_dims(dim: int | Sequence[int] | None, ndim: int) -> tuple:
 class Reducer:
     """Streaming, mergeable summary.
 
-    State tensors (named in ``_state``) are created on the first
-    ``update``; a never-updated reducer is the identity of ``merge``.
-
-    Parameters
-    ----------
-    dim : int or tuple of int or None
-        Dims of each chunk that are reduced. Default 0: per-pixel over the
-        frame axis of a ``(n, *spatial)`` chunk. None: everything (global
-        summary).
+    State tensors (named in `_state`) are created on the first
+    `update`; a never-updated reducer is the identity of `merge`.
 
     Notes
     -----
-    Every reducer satisfies, up to floating-point round-off::
+    Every reducer satisfies, up to floating-point round-off:
 
-        R().update(cat(a, b)) == R().update(a).update(b)
-                              == R().update(a).merge(R().update(b))
+    ```python
+    R().update(cat(a, b)) == R().update(a).update(b)
+                          == R().update(a).merge(R().update(b))
+    ```
     """
 
     _state: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, *, dim: int | Sequence[int] | None = 0) -> None:
+        """Create an empty reducer.
+
+        Parameters
+        ----------
+        dim : int or tuple of int or None
+            Dims of each chunk that are reduced. Default 0: per-pixel over
+            the frame axis of a `(n, *spatial)` chunk. None: everything
+            (global summary).
+        """
         self.dim = dim if dim is None or isinstance(dim, int) else tuple(dim)
         for name in self._state:
             setattr(self, name, None)
@@ -65,7 +69,7 @@ class Reducer:
         raise NotImplementedError
 
     def _args(self) -> dict[str, object]:
-        """Constructor arguments (for ``state_dict``)."""
+        """Constructor arguments (for `state_dict`)."""
         return {"dim": self.dim}
 
     # -- shared ----------------------------------------------------------
@@ -85,7 +89,7 @@ class Reducer:
         return None
 
     def _other_state(self, other: "Reducer") -> dict[str, Tensor | None]:
-        """``other``'s state moved to this reducer's device (not in place)."""
+        """`other`'s state moved to this reducer's device (not in place)."""
         if type(other) is not type(self):
             raise TypeError(
                 f"Cannot merge {type(other).__name__} into "
@@ -114,7 +118,7 @@ class Reducer:
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
     ) -> Self:
-        """Move the state (in place); ``dtype`` casts floating state only."""
+        """Move the state (in place); `dtype` casts floating state only."""
         for name in self._state:
             value = getattr(self, name)
             if not isinstance(value, Tensor):
@@ -136,7 +140,8 @@ class Reducer:
 
     @classmethod
     def from_state_dict(cls, state: dict[str, object]) -> Self:
-        """Rebuild a reducer saved with :meth:`state_dict`."""
+        """Rebuild a reducer saved with
+        [`state_dict`][optix.stats.Reducer.state_dict]."""
         if state.get("class", cls.__name__) != cls.__name__:
             raise TypeError(f"State of {state['class']}, not {cls.__name__}")
         new = cls(**state["args"])
@@ -150,7 +155,7 @@ class Reducer:
 
 
 def reduce(
-    Y: ArrayLike,
+    data: ArrayLike,
     *reducers: Reducer,
     ndim: int | None = None,
     layout: Layout | None = None,
@@ -160,39 +165,40 @@ def reduce(
 
     Parameters
     ----------
-    Y : array-like or Labeled
+    data : array-like or Labeled
         Data.
     *reducers : Reducer
-        Reducers to update with each ``(n, *spatial)`` frame batch.
+        Reducers to update with each `(n, *spatial)` frame batch.
     ndim : int, optional
         Without a layout: number of trailing spatial dims (default 2).
     layout : Layout, optional
-        Axis roles (see :func:`optix.io.frame_batches`). It must not have
-        group axes: use :func:`reduce_groups`.
+        Axis roles (see [`frame_batches`][optix.io.frame_batches]). It must
+        not have group axes: use [`reduce_groups`][optix.stats.reduce_groups].
     **chunk_options
-        Forwarded to :func:`optix.io.frame_batches` (``overhead``,
-        ``memory``, ``batch``, ``dtype``, ``device``, ``prefetch``, ...).
+        Forwarded to [`frame_batches`][optix.io.frame_batches] (`overhead`,
+        `memory`, `batch`, `dtype`, `device`, `prefetch`,
+        `contiguous`, ...).
 
     Returns
     -------
     tuple of Reducer
         The same reducers, updated with every sample.
     """
-    chunks = frame_batches(Y, ndim=ndim, layout=layout, **chunk_options)
+    chunks = frame_batches(data, ndim=ndim, layout=layout, **chunk_options)
     if chunks.group_shape:
         raise ValueError(
             "reduce() pools every sample; the layout has group axes "
             f"{chunks.group_shape}: use reduce_groups()"
         )
     with torch.no_grad():
-        for _, data in chunks:
+        for _, batch in chunks:
             for reducer in reducers:
-                reducer.update(data)
+                reducer.update(batch)
     return reducers
 
 
 def reduce_groups(
-    Y: ArrayLike,
+    data: ArrayLike,
     *reducers: Reducer,
     ndim: int | None = None,
     layout: Layout | None = None,
@@ -202,19 +208,20 @@ def reduce_groups(
 
     Parameters
     ----------
-    Y, ndim, layout, **chunk_options
-        See :func:`reduce`; the layout may have group axes.
+    data, ndim, layout, **chunk_options
+        See [`reduce`][optix.stats.reduce]; the layout may have group axes.
     *reducers : Reducer
-        Templates: each group gets its own :meth:`~Reducer.copy`. The
-        templates themselves are not updated.
+        Templates: each group gets its own
+        [`copy`][optix.stats.Reducer.copy]. The templates themselves are
+        not updated.
 
     Returns
     -------
     dict of tuple of int to tuple of Reducer
-        Keyed by group position (``()`` without group axes), in iteration
+        Keyed by group position (`()` without group axes), in iteration
         order. Groups without samples are absent.
     """
-    chunks = frame_batches(Y, ndim=ndim, layout=layout, **chunk_options)
+    chunks = frame_batches(data, ndim=ndim, layout=layout, **chunk_options)
     out: dict[tuple[int, ...], tuple[Reducer, ...]] = {}
     with torch.no_grad():
         for chunk in chunks:

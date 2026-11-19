@@ -15,7 +15,7 @@ __all__ = ["Moments"]
 def _combine(
     a: tuple[Tensor, ...], b: tuple[Tensor, ...], order: int
 ) -> tuple[Tensor, ...]:
-    """Pairwise merge of ``(n, mean, M2, ..., Mp)`` (Pebay, 2008)."""
+    """Pairwise merge of `(n, mean, M2, ..., Mp)` (Pebay, 2008)."""
     na, ma, *mma = a
     nb, mb, *mmb = b
     n = na + nb
@@ -50,17 +50,7 @@ def _combine(
 
 
 class Moments(Reducer):
-    """Per-pixel count, mean and central moments up to ``order`` (1..4).
-
-    Parameters
-    ----------
-    order : int
-        Highest central moment kept (1 = mean only, 2 = variance, 3 =
-        skewness, 4 = kurtosis).
-    dim : int or tuple of int or None
-        Reduced dims of each chunk (see :class:`Reducer`).
-    state_dtype : torch.dtype, optional
-        Dtype of the running state. Default: float64 (float32 on MPS).
+    """Per-pixel count, mean and central moments up to `order` (1..4).
 
     Attributes
     ----------
@@ -71,16 +61,31 @@ class Moments(Reducer):
 
     Notes
     -----
-    Each update computes the chunk's own ``(n, mean, M2..Mp)`` by direct
+    Each update computes the chunk's own `(n, mean, M2..Mp)` by direct
     sums about the chunk mean, **in the chunk's dtype** (no chunk-sized
     float64 temporaries), then merges it into the running state with the
-    same pairwise formulas as :meth:`merge`. Raw power sums are never
-    accumulated.
+    same pairwise formulas as [`merge`][optix.stats.Moments.merge]. Raw
+    power sums are never accumulated.
 
-    Weights are frequency weights (``count`` is their sum), as needed for
-    masks and responsibilities; ``var(ddof=1)`` is only meaningful for
+    Weights are frequency weights (`count` is their sum), as needed for
+    masks and responsibilities; `var(ddof=1)` is only meaningful for
     integer-like weights. Pixels with zero total weight keep zeros in the
     state, and their accessors return NaN.
+
+    !!! references "References"
+        1. Pebay P. Formulas for robust, one-pass parallel computation of
+           covariances and arbitrary-order statistical moments. 2008.
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @misc{pebay2008,
+              author = {Pebay, P.},
+              title = {Formulas for robust, one-pass parallel
+                       computation of covariances and arbitrary-order
+                       statistical moments},
+              year = {2008}
+            }
+            ```
     """
 
     _state = ("count", "mean", "m2", "m3", "m4")
@@ -92,6 +97,19 @@ class Moments(Reducer):
         dim: int | Sequence[int] | None = 0,
         state_dtype: torch.dtype | None = None,
     ) -> None:
+        """Create an empty accumulator.
+
+        Parameters
+        ----------
+        order : int
+            Highest central moment kept (1 = mean only, 2 = variance, 3 =
+            skewness, 4 = kurtosis).
+        dim : int or tuple of int or None
+            Reduced dims of each chunk (see
+            [`Reducer`][optix.stats.Reducer]).
+        state_dtype : torch.dtype, optional
+            Dtype of the running state. Default: float64 (float32 on MPS).
+        """
         if order not in (1, 2, 3, 4):
             raise ValueError(f"order must be in 1..4, got {order}")
         super().__init__(dim=dim)
@@ -119,9 +137,9 @@ class Moments(Reducer):
         Parameters
         ----------
         x : Tensor
-            Chunk; the dims in ``self.dim`` are reduced.
+            Chunk; the dims in `self.dim` are reduced.
         weight : Tensor, optional
-            Frequency weights (or boolean mask) broadcastable to ``x``.
+            Frequency weights (or boolean mask) broadcastable to `x`.
 
         Returns
         -------
@@ -167,7 +185,7 @@ class Moments(Reducer):
         return self
 
     def merge(self, other: "Moments") -> Self:
-        """Merge another :class:`Moments` (same order) into this one."""
+        """Merge another [`Moments`][optix.stats.Moments] (same order)."""
         state = self._other_state(other)
         if other.order != self.order:
             raise ValueError("Cannot merge Moments of different orders")
@@ -189,7 +207,7 @@ class Moments(Reducer):
             raise ValueError("No data: call update() first")
 
     def var(self, ddof: int = 1) -> Tensor:
-        """Variance ``M2 / (count - ddof)``; NaN where ``count <= ddof``."""
+        """Variance M₂ / (count − ddof); NaN where count ≤ ddof."""
         self._check(2)
         denom = self.count - ddof
         ok = denom > 0
@@ -197,11 +215,11 @@ class Moments(Reducer):
         return torch.where(ok, self.m2 / safe, torch.nan)
 
     def std(self, ddof: int = 1) -> Tensor:
-        """Standard deviation ``sqrt(var(ddof))``."""
+        """Standard deviation: the square root of `var(ddof)`."""
         return self.var(ddof).sqrt()
 
     def skewness(self) -> Tensor:
-        """Sample skewness ``sqrt(n) M3 / M2^(3/2)`` (biased, g1)."""
+        """Sample skewness √n M₃ / M₂^(3/2) (biased, g₁)."""
         self._check(3)
         ok = (self.m2 > 0) & (self.count > 0)
         m2 = torch.where(ok, self.m2, torch.ones_like(self.m2))
@@ -209,7 +227,7 @@ class Moments(Reducer):
         return torch.where(ok, value, torch.nan)
 
     def kurtosis(self, excess: bool = True) -> Tensor:
-        """Sample kurtosis ``n M4 / M2^2`` (minus 3 if ``excess``)."""
+        """Sample kurtosis n M₄ / M₂² (minus 3 if `excess`)."""
         self._check(4)
         ok = (self.m2 > 0) & (self.count > 0)
         m2 = torch.where(ok, self.m2, torch.ones_like(self.m2))

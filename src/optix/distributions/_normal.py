@@ -12,41 +12,27 @@ __all__ = ["Normal", "NormalExpectations"]
 
 
 class NormalExpectations(NamedTuple):
-    """``E[T(x)]`` of a Normal, ordered like its natural parameters."""
+    """E[T(x)] of a Normal, ordered like its natural parameters."""
 
     x: Tensor
     x_sq: Tensor
 
 
 class Normal(Distribution):
-    """Normal distribution, elementwise (event shape ``()``).
-
-    Parameters
-    ----------
-    mean : Tensor or float
-        Mean ``m``.
-    var : Tensor or float, optional
-        Variance ``v`` (also the unnamed second argument:
-        ``Normal(m, v)``).
-    std : Tensor or float, optional
-        Standard deviation ``sqrt(v)``.
-    precision : Tensor or float, optional
-        Precision ``lam = 1 / v``. Zero is a flat (improper) direction:
-        entropy and KL are infinite, conjugate updates stay valid.
-    validate, cache, dtype, device
-        See :class:`Gamma`.
+    """Normal distribution, elementwise (event shape `()`).
 
     Notes
     -----
-    Give exactly one of ``var``, ``std`` or ``precision``. It is stored as
+    Give exactly one of `var`, `std` or `precision`. It is stored as
     given; the others are derived on access. The canonical parameters of
-    :mod:`~optix.distributions.functional` are ``(mean, precision)``.
+    [`functional`][optix.distributions.functional] are
+    `(mean, precision)`.
 
     A "diagonal" multivariate Normal is this class with a trailing batch
-    dim of size K; reduce it yourself, e.g. ``kl_divergence(q, p).sum(-1)``.
+    dim of size K; reduce it yourself, e.g. `kl_divergence(q, p).sum(-1)`.
 
-    Exponential family: ``T(x) = (x, x^2)``, ``eta = (lam m, -lam / 2)``,
-    ``A = lam m^2 / 2 - log(lam) / 2``, ``log h = -log(2 pi) / 2``.
+    Exponential family: T(x) = (x, x²), η = (λμ, −λ/2),
+    A = λμ² / 2 − ½ log λ, log h = −½ log(2π).
     """
 
     _forms = {
@@ -74,6 +60,23 @@ class Normal(Distribution):
         dtype: torch.dtype | None = None,
         device: torch.device | str | None = None,
     ) -> None:
+        """Create a Normal distribution from one of its parameterisations.
+
+        Parameters
+        ----------
+        mean : Tensor or float
+            Mean μ.
+        var : Tensor or float, optional
+            Variance σ² (also the unnamed second argument:
+            `Normal(mu, sigma2)`).
+        std : Tensor or float, optional
+            Standard deviation σ.
+        precision : Tensor or float, optional
+            Precision λ = 1 / σ². Zero is a flat (improper) direction:
+            entropy and KL are infinite, conjugate updates stay valid.
+        validate, cache, dtype, device
+            See [`Gamma`][optix.distributions.Gamma].
+        """
         given = {"var": var, "std": std, "precision": precision}
         if sum(v is not None for v in given.values()) != 1:
             raise ValueError(
@@ -103,41 +106,44 @@ class Normal(Distribution):
     # -- parameters ------------------------------------------------------
     @property
     def mean(self) -> Tensor:
-        """Mean ``m = E[x]``, ``(*batch)``."""
+        """Mean μ = E[x], `(*batch)`."""
         return self._view("mean")
 
     @property
     def precision(self) -> Tensor:
-        """Precision ``lam = 1 / v``."""
+        """Precision λ = 1 / σ²."""
         return self._view("precision")
 
     @property
     def var(self) -> Tensor:
-        """Variance ``v``."""
+        """Variance σ²."""
         return self._view("var")
 
     @property
     def variance(self) -> Tensor:
-        """Variance ``Var[x] = v`` (alias of :attr:`var`)."""
+        """Variance Var[x] = σ².
+
+        Alias of [`var`][optix.distributions.Normal.var].
+        """
         return self._view("var")
 
     @property
     def std(self) -> Tensor:
-        """Standard deviation ``sqrt(v)``."""
+        """Standard deviation σ = √σ²."""
         return self._view("std")
 
     # -- expectations ----------------------------------------------------
     @property
     def mean_sq(self) -> Tensor:
-        """``E[x^2] = m^2 + v``."""
+        """E[x²] = μ² + σ²."""
         return self._out(self._get("mean").square() + self._get("var"))
 
     def entropy(self) -> Tensor:
-        """``H = (1 + log(2 pi) - log(lam)) / 2``."""
+        """H = (1 + log(2π) − log λ) / 2."""
         return self._out(F.normal_entropy(self._get("precision")))
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """``(log(lam) - log(2 pi) - lam (x - m)^2) / 2``."""
+        """(log λ − log(2π) − λ (x − μ)²) / 2."""
         value = torch.as_tensor(value, dtype=self.dtype, device=self.device)
         shape = self._check_value_shape(value)
         if self._form[1] == "var":
@@ -147,26 +153,26 @@ class Normal(Distribution):
         return out.expand(shape)
 
     def natural_params(self) -> tuple[Tensor, Tensor]:
-        """``(lam m, -lam / 2)``."""
+        """(λμ, −λ/2)."""
         m, lam = self.params()
         return self._out(lam * m), self._out(-0.5 * lam)
 
     def log_normalizer(self) -> Tensor:
-        """``A = lam m^2 / 2 - log(lam) / 2``."""
+        """A = λμ² / 2 − ½ log λ."""
         return self._out(F.normal_log_normalizer(*self.params()))
 
     def expected_stats(self) -> NormalExpectations:
-        """``(E[x], E[x^2]) = (m, m^2 + v)``."""
+        """(E[x], E[x²]) = (μ, μ² + σ²)."""
         return NormalExpectations(self.mean, self.mean_sq)
 
     @classmethod
     def from_natural(cls, eta_x: Tensor, eta_x_sq: Tensor) -> Self:
-        """Normal with natural parameters ``(lam m, -lam / 2)``."""
+        """Normal with natural parameters (λμ, −λ/2)."""
         lam = -2 * eta_x_sq
         return cls._new(eta_x / lam, lam)
 
     def to_torch(self) -> torch.distributions.Normal:
-        """``torch.distributions.Normal(mean, std)``."""
+        """`torch.distributions.Normal(mean, std)`."""
         return torch.distributions.Normal(
             self.mean, self.std, validate_args=False
         )

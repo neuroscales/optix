@@ -14,44 +14,26 @@ __all__ = ["Gamma", "GammaExpectations"]
 
 
 class GammaExpectations(NamedTuple):
-    """``E[T(x)]`` of a Gamma, ordered like its natural parameters."""
+    """`E[T(x)]` of a Gamma, ordered like its natural parameters."""
 
     log_x: Tensor
     x: Tensor
 
 
 class Gamma(Distribution):
-    """Gamma distribution over ``x > 0``, elementwise (event shape ``()``).
+    """Gamma distribution over x > 0, elementwise (event shape `()`).
 
-    ``p(x) = b^a x^(a - 1) exp(-b x) / Gamma(a)`` with shape ``a`` and rate
-    ``b``.
-
-    Parameters
-    ----------
-    shape : Tensor or float
-        Shape ``a > 0``.
-    rate : Tensor or float, optional
-        Rate ``b > 0``.
-    scale : Tensor or float, optional
-        Scale ``1 / b``.
-    mean : Tensor or float, optional
-        Mean ``a / b`` (the "mean / shape" parameterisation ``(mu, nu)``).
-    validate : bool
-        Check the parameter values (synchronises). Default False.
-    cache : bool
-        Cache derived parameters (see :class:`Distribution`).
-    dtype, device
-        Default: those of the tensors (see :class:`Distribution`).
+    p(x) = b^a x^(a − 1) exp(−b x) / Γ(a) with shape a and rate b.
 
     Notes
     -----
-    Give ``shape`` with exactly one of ``rate``, ``scale`` or ``mean``;
+    Give `shape` with exactly one of `rate`, `scale` or `mean`;
     the given pair is stored, everything else is derived on access. The
-    canonical parameters of :mod:`~optix.distributions.functional` are
-    ``(shape, rate)``.
+    canonical parameters of
+    [`functional`][optix.distributions.functional] are `(shape, rate)`.
 
-    Exponential family: ``T(x) = (log x, x)``, ``eta = (a - 1, -b)``,
-    ``A = lgamma(a) - a log(b)``, ``h(x) = 1``.
+    Exponential family: T(x) = (log x, x), η = (a − 1, −b),
+    A = log Γ(a) − a log b, h(x) = 1.
     """
 
     _forms = {
@@ -80,6 +62,27 @@ class Gamma(Distribution):
         dtype: torch.dtype | None = None,
         device: torch.device | str | None = None,
     ) -> None:
+        """Create a Gamma distribution from one of its parameterisations.
+
+        Parameters
+        ----------
+        shape : Tensor or float
+            Shape a > 0.
+        rate : Tensor or float, optional
+            Rate b > 0.
+        scale : Tensor or float, optional
+            Scale 1 / b.
+        mean : Tensor or float, optional
+            Mean a / b (the "mean / shape" parameterisation (μ, ν)).
+        validate : bool
+            Check the parameter values (synchronises). Default False.
+        cache : bool
+            Cache derived parameters (see
+            [`Distribution`][optix.distributions.Distribution]).
+        dtype, device
+            Default: those of the tensors (see
+            [`Distribution`][optix.distributions.Distribution]).
+        """
         given = {"shape": shape, "rate": rate, "scale": scale, "mean": mean}
         form = self._pick("Gamma", given, tuple(self._forms))
         self._init(
@@ -98,7 +101,7 @@ class Gamma(Distribution):
         shape: Tensor | float,
         **kwargs: object,
     ) -> Self:
-        """Gamma with mean ``mu`` and shape ``nu`` (rate ``nu / mu``)."""
+        """Gamma with mean μ and shape ν (rate ν / μ)."""
         return cls(shape, mean=mean, **kwargs)
 
     def _derive(self, name: str) -> Tensor:
@@ -120,28 +123,28 @@ class Gamma(Distribution):
     # -- parameters ------------------------------------------------------
     @property
     def shape(self) -> Tensor:
-        """Shape ``a``, ``(*batch)``."""
+        """Shape a, `(*batch)`."""
         return self._view("shape")
 
     @property
     def rate(self) -> Tensor:
-        """Rate ``b``, ``(*batch)``."""
+        """Rate b, `(*batch)`."""
         return self._view("rate")
 
     @property
     def scale(self) -> Tensor:
-        """Scale ``1 / b``, ``(*batch)``."""
+        """Scale 1 / b, `(*batch)`."""
         return self._view("scale")
 
     # -- expectations ----------------------------------------------------
     @property
     def mean(self) -> Tensor:
-        """``E[x] = a / b``."""
+        """E[x] = a / b."""
         return self._view("mean")
 
     @property
     def variance(self) -> Tensor:
-        """``Var[x] = a / b^2``."""
+        """Var[x] = a / b²."""
         if "scale" in self._form:
             a, s = self._get("shape"), self._get("scale")
             return self._out(a * s.square())
@@ -149,10 +152,10 @@ class Gamma(Distribution):
 
     @property
     def mean_log(self) -> Tensor:
-        """``E[log x] = digamma(a) - log(b)``.
+        """E[log x] = ψ(a) − log b.
 
         In the mean / shape parameterisation it is computed as
-        ``log(mu) - (log(nu) - digamma(nu))``, without cancellation.
+        log μ − (log ν − ψ(ν)), without cancellation.
         """
         if "mean" in self._form:
             mu, nu = self._raw
@@ -161,39 +164,39 @@ class Gamma(Distribution):
 
     @property
     def mean_inv(self) -> Tensor:
-        """``E[1 / x] = b / (a - 1)``; ``inf`` where ``a <= 1``."""
+        """E[1 / x] = b / (a − 1); `inf` where a ≤ 1."""
         return self._out(F.gamma_mean_inv(*self.params()))
 
     def entropy(self) -> Tensor:
-        """``H = a - log(b) + lgamma(a) + (1 - a) digamma(a)``."""
+        """H = a − log b + log Γ(a) + (1 − a) ψ(a)."""
         return self._out(F.gamma_entropy(*self.params()))
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """``a log(b) - lgamma(a) + (a - 1) log(x) - b x``."""
+        """a log b − log Γ(a) + (a − 1) log x − b x."""
         value = torch.as_tensor(value, dtype=self.dtype, device=self.device)
         shape = self._check_value_shape(value)
         return F.gamma_log_prob(value, *self.params()).expand(shape)
 
     def natural_params(self) -> tuple[Tensor, Tensor]:
-        """``(a - 1, -b)``."""
+        """(a − 1, −b)."""
         a, b = self.params()
         return self._out(a - 1), self._out(-b)
 
     def log_normalizer(self) -> Tensor:
-        """``A = lgamma(a) - a log(b)``."""
+        """A = log Γ(a) − a log b."""
         return self._out(F.gamma_log_normalizer(*self.params()))
 
     def expected_stats(self) -> GammaExpectations:
-        """``(E[log x], E[x])``."""
+        """(E[log x], E[x])."""
         return GammaExpectations(self.mean_log, self.mean)
 
     @classmethod
     def from_natural(cls, eta_log_x: Tensor, eta_x: Tensor) -> Self:
-        """Gamma with natural parameters ``(a - 1, -b)``."""
+        """Gamma with natural parameters (a − 1, −b)."""
         return cls._new(eta_log_x + 1, -eta_x)
 
     def to_torch(self) -> torch.distributions.Gamma:
-        """``torch.distributions.Gamma(shape, rate)``."""
+        """`torch.distributions.Gamma(shape, rate)`."""
         return torch.distributions.Gamma(
             self.shape, self.rate, validate_args=False
         )
@@ -210,33 +213,33 @@ class Gamma(Distribution):
     ) -> Self:
         """Maximum-likelihood Gamma from accumulated statistics.
 
-        With ``xbar = sum_x / n`` and ``lbar = sum_log_x / n``, the shape
-        ``nu`` solves ``log(nu) - digamma(nu) = c`` (see
-        :func:`optix.special.fit_gamma_shape`) with
+        With x̄ = `sum_x` / n and l̄ = `sum_log_x` / n, the shape ν solves
+        log ν − ψ(ν) = c (see
+        [`fit_gamma_shape`][optix.special.fit_gamma_shape]) with
 
-        - ``mean`` free: ``mu = xbar`` and ``c = log(xbar) - lbar``;
-        - ``mean`` fixed: ``mu = mean``, ``r = xbar / mu`` and
-          ``c = (r - 1 - log(r)) + (log(xbar) - lbar)``.
+        - `mean` free: μ = x̄ and c = log x̄ − l̄;
+        - `mean` fixed: μ = `mean`, ρ = x̄ / μ and
+          c = (ρ − 1 − log ρ) + (log x̄ − l̄).
 
         Parameters
         ----------
         stats : GammaStats
             Accumulated statistics (preferably float64 at class level:
-            the Jensen gap ``c ~ 1 / (2 nu)`` loses its digits in float32
-            for large ``nu``).
+            the Jensen gap c ≈ 1 / (2ν) loses its digits in float32
+            for large ν).
         mean : Tensor or float, optional
             Fixed mean; only the shape is fitted.
         init : Gamma, optional
-            Returned where ``n == 0``; otherwise those entries are NaN.
+            Returned where n = 0; otherwise those entries are NaN.
         niter : int
             Newton iterations.
 
         Returns
         -------
         Gamma
-            Stored in the mean / shape parameterisation ``(mu, nu)``, batch
-            shape ``stats.batch_shape`` (broadcast with ``mean`` and
-            ``init``). Gradients stay finite where ``n == 0``.
+            Stored in the mean / shape parameterisation (μ, ν), batch
+            shape `stats.batch_shape` (broadcast with `mean` and
+            `init`). Gradients stay finite where n = 0.
         """
         n, sx, slx = stats.astuple()
         n = n.to(sx.dtype)  # int64 / float64 count
