@@ -111,7 +111,7 @@ class BaSiC(Estimator):
         flat-corrected signal. `meta["flat_norm"] == "mean"` (normalised
         at the working size, before resizing) and
         `meta["baseline_units"] == "signal"`.
-        [`apply`][optix.shading.BaSiC.apply] also handles a baseline in
+        [`apply`][optix.Estimator.apply] also handles a baseline in
         raw units (see
         [`ShadingEstimate`][optix.estimates.ShadingEstimate]).
     fit_frames_ : (k,) Tensor
@@ -125,7 +125,7 @@ class BaSiC(Estimator):
     The fit reads the `max_frames` fitting frames of each group (a
     representative subset, as suggested by the authors for long
     sequences), plus one pass over the stack with `timelapse=True`.
-    [`apply`][optix.shading.BaSiC.apply] works on frame batches. Sorting needs
+    [`apply`][optix.Estimator.apply] works on frame batches. Sorting needs
     all the fitting frames of a strip of rows at once: the strips are
     sized to the memory budget, and each fitting frame is read once per
     strip.
@@ -253,8 +253,8 @@ class BaSiC(Estimator):
         darkfield : bool
             Also estimate the dark field D.
         timelapse : bool
-            Estimate (in [`fit`][optix.shading.BaSiC.fit]) and remove (in
-            [`apply`][optix.shading.BaSiC.apply]) the per-frame baseline B_i.
+            Estimate (in [`fit`][optix.Estimator.fit]) and remove (in
+            [`apply`][optix.Estimator.apply]) the per-frame baseline B_i.
         lambda_flat, lambda_dark : float, optional
             λ_S and λ_D, the weights of the DCT sparsity of S and of D_R.
             Default: derived from the data, per group.
@@ -288,7 +288,7 @@ class BaSiC(Estimator):
             Sort each pixel over the fitting frames before the fit.
         baseline_norm : float or "mean"
             Background B_norm added back by
-            [`apply`][optix.shading.BaSiC.apply] with `timelapse` ("mean":
+            [`apply`][optix.Estimator.apply] with `timelapse` ("mean":
             the mean fitted baseline of the group), in the units of the
             baseline. Default 0.
         faithful : bool

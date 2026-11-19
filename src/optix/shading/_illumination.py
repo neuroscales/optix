@@ -178,7 +178,8 @@ class IlluminationFunction(CalibrationEstimator):
 
     !!! note "Interpretation"
         The paper's "median filter with window size = 500 pixels" is
-        implemented as a square window of side `size` ([`median_window`][]),
+        implemented as a square window of side `size`
+        ([`median_window`][optix.shading.utils.median_window]),
         pixels outside the image being ignored. The paper implements the
         method in CellProfiler; CellProfiler's own conventions (a disk
         median of radius ≈ size/2.35, Gaussian and polynomial smoothing,

@@ -14,13 +14,11 @@ from optix.sensor import (
     PhotonTransferCurve,
     SCMOSCalibration,
     anscombe,
-    bimodality,
-    closed_form_inverse,
-    gain_regression,
     inverse_anscombe,
-    pixel_stats,
     replace_defective,
 )
+from optix.sensor.utils import bimodality, closed_form_inverse, gain_regression
+from optix.stats import pixel_stats
 
 F64 = torch.float64
 
@@ -227,7 +225,7 @@ def test_ptc_prnu_and_per_pixel():
 
 def test_pair_stats_emva_equations():
     """EMVA 1288 R4.0 Eqs. (16), (18), (32) on two explicit images."""
-    from optix.sensor import pair_stats
+    from optix.sensor.utils import pair_stats
 
     g = torch.Generator().manual_seed(0)
     y0 = torch.randint(0, 50, (20, 30), generator=g).to(F64)
@@ -248,7 +246,7 @@ def test_pair_stats_emva_equations():
 
 
 def test_emva_highpass():
-    from optix.sensor import emva_highpass
+    from optix.sensor.utils import emva_highpass
 
     yy, xx = torch.meshgrid(
         torch.arange(40, dtype=F64), torch.arange(50, dtype=F64), indexing="ij"
@@ -265,7 +263,7 @@ def test_emva_highpass():
 
 
 def test_bspline_slopes_and_linearity_error():
-    from optix.sensor import bspline_slopes, linearity_error
+    from optix.sensor.utils import bspline_slopes, linearity_error
 
     x = torch.linspace(0, 100, 50, dtype=F64)
     torch.testing.assert_close(

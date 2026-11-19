@@ -20,3 +20,4 @@ cancellation. See [Probability distributions](../concepts/distributions.md#numer
         - kl_gamma
         - kl_dirichlet
         - kl_normal
+        - clipped_normal_moments
