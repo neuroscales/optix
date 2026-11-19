@@ -16,22 +16,25 @@ from ..io import (
     Layout,
     WritableArrayLike,
     as_tensor,
+    chunk_length,
     frame_batches,
 )
 from ..stats import Reservoir
 from ._basic_solvers import (
+    VARIANTS,
     BaSiCResult,
     Dct2,
     baseline_basicpy,
-    baseline_median,
-    basic_approximate,
+    baseline_l1,
+    basic_ladm,
     default_lambdas,
     resize,
+    resize_matrix,
 )
 
 __all__ = ["BaSiC"]
 
-_BASELINES = ("median", "basicpy")
+_BASELINES = ("paper", "basicpy")
 _SAMPLINGS = ("stride", "reservoir")
 
 _PRESET: dict[str, object] = {
@@ -44,190 +47,131 @@ _PRESET: dict[str, object] = {
     "tol": 1e-3,
     "max_iterations": 500,
     "max_reweight": 10,
-    "reweight_tol": 1e-2,
+    "reweight_tol": 1e-3,
     "mu_coef": 12.5,
     "rho": 1.5,
     "max_mu_coef": 1e7,
     "max_frames": 512,
     "sampling": "stride",
     "seed": 0,
-    "baseline_method": "median",
+    "variant": "paper",
+    "baseline_method": "paper",
     "sort_intensity": True,
     "baseline_norm": 0.0,
 }
 
 
 class BaSiC(Estimator):
-    r"""BaSiC: low-rank + sparse shading correction (Peng et al., 2017).
+    """BaSiC: shading and baseline by low-rank + sparse decomposition.
 
-    Image formation, for frame :math:`i` of a group (one flat field per
-    group, shared by all its samples):
+    Image formation for frame i of a group (one flat and dark field per
+    group, shared by its samples):
 
-    .. math::
+        I_i(x) = S(x) (B_i + F_i(x)) + D(x)
 
-        I_i(x) = S(x) \, \big(I^0_i(x) + b_i\big) + D(x)
+    with a smooth flat field S (mean 1), a smooth dark field D, a
+    spatially constant baseline B_i (time-lapse data) and the foreground
+    F_i. The corrected frame is
 
-    with a smooth flat field :math:`S` (mean 1), a smooth dark field
-    :math:`D` (optional), and, for time-lapse data, a per-frame baseline
-    :math:`b_i` (in units of the flat-corrected signal, i.e. scaled by
-    :math:`S`, as in the paper's equation (2)). The correction is
+        Î_i = (I_i − D) / S − B_i + B_norm
 
-    .. math::
+    where B_norm is an arbitrary background: 0 removes the background
+    (fluorescence), mean_i B_i keeps the raw intensity range (bright
+    field).
 
-        \hat I^0_i = (I_i - D) / S - b_i + b_\mathrm{norm}
+    **Flat and dark field.** The fitting frames, sorted at each pixel
+    over the frames and resized to the working size (128 × 128), form the
+    measurement matrix I (one column per sorted frame). BaSiC decomposes
+    it into a low-rank part I_B = B ⊙ S ⊕ Z, with
+    Z = D_Z (1 − S) + D_R, and a sparse residual I_R:
 
-    with :math:`b_\mathrm{norm}` an arbitrary background: 0 removes the
-    background (fluorescence), :math:`\mathrm{mean}_i\, b_i` keeps the raw
-    intensity range (bright field).
+        min  ‖W ∘ I_R‖₁ + λ_S ‖𝓕(S)‖₁ + λ_D ‖𝓕(D_R)‖₁ + λ_D ‖D_R‖₁
+        s.t. I = I_B + I_R,  D_Z ∈ [0, min I]
 
-    **Fit.** A subsample of frames, resized to the working size, is
-    sorted at each pixel over the frames (the paper; ``sort_intensity``)
-    and forms the matrix :math:`\mathbf D` (one frame per row). BaSiC
-    decomposes it
-    as :math:`\mathbf D = \mathbf B \mathbf S^T + \mathbf 1 \mathbf D^T +
-    \mathbf E` with the low-rank (rank one, plus dark field) part smooth,
-    i.e. sparse in the DCT domain, and the residual :math:`\mathbf E`
-    sparse:
+    with 𝓕 the orthonormal 2-D DCT. The problem is solved by the
+    linearised augmented Lagrangian method (LADM), with reweighted-L1
+    weights W = 1 / (|I_R / I_B| + ε). The default regularisation is
+    λ_S = ‖𝓕(Ī)‖₁ / 800 and λ_D = ‖𝓕(Ī)‖₁ / 2000, with Ī the per-pixel
+    mean frame divided by its mean. The fields are resized back
+    (bilinear) to the image size; D = D_Z + D_R.
 
-    .. math::
-
-        \min \; \lambda_S \|\mathrm{dct}(S)\|_1
-               + \lambda_D \big(\|\mathrm{dct}(D)\|_1 + \|D\|_1\big)
-               + \|W \odot E\|_1
-        \quad \text{s.t.} \quad
-        \mathbf D = \mathbf B \mathbf S^T + \mathbf 1 \mathbf D^T
-                    + \mathbf E,
-
-    solved by inexact augmented Lagrangian (ALM / ADMM) with penalty
-    :math:`\mu_{k+1} = \min(\rho\mu_k, \bar\mu)`. The weights are
-    reweighted (reweighted L1) as
-    :math:`W = 1 / (|E_i / \overline{XA_i}| + \epsilon)`, normalised to
-    mean 1, until :math:`S` stops changing. The default regularisation is
-    derived from the data: :math:`\lambda_S = 0.5 \,
-    \|\mathrm{dct}(\bar{\mathbf D} / \mathrm{mean}\,\bar{\mathbf D})\|_1
-    / 400` and :math:`\lambda_D = 0.1 \lambda_S`. The profiles are then
-    resized back (bilinear) to the image size.
-
-    :math:`S` starts at zero, as in the paper.
-
-    **Baseline** (``timelapse=True``): after sorting, the fitted
-    :math:`B_i` are not the baselines of the frames, so (the paper's
-    two-step strategy) :math:`b_i` is fitted on the *unsorted* frames
-    with :math:`S` and :math:`D` fixed: here on every frame (at the
-    working size), batch by batch over the whole stack, by the exact L1
-    fit
-    :math:`\arg\min_b \|I_i - bS - D\|_1` (a median of
-    :math:`(I_i - D)/S` weighted by :math:`S`). :meth:`apply` subtracts the
-    fitted baseline when the data have the fitted sample shape, and
-    otherwise computes the same cheap per-frame reduction.
-
-    Parameters
-    ----------
-    working_size : int or (int, int) or None
-        Size the frames are resized to for fitting (None: no resizing).
-    darkfield : bool
-        Also estimate the dark field.
-    timelapse : bool
-        Estimate (in :meth:`fit`) and remove (in :meth:`apply`) the
-        per-frame baseline.
-    lambda_flat, lambda_dark : float, optional
-        Sparsity weights of the DCT coefficients of the flat and dark
-        fields (default: derived from the data, per group).
-    epsilon : float
-        Reweighting constant.
-    tol, max_iterations : float, int
-        ALM stop on the relative residual ``|D - XA - E|_F / |D|_F``.
-    max_reweight, reweight_tol : int, float
-        Reweighting stop on the relative L1 change of the flat field.
-    mu_coef, rho, max_mu_coef : float
-        Penalty schedule: ``mu_0 = mu_coef / |D|_2``,
-        ``mu <- min(rho mu, max_mu_coef mu_0)``.
-    max_frames : int or None
-        Number of frames per group used for fitting (None: all).
-    sampling : {"stride", "reservoir"}
-        How the fitting frames are chosen when there are more than
-        ``max_frames``: evenly spaced, or a uniform random sample drawn
-        with :class:`optix.stats.Reservoir` (seeded by ``seed``).
-    seed : int
-        Seed of the reservoir.
-    baseline_method : {"median", "basicpy"}
-        Baseline estimator used by :meth:`fit` (``timelapse=True``).
-    sort_intensity : bool
-        Sort each pixel over the fitting frames before the fit (the
-        paper). False is BaSiCPy's default (``recommended`` preset).
-    baseline_norm : float or "mean"
-        Background :math:`b_\mathrm{norm}` added back by :meth:`apply`
-        with ``timelapse`` ("mean": the mean fitted baseline of the
-        group).
-    faithful : bool
-        ``True``: the ``paper`` preset. ``False``: the ``recommended``
-        preset (``sort_intensity=False``, more accurate on sparse
-        foregrounds in our tests).
-    dtype, device, layout : optional
-        See :class:`optix.Estimator`. The layout must have two spatial
-        axes; a group axis (e.g. channels) gets its own profiles.
+    **Baseline** (`timelapse=True`). After sorting, the fitted B_i belong
+    to the sorted frames, so B_i is estimated in a second step on every
+    unsorted frame (at the working size) with S and D fixed:
+    min_B ‖W ∘ (I_i − B_i S − D)‖₁, reweighted as above.
 
     Attributes
     ----------
     estimates : dict
-        ``{"shading": ShadingEstimate}``: ``flat`` and ``dark`` (None
-        without ``darkfield``) shaped ``(*group, *spatial)``, ``baseline``
-        shaped ``(*group, *sample)`` (None without ``timelapse``).
-        ``meta["flat_norm"] == "mean"`` (normalised at the working size,
-        before resizing), ``meta["baseline_units"] == "signal"``.
+        `{"shading": ShadingEstimate}`: `flat` and `dark` (None without
+        `darkfield`) shaped `(*group, *spatial)`; `baseline` shaped
+        `(*group, *sample)` (None without `timelapse`), in units of the
+        flat-corrected signal. `meta["flat_norm"] == "mean"` (normalised
+        at the working size, before resizing) and
+        `meta["baseline_units"] == "signal"`.
     fit_frames_ : (k,) Tensor
         Flat sample indices (storage order) of the fitting frames.
     fit_baseline_ : (*group, k) Tensor or None
-        Without ``sort_intensity``: baseline of the fitting frames from
-        the shading fit itself, ``B_i mean(shading)`` (BaSiCPy's
-        ``baseline``). None after sorting.
+        Without `sort_intensity`: the baselines of the fitting frames from
+        the decomposition itself. None after sorting.
 
     Notes
     -----
-    **Faithful mode.** Follows the Methods of the paper (Peng et al., Nat
-    Commun 8:14836, 2017): the model, the per-pixel sorting, the zero
-    initialisation, the reweighted-L1 low-rank + sparse decomposition
-    with DCT-sparse :math:`S` and :math:`D = D_Z + D_R`, the two-step
-    baseline and the correction with :math:`b_\mathrm{norm}`. The
-    update equations, the weights :math:`W`, the automatic
-    :math:`\lambda_S, \lambda_D` and the stopping rules are those of the
-    MIT-licensed BaSiCPy 2.0.0, ``fitting_mode="approximate"`` (BaSiCPy's
-    port of the original BaSiC), with ``working_size=128``, ``tol=1e-3``
-    and ``reweight_tol=1e-2``. The paper solves the problem with the
-    linearised ALM of Lin et al. (2011); BaSiCPy's "approximate" scheme
-    is its inexact-ALM variant. The per-frame baseline solver
-    (weighted median) is optix's: BaSiCPy's own is the ``"basicpy"``
-    extension.
+    The fit reads the `max_frames` fitting frames of each group (a
+    representative subset, as suggested by the authors for long
+    sequences), plus one pass over the stack with `timelapse=True`.
+    [`apply`][optix.shading.BaSiC.apply] works on frame batches. Sorting needs
+    all the fitting frames of a strip of rows at once: the strips are
+    sized to the memory budget, and each fitting frame is read once per
+    strip.
 
-    **Streaming.** :meth:`fit` reads only the ``max_frames`` fitting
-    frames per group, one at a time (frames beyond ``max_frames`` are not
-    used, a departure from the reference, which fits all frames), plus
-    one pass over the stack when ``timelapse=True``. :meth:`apply` works
-    on frame batches.
+    !!! note "Implementation choices"
+        The inner LADM loop stops when ‖I − I_B − I_R‖_F / ‖I‖_F < `tol`
+        or after `max_iterations`. The penalty starts at μ₀ = 12.5 / ‖I‖₂
+        and grows by ρ = 1.5, capped at 10⁷ μ₀ to stay finite. Images are
+        resized by bilinear interpolation with anti-aliasing, after
+        sorting. The pixels where S is above or below its mean define the
+        two regions of the dark-field contrast. The baseline step solves
+        each reweighted problem exactly (weighted median).
 
     **Extensions** (off by default):
 
-    - ``sort_intensity=False``: fit the unsorted frames (BaSiCPy's
-      default); ``fit_baseline_`` then holds the fitted baselines.
-    - ``baseline_method="basicpy"``: BaSiCPy's ``fit_only_baseline``, a
+    - `sort_intensity=False`: fit the unsorted frames; `fit_baseline_`
+      then holds the fitted baselines.
+    - `variant="basicpy"`: the solver of BaSiCPy 2.0.0
+      (`fitting_mode="approximate"`): weights divided by the frame mean
+      of I_B and normalised to mean 1, B_i clipped at 0, S started at 1,
+      the dark field fitted on the frames with B_i < 1 with a 10× smaller
+      threshold, and λ_D = λ_S / 10 by default. With
+      `sort_intensity=False` and `reweight_tol=1e-2` it reproduces
+      BaSiCPy.
+    - `baseline_method="basicpy"`: BaSiCPy's `fit_only_baseline`, a
       reweighted-L1 ALM trusting only the pixels below each frame's 10 %
-      quantile, run per batch (so its penalty, stopping and weight
-      normalisation are per batch). It is biased low where the flat field
-      varies (about -11 % with a flat of +/-25 %, even without noise),
-      hence not the default.
-    - ``sampling="reservoir"``: random fitting frames.
+      quantile, run per batch. It is biased low where the flat field
+      varies (about −11 % with a flat of ±25 %).
+    - `sampling="reservoir"`: random fitting frames.
 
-    Not implemented: BaSiCPy's ``autotune`` (search of ``lambda_flat`` on
-    an entropy and Fourier cost; pass ``lambda_flat`` explicitly) and its
-    ``fitting_mode="ladmap"`` solver (which fails on 2-D stacks in
-    BaSiCPy 2.0.0).
+    !!! references "References"
+        1. Peng T, Thorn K, Schroeder T, Wang L, Theis FJ, Marr C, Navab N.
+           *A BaSiC tool for background and shading correction of optical
+           microscopy images.* Nat Commun **8**:14836, 2017.
+           [doi:10.1038/ncomms14836](https://doi.org/10.1038/ncomms14836)
 
-    References
-    ----------
-    Peng T, Thorn K, Schroeder T, Wang L, Theis FJ, Marr C, Navab N.
-    A BaSiC tool for background and shading correction of optical
-    microscopy images. Nat Commun 8, 14836 (2017).
-    doi:10.1038/ncomms14836
+        ??? quote "BibTeX"
+            ```bibtex
+            @article{peng2017basic,
+              author  = {Peng, Tingying and Thorn, Kurt and Schroeder, Timm
+                         and Wang, Lichao and Theis, Fabian J. and Marr,
+                         Carsten and Navab, Nassir},
+              title   = {A {BaSiC} tool for background and shading
+                         correction of optical microscopy images},
+              journal = {Nature Communications},
+              volume  = {8},
+              pages   = {14836},
+              year    = {2017},
+              doi     = {10.1038/ncomms14836},
+            }
+            ```
 
     Examples
     --------
@@ -235,10 +179,10 @@ class BaSiC(Estimator):
     >>> from optix.models import random_shading, simulate_shading
     >>> truth = random_shading((64, 64), seed=0)
     >>> x = 100 + 50 * torch.rand(40, 64, 64)
-    >>> Y = simulate_shading(x, truth)
-    >>> basic = BaSiC(working_size=64).fit(Y)
+    >>> data = simulate_shading(x, truth)
+    >>> basic = BaSiC(working_size=64).fit(data)
     >>> flat = basic.estimates["shading"].flat
-    >>> corrected = basic.apply(Y)
+    >>> corrected = basic.apply(data)
     """
 
     tags = Tags(
@@ -271,6 +215,7 @@ class BaSiC(Estimator):
         max_frames: int | None = None,
         sampling: str | None = None,
         seed: int | None = None,
+        variant: str | None = None,
         baseline_method: str | None = None,
         sort_intensity: bool | None = None,
         baseline_norm: float | str | None = None,
@@ -279,10 +224,63 @@ class BaSiC(Estimator):
         device: torch.device | str | None = None,
         layout: Layout | None = None,
     ) -> None:
+        """Set the options; unset ones come from the preset.
+
+        Parameters
+        ----------
+        working_size : int or (int, int) or None
+            Size the frames are resized to for fitting (None: no
+            resizing). Default 128.
+        darkfield : bool
+            Also estimate the dark field D.
+        timelapse : bool
+            Estimate (in [`fit`][optix.shading.BaSiC.fit]) and remove (in
+            [`apply`][optix.shading.BaSiC.apply]) the per-frame baseline B_i.
+        lambda_flat, lambda_dark : float, optional
+            λ_S and λ_D, the weights of the DCT sparsity of S and of D_R.
+            Default: derived from the data, per group.
+        epsilon : float
+            ε of the reweighting. Default 0.1.
+        tol, max_iterations : float, int
+            Inner stop: ‖I − I_B − I_R‖_F / ‖I‖_F < `tol`. Defaults 10⁻³
+            and 500.
+        max_reweight, reweight_tol : int, float
+            Reweighting stop: relative L1 change of S (and of D) below
+            `reweight_tol`, or `max_reweight` steps. Defaults 10 and 10⁻³.
+        mu_coef, rho, max_mu_coef : float
+            Penalty schedule: μ₀ = `mu_coef` / ‖I‖₂ and
+            μ ← min(ρ μ, `max_mu_coef` μ₀).
+        max_frames : int or None
+            Number of fitting frames per group (None: all). Default 512.
+        sampling : {"stride", "reservoir"}
+            How the fitting frames are chosen when there are more than
+            `max_frames`: evenly spaced, or a uniform random sample drawn
+            with [`Reservoir`][optix.stats.Reservoir] (seeded by `seed`).
+        seed : int
+            Seed of the reservoir.
+        variant : {"paper", "basicpy"}
+            Solver details: the paper's, or BaSiCPy 2.0.0's.
+        baseline_method : {"paper", "basicpy"}
+            Baseline estimator used with `timelapse=True`.
+        sort_intensity : bool
+            Sort each pixel over the fitting frames before the fit.
+        baseline_norm : float or "mean"
+            Background B_norm added back by
+            [`apply`][optix.shading.BaSiC.apply] with `timelapse` ("mean":
+            the mean fitted baseline of the group). Default 0.
+        faithful : bool
+            True: the `paper` preset. False: the `recommended` preset,
+            which fits the unsorted frames (`sort_intensity=False`), more
+            accurate when the background drifts between frames.
+        dtype, device, layout : optional
+            See [`Estimator`][optix.Estimator]. The layout must have two
+            spatial axes; each group (e.g. channel) gets its own fields.
+        """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
         opt = self.options
         for name, allowed in (
+            ("variant", VARIANTS),
             ("baseline_method", _BASELINES),
             ("sampling", _SAMPLINGS),
         ):
@@ -335,8 +333,12 @@ class BaSiC(Estimator):
         group: tuple[int, ...],
         k: int,
         backend: dict,
+        rows: slice | None = None,
     ) -> Tensor:
-        """Frame ``k`` (flat sample index) of ``group``, spatial in order."""
+        """Frame `k` (flat sample index) of `group`, spatial in layout order.
+
+        `rows` restricts the first spatial axis (in layout order).
+        """
         shape = tuple(int(s) for s in raw.shape)
         gpos, spos, xpos = layout.positions(len(shape))
         index: list[object] = [slice(None)] * len(shape)
@@ -348,6 +350,8 @@ class BaSiC(Estimator):
                 spos, np.unravel_index(k, sample_shape), strict=True
             ):
                 index[a] = int(i)
+        if rows is not None:
+            index[xpos[0]] = rows
         frame = as_tensor(raw[tuple(index)], **backend)
         stored = sorted(xpos)
         perm = [stored.index(a) for a in xpos]
@@ -355,15 +359,61 @@ class BaSiC(Estimator):
             frame = frame.permute(perm)
         return frame
 
+    def _stack(
+        self,
+        raw: ArrayLike,
+        layout: Layout,
+        group: tuple[int, ...],
+        frames: Tensor,
+        backend: dict,
+        spatial: tuple[int, int],
+        size: tuple[int, int] | None,
+    ) -> Tensor:
+        """Working stack `(k, h, w)` of one group, sorted then resized."""
+        if not self.options["sort_intensity"]:
+            return torch.stack(
+                [
+                    resize(
+                        self._frame(raw, layout, group, k, backend)[None], size
+                    )[0]
+                    for k in frames.tolist()
+                ]
+            )
+        H, W = spatial
+        h, w = (H, W) if size is None else size
+        dtype, device = backend["dtype"], backend["device"]
+        k = len(frames)
+        # strips of rows holding every fitting frame: read, sort, resize
+        rows = chunk_length((k, W), dtype=dtype, overhead=3.0, maximum=H)
+        rh = resize_matrix(H, h, dtype=dtype, device=device)
+        rw = resize_matrix(W, w, dtype=dtype, device=device)
+        out = torch.zeros(k, h, w, dtype=dtype, device=device)
+        for r0 in range(0, H, rows):
+            r1 = min(r0 + rows, H)
+            strip = torch.stack(
+                [
+                    self._frame(raw, layout, group, f, backend, slice(r0, r1))
+                    for f in frames.tolist()
+                ]
+            )
+            strip = strip.sort(dim=0).values
+            if size is None:
+                out[:, r0:r1] = strip
+            else:
+                out += rh[:, r0:r1] @ strip @ rw.T
+        return out
+
     def _solve(self, D: Tensor) -> tuple[BaSiCResult, float, float]:
         opt = self.options
         lam_f, lam_d = opt["lambda_flat"], opt["lambda_dark"]
-        if lam_f is None:
+        if lam_f is None or lam_d is None:
             dct = Dct2(*D.shape[1:], dtype=D.dtype, device=D.device)
-            lam_f, _ = default_lambdas(D, dct)
-        if lam_d is None:
-            lam_d = 0.1 * lam_f
-        common = dict(
+            auto_f, auto_d = default_lambdas(D, dct)
+            lam_f = auto_f if lam_f is None else lam_f
+            if lam_d is None:
+                lam_d = auto_d if opt["variant"] == "paper" else 0.1 * lam_f
+        result = basic_ladm(
+            D,
             lambda_flat=lam_f,
             lambda_dark=lam_d,
             darkfield=opt["darkfield"],
@@ -375,13 +425,21 @@ class BaSiC(Estimator):
             mu_coef=opt["mu_coef"],
             rho=opt["rho"],
             max_mu_coef=opt["max_mu_coef"],
+            variant=opt["variant"],
         )
-        return basic_approximate(D, **common), lam_f, lam_d
+        return result, lam_f, lam_d
 
     def _baseline(self, D: Tensor, flat: Tensor, dark: Tensor) -> Tensor:
-        if self.options["baseline_method"] == "median":
-            return baseline_median(D, flat, dark)
         opt = self.options
+        if opt["baseline_method"] == "paper":
+            return baseline_l1(
+                D,
+                flat,
+                dark,
+                epsilon=opt["epsilon"],
+                max_reweight=opt["max_reweight"],
+                reweight_tol=opt["reweight_tol"],
+            )
         return baseline_basicpy(
             D,
             flat,
@@ -395,7 +453,7 @@ class BaSiC(Estimator):
         )
 
     def _small(self, maps: Tensor, size: tuple[int, int] | None) -> Tensor:
-        """``(*group, H, W)`` maps resized to the working size."""
+        """`(*group, H, W)` maps resized to the working size."""
         lead = maps.shape[:-2]
         flat = maps.reshape(-1, *maps.shape[-2:])
         return resize(flat, size).reshape(*lead, *_resized_shape(maps, size))
@@ -403,21 +461,21 @@ class BaSiC(Estimator):
     # -- fit / apply -------------------------------------------------------
     def _fit(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         *,
         init: object,
         callback: Callable | None,
         verbose: bool,
     ) -> None:
         self._warn_unused(init)
-        layout = self._layout_of(Y)
-        raw = Y.array if isinstance(Y, Labeled) else Y
+        layout = self._layout_of(data)
+        raw = data.array if isinstance(data, Labeled) else data
         group_shape, sample_shape, spatial = layout.shape_of(raw)
         if len(spatial) != 2:
             raise ValueError(
                 f"BaSiC needs two spatial axes, the layout has {len(spatial)}"
             )
-        backend = self._backend(Y)
+        backend = self._backend(data)
         size = self._working_shape(spatial)
         n = math.prod(sample_shape)
         if n < 1:
@@ -426,16 +484,9 @@ class BaSiC(Estimator):
         opt = self.options
         flats, darks, fit_base, converged = [], [], [], []
         for group in itertools.product(*(range(g) for g in group_shape)):
-            D = torch.stack(
-                [
-                    resize(
-                        self._frame(raw, layout, group, k, backend)[None], size
-                    )[0]
-                    for k in frames.tolist()
-                ]
+            D = self._stack(
+                raw, layout, group, frames, backend, tuple(spatial), size
             )
-            if opt["sort_intensity"]:
-                D = D.sort(dim=0).values
             result, lam_f, lam_d = self._solve(D)
             for it, res, change in zip(
                 result.iterations,
@@ -457,7 +508,7 @@ class BaSiC(Estimator):
             if verbose:
                 print(
                     f"BaSiC group {group}: {len(result.iterations)} "
-                    f"reweightings, ALM iterations {result.iterations}, "
+                    f"reweightings, iterations {result.iterations}, "
                     f"converged={result.converged}"
                 )
             if callback is not None:
@@ -478,7 +529,7 @@ class BaSiC(Estimator):
         )
         baseline = None
         if opt["timelapse"]:
-            baseline = self._fit_baseline(Y, flat, dark, size)
+            baseline = self._fit_baseline(data, flat, dark, size)
         self.estimates = {
             "shading": ShadingEstimate(
                 flat=flat,
@@ -495,22 +546,22 @@ class BaSiC(Estimator):
 
     def _fit_baseline(
         self,
-        Y: ArrayLike,
+        data: ArrayLike,
         flat: Tensor,
         dark: Tensor,
         size: tuple[int, int] | None,
     ) -> Tensor:
-        """Per-frame baseline in one pass, ``(*group, *sample)``."""
-        layout = self._layout_of(Y)
-        group_shape, sample_shape, _ = layout.shape_of(Y)
+        """Per-frame baseline in one pass, `(*group, *sample)`."""
+        layout = self._layout_of(data)
+        group_shape, sample_shape, _ = layout.shape_of(data)
         small_flat = self._small(flat, size)
         small_dark = self._small(dark, size)
         out = torch.zeros(
             *group_shape, *sample_shape, dtype=flat.dtype, device=flat.device
         )
         chunks = frame_batches(
-            Y,
-            ndim=None if isinstance(Y, Labeled) else 2,
+            data,
+            ndim=None if isinstance(data, Labeled) else 2,
             dtype=flat.dtype,
             device=flat.device,
             overhead=8.0,
@@ -524,13 +575,13 @@ class BaSiC(Estimator):
         return out
 
     def _apply(
-        self, Y: ArrayLike, out: WritableArrayLike | None
+        self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
         if "shading" not in self.estimates:
             raise RuntimeError("BaSiC is not fitted: call fit first")
         est = self.estimates["shading"]
-        layout = self._layout_of(Y)
-        group_shape, sample_shape, spatial = layout.shape_of(Y)
+        layout = self._layout_of(data)
+        group_shape, sample_shape, spatial = layout.shape_of(data)
         flat = est.flat
         dark = torch.zeros_like(flat) if est.dark is None else est.dark
         if tuple(flat.shape) != tuple(group_shape) + tuple(spatial):
@@ -569,7 +620,7 @@ class BaSiC(Estimator):
                 if stored is not None:
                     b = stored[chunk.group + chunk.samples].reshape(-1)
                 else:
-                    b = baseline_median(
+                    b = self._baseline(
                         resize(batch, size),
                         small_flat[chunk.group].to(batch),
                         small_dark[chunk.group].to(batch),
@@ -578,7 +629,7 @@ class BaSiC(Estimator):
                 x = x + norm[chunk.group].to(batch)
             return x
 
-        return self._apply_frames(Y, out, fn, overhead=3.0)
+        return self._apply_frames(data, out, fn, overhead=3.0)
 
     # -- state -------------------------------------------------------------
     def _extra_state(self) -> dict[str, object]:
@@ -595,5 +646,5 @@ class BaSiC(Estimator):
 def _resized_shape(
     maps: Tensor, size: tuple[int, int] | None
 ) -> tuple[int, int]:
-    """Spatial shape of ``maps`` after :func:`resize` to ``size``."""
+    """Spatial shape of `maps` after `resize` to `size`."""
     return tuple(maps.shape[-2:]) if size is None else tuple(size)

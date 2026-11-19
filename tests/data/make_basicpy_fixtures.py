@@ -1,19 +1,21 @@
-"""Generate ``basicpy_fixtures.npz`` (run in a separate venv with BaSiCPy).
+"""Generate `basicpy_fixtures.npz` (run in a separate venv with BaSiCPy).
 
-Reference: BaSiCPy 2.0.0 (MIT licence), PyTorch 2.15.0, CPU, float32::
+Reference: BaSiCPy 2.0.0 (MIT licence), PyTorch 2.15.0, CPU, float32:
 
-    uv venv -p 3.12 basicpy-venv
-    VIRTUAL_ENV=basicpy-venv uv pip install basicpy==2.0.0
-    basicpy-venv/bin/python tests/data/make_basicpy_fixtures.py
+```text
+uv venv -p 3.12 basicpy-venv
+VIRTUAL_ENV=basicpy-venv uv pip install basicpy==2.0.0
+basicpy-venv/bin/python tests/data/make_basicpy_fixtures.py
+```
 
 The synthetic stack is built with numpy only (no optix import), at the
 working size (64 x 64), so that BaSiCPy's resizing is the identity and the
 comparison isolates the solvers. Settings: BaSiCPy defaults
-(``epsilon=0.1``, ``optimization_tol=1e-3``, ``reweighting_tol=1e-2``,
-``max_iterations=500``, ``max_reweight_iterations=10``, automatic
-``smoothness_flatfield`` / ``smoothness_darkfield``), with
-``working_size=64``, ``device="cpu"`` and, per case, ``fitting_mode`` and
-``get_darkfield``.
+(`epsilon=0.1`, `optimization_tol=1e-3`, `reweighting_tol=1e-2`,
+`max_iterations=500`, `max_reweight_iterations=10`, automatic
+`smoothness_flatfield` / `smoothness_darkfield`), with
+`working_size=64`, `device="cpu"` and, per case, `fitting_mode` and
+`get_darkfield`.
 
 Stored arrays
 -------------
@@ -24,15 +26,15 @@ true_flat, true_dark : (64, 64) float32
 true_level : (40,) float32
     Per-frame background level.
 <case>_flat, <case>_dark : (64, 64) float32
-    BaSiCPy ``flatfield`` / ``darkfield``.
+    BaSiCPy `flatfield` / `darkfield`.
 <case>_baseline : (40,) float32
-    BaSiCPy ``baseline`` (from the fit).
+    BaSiCPy `baseline` (from the fit).
 <case>_fit_only_baseline : (40,) float32
-    BaSiCPy ``fit_only_baseline(stack, None, flatfield, darkfield)``.
+    BaSiCPy `fit_only_baseline(stack, None, flatfield, darkfield)`.
 
-Cases: ``approx`` (approximate, no dark field) and ``approx_dark``
-(approximate, dark field). BaSiCPy 2.0.0's ``fitting_mode="ladmap"``
-fails on 2-D stacks (shape error in ``LadmapFit.calc_weights``), so it is
+Cases: `approx` (approximate, no dark field) and `approx_dark`
+(approximate, dark field). BaSiCPy 2.0.0's `fitting_mode="ladmap"`
+fails on 2-D stacks (shape error in `LadmapFit.calc_weights`), so it is
 not used.
 """
 
