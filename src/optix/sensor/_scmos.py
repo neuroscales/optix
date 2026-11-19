@@ -113,13 +113,12 @@ class SCMOSCalibration(CalibrationEstimator):
     [`apply`][optix.sensor.SCMOSCalibration.apply] converts data to
     photoelectrons, (ADU − o)/g.
 
-    !!! warning "Provisional: gain regression"
-        The Online Methods defer the gain estimation to the paper's
-        Supplementary Note, which could not be obtained (the publisher's
-        site is not reachable from this environment; PMC serves it behind a
-        challenge page). The through-origin least-squares regression above
-        is not yet checked against it. The offset and variance procedure
-        is confirmed by the Online Methods.
+    !!! note "Gain estimate"
+        The gain is estimated by least-squares regression through the
+        origin of the variance excess v_i − var against the mean excess
+        D_i − o. This regression is an interpretation of the method: the
+        Online Methods give the offset and variance procedure and leave
+        the gain estimation to the paper's Supplementary Note.
 
     !!! note
         `fit(levels, dark=darks)`: `levels` is a sequence of stacks, one
@@ -181,8 +180,8 @@ class SCMOSCalibration(CalibrationEstimator):
         Parameters
         ----------
         robust : {"none", "huber", "theil-sen"}
-            Regression of the gain (see [`gain_regression`][]). Paper:
-            `"none"` (ordinary least squares, provisional).
+            Regression of the gain (see [`gain_regression`][]). Default:
+            `"none"` (ordinary least squares through the origin).
         confidence : float, optional
             Extension: flag as `defective` the pixels whose relative
             standard error of the gain exceeds `confidence` (also those with
