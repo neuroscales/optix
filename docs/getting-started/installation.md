@@ -6,6 +6,15 @@ runs on Python 3.11 or later and needs `numpy` (1.24 or later) and `torch`
 or `numpy.memmap` are read through their ordinary slicing interface, so those
 libraries are only needed if *you* use them.
 
+## Install from PyPI
+
+The package is published on PyPI as `neuroscales-optix`. It is still
+imported as `optix`.
+
+```bash
+pip install neuroscales-optix
+```
+
 ## Install from source
 
 ```bash
