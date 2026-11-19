@@ -1120,8 +1120,8 @@ class GammaMixtureModel:
                 print(
                     f"{n:3d} | bound = {bound/self._numel:12.6e} | "
                     f"gain = {prm.gain.item():.4g} | "
-                    f"mu = [{",".join([f"{round(x, 3):5.3f}" for x in self.prior.mu.tolist()])}] | "
-                    f"nu = [{",".join([f"{round(x, 3):5.3f}" for x in self.prior.nu.tolist()])}] | "
+                    f"mu = [{','.join([f'{round(x, 3):5.3f}' for x in self.prior.mu.tolist()])}] | "
+                    f"nu = [{','.join([f'{round(x, 3):5.3f}' for x in self.prior.nu.tolist()])}] | "
                     f"c = {round(prm.C.mean().item(), 3):7.3f} | "
                     f"v = {round(prm.V.mean().item(), 3):7.3f} | "
                     f"m = {round(prm.M.mean().item(), 3)}"
