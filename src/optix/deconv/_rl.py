@@ -241,9 +241,19 @@ class RichardsonLucy(Estimator):
         - **Background:** `background=b` uses y ~ Poisson(H f + b), and
           the update Hᵀ[y / (H f + b)] / Hᵀ1.
         - **Poisson–Gaussian noise:** `poisson_gaussian=True` uses the
-          shifted-Poisson approximation y + σ² ~ Poisson(H f + b + σ²),
-          with σ² the read-noise variance of the sensor estimate in
-          electrons² (variance/gain²); y + σ² is clipped at 0.
+          large-read-noise approximation of Snyder et al. (1993, §3.C):
+          the Gaussian read noise, of mean m and variance σ², is replaced
+          by a Poisson variable of mean σ², so that the data, in electrons
+          and shifted to m = σ², follow
+          y − m + σ² ~ Poisson(H f + b + σ²), and the update is their
+          Eq. (15) with the background μ₀ = b replaced by b + σ²:
+          f ← f · Hᵀ[(y − m + σ²) / (H f + b + σ²)] / Hᵀ1. Here m is the
+          sensor offset, y − m is converted to electrons, (y − m)/gain,
+          and σ² is the read-noise variance in electrons² (variance/gain²).
+          y − m + σ² is clipped at 0 (not specified in the paper). The flat
+          field β(j) of Snyder et al. (Eqs. 6 and 15) is taken as uniform,
+          β = 1; data divided by a flat field beforehand are no longer
+          Poisson counts.
         - **Damping:** `damping=ε` applies a fraction ε ∈ (0, 1] of the
           correction, f ← f + ε(f·c − f), as in Lucy (1974, §III), where
           it is used to prove that the likelihood increases; Lucy
@@ -257,6 +267,10 @@ class RichardsonLucy(Estimator):
         2. Lucy LB. *An iterative technique for the rectification of
            observed distributions.* Astron J **79**(6):745-754, 1974.
            [doi:10.1086/111605](https://doi.org/10.1086/111605)
+        3. Snyder DL, Hammoud AM, White RL. *Image recovery from data
+           acquired with a charge-coupled-device camera.* J Opt Soc Am A
+           **10**(5):1014-1023, 1993.
+           [doi:10.1364/JOSAA.10.001014](https://doi.org/10.1364/JOSAA.10.001014)
 
         ??? quote "BibTeX"
 
@@ -282,6 +296,18 @@ class RichardsonLucy(Estimator):
               pages   = {745--754},
               year    = {1974},
               doi     = {10.1086/111605}
+            }
+            @article{snyder1993image,
+              author  = {Snyder, Donald L. and Hammoud, Abed M. and
+                         White, Richard L.},
+              title   = {Image recovery from data acquired with a
+                         charge-coupled-device camera},
+              journal = {Journal of the Optical Society of America A},
+              volume  = {10},
+              number  = {5},
+              pages   = {1014--1023},
+              year    = {1993},
+              doi     = {10.1364/JOSAA.10.001014}
             }
             ```
 
@@ -353,9 +379,10 @@ class RichardsonLucy(Estimator):
             a scalar or a map that broadcasts to `(*group, *spatial)`.
             Default: none.
         poisson_gaussian : bool
-            Extension. Shifted-Poisson likelihood with the read noise of
-            the sensor estimate given to [`fit`][optix.Estimator.fit].
-            Default: False.
+            Extension. Shifted-Poisson approximation of the Gaussian read
+            noise (Snyder et al. 1993, §3.C and Eq. 15), with the offset
+            and read-noise variance of the sensor estimate given to
+            [`fit`][optix.Estimator.fit]. Default: False.
         damping : float
             Extension. Fraction ε ∈ (0, 1] of the correction applied.
             Default (Lucy 1974): 1.
