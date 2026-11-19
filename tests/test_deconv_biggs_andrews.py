@@ -70,23 +70,40 @@ def test_trace_safeguards_and_first_prediction():
     assert trace["effective"] > 2 * n
 
 
-def test_negative_alpha_suspends_acceleration():
-    """Poisson data: oscillating changes give α < 0, set to 0 (Eq. 10)."""
-    psf = gaussian_psf(9, 2.0)
-    truth = torch.zeros(48, 48, dtype=F64)
-    truth[::6, ::6] = 50.0
-    data = torch.poisson(
-        blur(truth, psf), generator=torch.Generator().manual_seed(4)
-    )
+def test_negative_alpha_suspends_acceleration(monkeypatch):
+    """α < 0 is set to 0 (Eq. 10), which suspends the extrapolation.
+
+    Negative raw α values are forced deterministically by flipping the sign
+    of the latest change on alternate calls, instead of relying on them to
+    occur by chance on noisy data.
+    """
+    from optix.deconv import _rl
+
+    real = _rl.biggs_andrews_alpha
+    truth, data, psf = noiseless_scene()
     op = PaddedConvolution(psf, data.shape)
+
+    calls = []
+
+    def alternating(g, g_prev):
+        calls.append(None)
+        return real(-g if len(calls) % 2 else g, g_prev)
+
+    monkeypatch.setattr(_rl, "biggs_andrews_alpha", alternating)
     trace = {}
     f, _ = rl_block(
-        data, op, float(data.mean()), n_iter=200, accelerate=True, trace=trace
+        data, op, float(data.mean()), n_iter=30, accelerate=True, trace=trace
     )
     alpha = trace["alpha"][3:]
     assert any(a == 0.0 for a in alpha)
     assert any(a > 0.0 for a in alpha)
     assert (f >= 0).all()
+
+    # α ≡ 0 at every step: exactly plain Richardson–Lucy
+    monkeypatch.setattr(_rl, "biggs_andrews_alpha", lambda g, g_prev: 0.0)
+    f0, _ = rl_block(data, op, float(data.mean()), n_iter=30, accelerate=True)
+    f1, _ = rl_block(data, op, float(data.mean()), n_iter=30)
+    torch.testing.assert_close(f0, f1)
 
 
 # -- reduction to plain Richardson–Lucy -------------------------------------
