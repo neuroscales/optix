@@ -1,6 +1,37 @@
 [project]
 nav = [
   {"Home" = "index.md"},
+  {"Getting started" = [
+    "getting-started/installation.md",
+    "getting-started/quick-tour.md",
+  ]},
+  {"Concepts" = [
+    "concepts/index.md",
+    "concepts/axes-and-layouts.md",
+    "concepts/image-formation.md",
+    "concepts/estimators.md",
+    "concepts/distributions.md",
+  ]},
+  {"Algorithms" = [
+    "algorithms/index.md",
+    "algorithms/_template.md",
+  ]},
+  {"Contributing" = [
+    "contributing/style.md",
+  ]},
+  {"API reference" = [
+    "reference/index.md",
+    "reference/configuration.md",
+    "reference/estimator.md",
+    "reference/estimates.md",
+    "reference/io.md",
+    "reference/stats.md",
+    "reference/basis.md",
+    "reference/special.md",
+    "reference/models.md",
+    "reference/distributions.md",
+    "reference/functional.md",
+  ]},
 ]
 
 site_name = "optix"
@@ -11,6 +42,7 @@ edit_uri = "blob/main/docs"
 site_dir = "site"
 docs_dir = "docs"
 watch = ["src", "docs"]
+extra_css = ["stylesheets/extra.css"]
 extra_javascript = [
   "javascripts/mathjax.js",
   "https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js",
@@ -39,6 +71,8 @@ paths = ["src"]
 [project.plugins.mkdocstrings.handlers.python.options]
 docstring_style = "numpy"
 merge_init_into_class = true
+signature_crossrefs = true
+relative_crossrefs = true
 separate_signature = true
 members_order = "source"
 show_source = false
@@ -55,3 +89,6 @@ toc_depth = 2
 [project.markdown_extensions.pymdownx.superfences]
 [project.markdown_extensions.pymdownx.tabbed]
 alternate_style = true
+[project.markdown_extensions.pymdownx.snippets]
+base_path = ["docs"]
+check_paths = true

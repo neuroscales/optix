@@ -1,4 +1,4 @@
-"""Optional ``torch.compile`` with an eager fallback."""
+"""Optional `torch.compile` with an eager fallback."""
 
 import functools
 import sys
@@ -88,27 +88,27 @@ def maybe_compile(
 def maybe_compile(
     fn: Callable[P, R] | None = None, **compile_kwargs: object
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
-    """Run a kernel through ``torch.compile`` when ``config.compile`` is on.
+    """Run a kernel through `torch.compile` when `config.compile` is on.
 
-    Usable as ``@maybe_compile`` or ``@maybe_compile(mode=...)``.
+    Usable as `@maybe_compile` or `@maybe_compile(mode=...)`.
 
     Parameters
     ----------
     fn : callable, optional
         The kernel to wrap.
     **compile_kwargs
-        Keyword arguments forwarded to ``torch.compile``.
+        Keyword arguments forwarded to `torch.compile`.
 
     Returns
     -------
     callable
-        A wrapper that reads ``get_config().compile`` at call time. When it
+        A wrapper that reads `get_config().compile` at call time. When it
         is on, the compiled version is used; if compiling or running it
         raises, the call is re-run eagerly. If the eager call also raises,
         that error propagates (it is a genuine bug). Otherwise one
-        ``RuntimeWarning`` is emitted and the wrapper stays eager from then
+        `RuntimeWarning` is emitted and the wrapper stays eager from then
         on. Compilation is skipped silently where it is not supported
-        (Windows, Python/torch combinations without ``torch.compile``).
+        (Windows, Python/torch combinations without `torch.compile`).
 
     Notes
     -----
@@ -117,7 +117,7 @@ def maybe_compile(
     eager re-run after a failure would give wrong results.
 
     Shape changes (last short batch, clipped edge blocks) trigger
-    recompilations; ``dynamic`` is left to torch's default, which marks
+    recompilations; `dynamic` is left to torch's default, which marks
     dims as dynamic after the first recompilation.
     """
     if fn is None:

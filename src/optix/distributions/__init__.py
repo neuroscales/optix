@@ -2,17 +2,21 @@
 
 Two layers:
 
-- :mod:`optix.distributions.functional`: pure tensor functions (means,
+- [`functional`][optix.distributions.functional]: pure tensor functions (means,
   expectations, entropies, log-densities, KL divergences), one canonical
   signature per family, safe to inline into compiled kernels;
-- classes (:class:`Gamma`, :class:`Dirichlet`, :class:`Categorical`,
-  :class:`Normal`) that accept several
+- classes ([`Gamma`][optix.distributions.Gamma],
+  [`Dirichlet`][optix.distributions.Dirichlet],
+  [`Categorical`][optix.distributions.Categorical],
+  [`Normal`][optix.distributions.Normal]) that accept several
   parameterisations, store the one they were given, derive the others on
-  demand, and dispatch :func:`kl_divergence` and :func:`posterior`.
+  demand, and dispatch [`kl_divergence`][optix.distributions.kl_divergence]
+  and [`posterior`][optix.distributions.posterior].
 
-Accumulated sufficient statistics (:class:`SuffStats` subclasses) are
-mergeable containers consumed by :func:`posterior` and the ``fit``
-classmethods.
+Accumulated sufficient statistics
+([`SuffStats`][optix.distributions.SuffStats] subclasses) are mergeable
+containers consumed by [`posterior`][optix.distributions.posterior] and
+the `fit` classmethods.
 """
 
 from . import (

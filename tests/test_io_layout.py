@@ -90,12 +90,12 @@ def test_layout_validation_at_bind():
 
 def test_labeled_passthrough():
     y = np.arange(24.0).reshape(2, 3, 4)
-    Y = labeled(y, axes="zyx", spatial="yz")
-    assert isinstance(Y, Labeled)
-    assert Y.shape == (2, 3, 4) and Y.ndim == 3 and Y.dtype == y.dtype
-    assert Y.layout == Layout("zyx", spatial="yz")
-    assert (Y[0, 1:, :] == y[0, 1:, :]).all()
-    assert labeled(Y, spatial=(0,)).array is y
+    data = labeled(y, axes="zyx", spatial="yz")
+    assert isinstance(data, Labeled)
+    assert data.shape == (2, 3, 4) and data.ndim == 3 and data.dtype == y.dtype
+    assert data.layout == Layout("zyx", spatial="yz")
+    assert (data[0, 1:, :] == y[0, 1:, :]).all()
+    assert labeled(data, spatial=(0,)).array is y
     with pytest.raises(TypeError):
         labeled(y, Layout(spatial=(-1,)), spatial=(0,))
     with pytest.raises(TypeError):
@@ -104,9 +104,9 @@ def test_labeled_passthrough():
         labeled(y, axes="zyxw", spatial="yx")
     # conflicting layouts
     with pytest.raises(ValueError, match="conflicts"):
-        frame_batches(Y, layout=Layout(spatial=(-1,)))
+        frame_batches(data, layout=Layout(spatial=(-1,)))
     with pytest.raises(ValueError, match="conflicts"):
-        frame_batches(Y, ndim=1)
+        frame_batches(data, ndim=1)
 
 
 def test_labeled_zarr_chunks_passthrough():
@@ -132,11 +132,11 @@ def test_light_sheet_frames_round_trip(batch):
     """(z, y, x) data, (y, z) pictures, one per x."""
     zarr = pytest.importorskip("zarr")
     z, y = _sheet(zarr, (6, 5, 20), (6, 5, 4))
-    Y = labeled(z, axes="zyx", spatial="yz", sample="x")
+    data = labeled(z, axes="zyx", spatial="yz", sample="x")
     out = zarr.create_array(
         store={}, shape=z.shape, chunks=(3, 5, 4), dtype="u2"
     )
-    chunks = frame_batches(Y, batch=batch)
+    chunks = frame_batches(data, batch=batch)
     ref = torch.from_numpy(y.astype("f8")).permute(2, 1, 0)  # (x, y, z)
     seen = []
     for chunk in chunks:
@@ -163,21 +163,21 @@ def test_light_sheet_amplification_warning():
     # every storage chunk spans all of x: reading few x at a time decodes
     # each chunk many times
     z, _ = _sheet(zarr, (6, 5, 20), (1, 5, 20))
-    Y = labeled(z, axes="zyx", spatial="yz", sample="x")
+    data = labeled(z, axes="zyx", spatial="yz", sample="x")
     with pytest.warns(RuntimeWarning, match="Frame batches"):
-        frame_batches(Y, batch=2)
+        frame_batches(data, batch=2)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        frame_batches(Y)  # all of x fits the default budget
+        frame_batches(data)  # all of x fits the default budget
         # chunked along x: batches aligned to the chunks read each once
         z2, _ = _sheet(zarr, (6, 5, 20), (6, 5, 4))
-        frame_batches(labeled(z2, Y.layout), batch=5)
+        frame_batches(labeled(z2, data.layout), batch=5)
 
 
 def test_ome_groups():
     y = np.random.default_rng(1).normal(size=(2, 3, 4, 5, 6))
-    Y = labeled(y, axes="tczyx", spatial="yx", group="c")
-    chunks = frame_batches(Y, batch=3)
+    data = labeled(y, axes="tczyx", spatial="yx", group="c")
+    chunks = frame_batches(data, batch=3)
     assert chunks.group_shape == (3,) and chunks.sample_shape == (2, 4)
     assert chunks.spatial_shape == (5, 6)
     groups = [chunk.group for chunk in chunks]
@@ -202,7 +202,7 @@ def test_ome_groups():
     np.testing.assert_allclose(out, y, rtol=1e-6)
     # parameter maps (C, Y, X) from row tiles holding all samples
     maps = torch.zeros(3, 5, 6, dtype=torch.float64)
-    for chunk in row_tiles(Y, batch=2, dtype=torch.float64):
+    for chunk in row_tiles(data, batch=2, dtype=torch.float64):
         assert chunk.data.shape[:2] == (2, 4)
         chunk.store(maps, chunk.data.mean((0, 1)), into="map")
     np.testing.assert_allclose(maps.numpy(), y.mean((0, 2)))
@@ -230,9 +230,9 @@ def test_non_adjacent_samples_flattened(batch):
 
 def test_store_per_sample_state_and_errors():
     y = np.random.default_rng(3).normal(size=(2, 3, 4, 5, 6))
-    Y = labeled(y, axes="tczyx", spatial="yx", group="c")
+    data = labeled(y, axes="tczyx", spatial="yx", group="c")
     state = torch.zeros(3, 2, 4, 2, dtype=torch.float64)  # (C, T, Z, 2)
-    for chunk in frame_batches(Y, batch=3, dtype=torch.float64):
+    for chunk in frame_batches(data, batch=3, dtype=torch.float64):
         d = chunk.data
         chunk.store(
             state,
@@ -245,7 +245,7 @@ def test_store_per_sample_state_and_errors():
     ref = y.transpose(1, 0, 2, 3, 4).reshape(3, 2, 4, 30)
     np.testing.assert_allclose(state[..., 0].numpy(), ref.mean(-1))
     np.testing.assert_allclose(state[..., 1].numpy(), ref.max(-1))
-    chunk = next(iter(frame_batches(Y)))
+    chunk = next(iter(frame_batches(data)))
     with pytest.raises(ValueError, match="expected"):
         chunk.store(np.zeros(y.shape), chunk.data[:, :2])
     with pytest.raises(ValueError, match="into"):
@@ -290,11 +290,11 @@ def _record_loaded(monkeypatch):
     return loaded
 
 
-def _sheet_iterators(Y, **kw):
+def _sheet_iterators(data, **kw):
     return {
-        "frames": frame_batches(Y, batch=4, **kw),
-        "tiles": row_tiles(Y, axis="z", batch=4, **kw),
-        "blocks": blocks(Y, (3, 2), 1, **kw),
+        "frames": frame_batches(data, batch=4, **kw),
+        "tiles": row_tiles(data, axis="z", batch=4, **kw),
+        "blocks": blocks(data, (3, 2), 1, **kw),
     }
 
 
@@ -304,15 +304,15 @@ def test_light_sheet_chunks_are_views_unless_contiguous(monkeypatch):
 
     zarr = pytest.importorskip("zarr")
     z, _ = _sheet(zarr, (6, 5, 8), (1, 5, 8), dtype="f4")
-    Y = labeled(z, axes="zyx", spatial="yz", sample="x")
+    data = labeled(z, axes="zyx", spatial="yz", sample="x")
     loaded = _record_loaded(monkeypatch)
-    for name, chunks in _sheet_iterators(Y, dtype=torch.float32).items():
+    for name, chunks in _sheet_iterators(data, dtype=torch.float32).items():
         for chunk in chunks:
             assert not chunk.data.is_contiguous(), name
             assert _same_storage(chunk.data, loaded[-1]), name
     loaded.clear()
     for name, chunks in _sheet_iterators(
-        Y, dtype=torch.float32, contiguous=True
+        data, dtype=torch.float32, contiguous=True
     ).items():
         for chunk in chunks:
             assert chunk.data.is_contiguous(), name
@@ -322,10 +322,10 @@ def test_light_sheet_chunks_are_views_unless_contiguous(monkeypatch):
 def test_light_sheet_contiguous_same_results():
     zarr = pytest.importorskip("zarr")
     z, y = _sheet(zarr, (6, 5, 8), (3, 5, 4))
-    Y = labeled(z, axes="zyx", spatial="yz", sample="x")
+    data = labeled(z, axes="zyx", spatial="yz", sample="x")
     outs = {}
     for contiguous in (False, True):
-        its = _sheet_iterators(Y, contiguous=contiguous)
+        its = _sheet_iterators(data, contiguous=contiguous)
         for name, chunks in its.items():
             out = zarr.create_array(
                 store={}, shape=z.shape, chunks=(3, 5, 4), dtype="u2"
@@ -347,22 +347,23 @@ def test_light_sheet_contiguous_same_results():
 
 def test_contiguous_counts_the_copy_in_the_budget():
     y = np.zeros((6, 5, 40), dtype="f4")
-    Y = labeled(y, axes="zyx", spatial="yz", sample="x")
+    data = labeled(y, axes="zyx", spatial="yz", sample="x")
     item = 6 * 5 * 4  # bytes of one float32 frame
     kw = dict(memory=8 * item, dtype=torch.float32)
-    strided = [c.n for c in frame_batches(Y, **kw)]
-    dense = [c.n for c in frame_batches(Y, contiguous=True, **kw)]
+    strided = [c.n for c in frame_batches(data, **kw)]
+    dense = [c.n for c in frame_batches(data, contiguous=True, **kw)]
     assert max(strided) == 8 and max(dense) == 4
     kw["memory"] = 40 * 5 * 4 * 4  # four z rows of every sample
-    rows = [c.data.shape[-1] for c in row_tiles(Y, axis="z", **kw)]
+    rows = [c.data.shape[-1] for c in row_tiles(data, axis="z", **kw)]
     dense_rows = [
-        c.data.shape[-1] for c in row_tiles(Y, axis="z", contiguous=True, **kw)
+        c.data.shape[-1]
+        for c in row_tiles(data, axis="z", contiguous=True, **kw)
     ]
     assert max(rows) == 4 and max(dense_rows) == 2
     kw["memory"] = 30 * 4  # one (y, z) frame
-    core = [c.data[c.inner].numel() for c in blocks(Y, **kw)]
+    core = [c.data[c.inner].numel() for c in blocks(data, **kw)]
     dense_core = [
-        c.data[c.inner].numel() for c in blocks(Y, contiguous=True, **kw)
+        c.data[c.inner].numel() for c in blocks(data, contiguous=True, **kw)
     ]
     assert max(dense_core) * 2 <= max(core)
     # no permutation: nothing to copy, nothing to budget
@@ -377,9 +378,11 @@ def test_stats_forward_contiguous():
     from optix.stats import Moments, reduce
 
     y = np.random.default_rng(7).normal(size=(6, 5, 8))
-    Y = labeled(y, axes="zyx", spatial="yz", sample="x")
-    (a,) = reduce(Y, Moments(2), batch=3, dtype=torch.float64)
-    (b,) = reduce(Y, Moments(2), batch=3, dtype=torch.float64, contiguous=True)
+    data = labeled(y, axes="zyx", spatial="yz", sample="x")
+    (a,) = reduce(data, Moments(2), batch=3, dtype=torch.float64)
+    (b,) = reduce(
+        data, Moments(2), batch=3, dtype=torch.float64, contiguous=True
+    )
     torch.testing.assert_close(a.mean, b.mean)
     torch.testing.assert_close(a.var(), b.var())
     np.testing.assert_allclose(a.mean.numpy(), y.mean(-1).T)
@@ -390,42 +393,42 @@ def test_stats_forward_contiguous():
 
 def test_row_tiles_axis_by_name():
     y = np.random.default_rng(5).normal(size=(4, 5, 6))
-    Y = labeled(y, axes="zyx", spatial="yz")
+    data = labeled(y, axes="zyx", spatial="yz")
     out = np.zeros_like(y)
     for axis in ("z", 1, -1):
-        for chunk in row_tiles(Y, axis=axis, batch=1):
+        for chunk in row_tiles(data, axis=axis, batch=1):
             assert chunk.data.shape[0] == 6  # all x
             assert chunk.data.shape[1] == 5  # y whole, z cut
             chunk.store(out, chunk.data)
         np.testing.assert_allclose(out, y, rtol=1e-6)
     with pytest.raises(ValueError, match="not a spatial"):
-        row_tiles(Y, axis="x")
+        row_tiles(data, axis="x")
 
 
 @pytest.mark.parametrize("pad", [None, "zeros"])
 def test_blocks_with_layout(pad):
     y = np.random.default_rng(6).normal(size=(7, 5, 3))
-    Y = labeled(y, axes="zyx", spatial="yz")
+    data = labeled(y, axes="zyx", spatial="yz")
     out = np.zeros_like(y)
-    chunks = blocks(Y, (2, 3), 1, pad=pad)
+    chunks = blocks(data, (2, 3), 1, pad=pad)
     assert len(chunks) == 3 * 3 * 3
     for chunk in chunks:
-        index, data, inner = chunk
-        core = data[inner]
+        index, block, inner = chunk
+        core = block[inner]
         assert core.shape == (
             index[1].stop - index[1].start,
             index[0].stop - index[0].start,
         )
         if pad is not None:
-            assert data.shape == (4, 5)
+            assert block.shape == (4, 5)
         np.testing.assert_allclose(core.numpy(), y[index].T, rtol=1e-6)
-        chunk.store(out, data)  # cropped automatically
+        chunk.store(out, block)  # cropped automatically
     np.testing.assert_allclose(out, y, rtol=1e-6)
     # maps (*group, *spatial) from blocks
     maps = torch.zeros(5, 7)
-    for chunk in blocks(Y, (2, 3), 1):
+    for chunk in blocks(data, (2, 3), 1):
         if chunk.index[2] == 0:
             chunk.store(maps, chunk.data, into="map")
     np.testing.assert_allclose(maps.numpy(), y[:, :, 0].T, rtol=1e-6)
     with pytest.raises(ValueError, match="per spatial axis"):
-        blocks(Y, (2, 3, 4))
+        blocks(data, (2, 3, 4))

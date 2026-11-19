@@ -1,11 +1,13 @@
 """Building blocks of cancellation-free Gamma and Dirichlet formulas.
 
-``lgamma(a) = (a - 1/2) log(a) - a + log(2 pi) / 2 + stirling_residual(a)``
-and ``digamma(a) = log(a) - log_minus_digamma(a)``: substituting these
-into an expression that combines ``lgamma`` / ``digamma`` of large,
-nearly equal arguments makes the large terms cancel algebraically, so
-only small, accurately computed residuals are left. The remaining
-``r - 1 - log(r)`` of a ratio ``r`` close to 1 is :func:`ratio_minus_log`.
+log Γ(a) = (a − ½) log a − a + ½ log(2π) + r(a), where r is
+[`stirling_residual`][optix.special.stirling_residual], and
+ψ(a) = log a − lmd(a), where lmd is
+[`log_minus_digamma`][optix.special.log_minus_digamma]: substituting these
+into an expression that combines log Γ / ψ of large, nearly equal
+arguments makes the large terms cancel algebraically, so only small,
+accurately computed residuals are left. The remaining ρ − 1 − log ρ of a
+ratio ρ close to 1 is [`ratio_minus_log`][optix.special.ratio_minus_log].
 """
 
 import math
@@ -19,7 +21,7 @@ _SERIES_FROM = 10.0
 
 
 def stirling_residual(a: Tensor) -> Tensor:
-    """``lgamma(a) - ((a - 1/2) log(a) - a + log(2 pi) / 2)``, elementwise.
+    """log Γ(a) − ((a − ½) log a − a + ½ log(2π)), elementwise.
 
     Parameters
     ----------
@@ -29,10 +31,10 @@ def stirling_residual(a: Tensor) -> Tensor:
     Returns
     -------
     Tensor
-        The remainder of Stirling's formula. For ``a > 10`` the series
-        ``1/(12a) - 1/(360a^3) + 1/(1260a^5) - 1/(1680a^7)`` is used
-        (absolute error below ``1e-12``), which keeps full relative
-        precision where the direct difference of ``lgamma`` and its
+        The remainder of Stirling's formula. For a > 10 the series
+        1/(12a) − 1/(360a³) + 1/(1260a⁵) − 1/(1680a⁷) is used
+        (absolute error below 1e-12), which keeps full relative
+        precision where the direct difference of log Γ and its
         approximation would cancel.
     """
     a = torch.as_tensor(a)
@@ -52,26 +54,25 @@ def stirling_residual(a: Tensor) -> Tensor:
 def ratio_minus_log(
     num: Tensor, den: Tensor | float = 1.0, diff: Tensor | None = None
 ) -> Tensor:
-    """``y - 1 - log(y)`` with ``y = num / den > 0``, without cancellation.
+    """y − 1 − log y with y = `num` / `den` > 0, without cancellation.
 
     Parameters
     ----------
     num, den : Tensor
-        Positive numerator and denominator of the ratio ``y``.
+        Positive numerator and denominator of the ratio `y`.
     diff : Tensor, optional
-        ``num - den``, when the caller has a more accurate value than the
+        `num - den`, when the caller has a more accurate value than the
         rounded difference (e.g. a sum of elementwise differences).
 
     Returns
     -------
     Tensor
-        Non-negative, ``~ x^2 / 2`` with ``x = (num - den) / den``. Near
-        ``y = 1`` (``|x| < 0.2``), ``x - log1p(x)`` is computed as
-        ``2 u^2 / (1 - u) - 2 (atanh(u) - u)`` with ``u = x / (2 + x)``
-        and a series for ``atanh(u) - u``; ``x`` is formed from the
-        difference, so it keeps its relative precision. Elsewhere the
-        direct ``y - 1 - log(y)`` is accurate, and finite for ratios too
-        small for ``1 + x`` to be represented.
+        Non-negative, ≈ x² / 2 with x = (`num` − `den`) / `den`. Near
+        y = 1 (|x| < 0.2), x − log(1 + x) is computed as
+        2u² / (1 − u) − 2 (atanh u − u) with u = x / (2 + x) and a series
+        for atanh u − u; x is formed from the difference, so it keeps its
+        relative precision. Elsewhere the direct y − 1 − log y is accurate,
+        and finite for ratios too small for 1 + x to be represented.
     """
     num = torch.as_tensor(num)
     den = torch.as_tensor(den, dtype=num.dtype, device=num.device)

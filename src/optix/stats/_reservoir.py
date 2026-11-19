@@ -11,7 +11,7 @@ __all__ = ["Reservoir"]
 
 _KEY_BITS = 62
 _KEYS = 2**_KEY_BITS
-# torch.rand(float32) returns multiples of 2^-24: ``rand < 2^-e`` holds
+# torch.rand(float32) returns multiples of 2^-24: `rand < 2^-e` holds
 # with probability exactly 2^-e for 0 <= e <= 24.
 _RAND_BITS = 24
 
@@ -19,41 +19,33 @@ _RAND_BITS = 24
 class Reservoir(Reducer):
     """Uniform random sample (without replacement) of the values seen.
 
-    Every value gets a random int64 key and the ``size`` values with the
-    smallest keys are kept. Merging concatenates and keeps the ``size``
+    Every value gets a random int64 key and the `size` values with the
+    smallest keys are kept. Merging concatenates and keeps the `size`
     smallest keys again, so merging is exact and the sample is exactly
     uniform.
 
-    Parameters
-    ----------
-    size : int
-        Maximum number of values kept.
-    seed : int, optional
-        Seed of the random keys. Samples are reproducible for a fixed seed
-        **and a fixed chunking** only.
-
     Attributes
     ----------
-    values : (<= size,) Tensor
+    values : (≤ size,) Tensor
         Sampled values (flattened, in no particular order).
     seen : int
         Number of values seen (after masking).
 
     Notes
     -----
-    Once the reservoir is full, with ``kmax`` its largest key, a value is
-    only kept if its key is below ``kmax``. A float32 Bernoulli mask with
-    probability ``q``, the smallest power of two ``>= kmax / 2^62`` (and
-    ``>= 2^-24``, so that it is exact in float32), selects candidates, and
-    int64 keys are drawn uniformly in ``[0, q 2^62)`` for those only; keys
-    ``>= kmax`` are then discarded. Each value thus gets a key uniform in
-    ``[0, kmax)`` with probability exactly ``kmax / 2^62``, as if a key had
+    Once the reservoir is full, with `kmax` its largest key, a value is
+    only kept if its key is below `kmax`. A float32 Bernoulli mask with
+    probability `q`, the smallest power of two ≥ `kmax` / 2⁶² (and
+    ≥ 2⁻²⁴, so that it is exact in float32), selects candidates, and
+    int64 keys are drawn uniformly in [0, `q` 2⁶²) for those only; keys
+    ≥ `kmax` are then discarded. Each value thus gets a key uniform in
+    [0, `kmax`) with probability exactly `kmax` / 2⁶², as if a key had
     been drawn for every value, without a chunk-sized int64 temporary.
 
     Each update synchronises with the host (boolean indexing and reading
-    ``kmax``). The random generator is not part of ``state_dict``: a
-    reservoir restored with ``from_state_dict`` starts again from ``seed``,
-    and reservoirs (e.g. parallel workers) built with the same ``seed``
+    `kmax`). The random generator is not part of `state_dict`: a
+    reservoir restored with `from_state_dict` starts again from `seed`,
+    and reservoirs (e.g. parallel workers) built with the same `seed`
     draw the same key stream. Give each worker its own seed (or none) for
     independent samples.
     """
@@ -61,6 +53,16 @@ class Reservoir(Reducer):
     _state = ("values", "keys", "count")
 
     def __init__(self, size: int, *, seed: int | None = None) -> None:
+        """Create an empty reservoir.
+
+        Parameters
+        ----------
+        size : int
+            Maximum number of values kept.
+        seed : int, optional
+            Seed of the random keys. Samples are reproducible for a fixed
+            seed **and a fixed chunking** only.
+        """
         if size < 1:
             raise ValueError(f"size must be >= 1, got {size}")
         super().__init__(dim=None)
@@ -99,7 +101,7 @@ class Reservoir(Reducer):
         self.values, self.keys = values, keys
 
     def update(self, x: Tensor, *, weight: Tensor | None = None) -> Self:
-        """Add a chunk of values; ``weight`` is an optional boolean mask."""
+        """Add a chunk of values; `weight` is an optional boolean mask."""
         x = x.detach()
         if weight is None:
             v = x.reshape(-1)
@@ -136,7 +138,7 @@ class Reservoir(Reducer):
         return self
 
     def merge(self, other: "Reservoir") -> Self:
-        """Merge another :class:`Reservoir` (exact)."""
+        """Merge another [`Reservoir`][optix.stats.Reservoir] (exact)."""
         state = self._other_state(other)
         if state["values"] is None:
             return self

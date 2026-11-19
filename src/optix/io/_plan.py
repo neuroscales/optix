@@ -69,17 +69,17 @@ def plan_grid(
         Shape of the source.
     specs : sequence of (int, int) or None
         Per axis: None to iterate it one integer index at a time, or
-        ``(block, halo)`` with ``block >= 1`` and ``halo >= 0``.
+        `(block, halo)` with `block ≥ 1` and `halo ≥ 0`.
     pad : bool
-        See :func:`plan_blocks`.
+        See `plan_blocks`.
     order : sequence of int, optional
         Nesting of the iteration, outermost axis first (default: C order).
 
     Returns
     -------
     list of Plan
-        ``read`` and ``index`` are full-length, in storage order; ``inner``
-        and ``pad`` cover the blocked axes, in storage order. The ``index``
+        `read` and `index` are full-length, in storage order; `inner`
+        and `pad` cover the blocked axes, in storage order. The `index`
         regions partition the array exactly.
     """
     shape = tuple(int(s) for s in shape)
@@ -139,13 +139,13 @@ def plan_blocks(
         Halo along each of the remaining dims (>= 0).
     pad : bool
         If True, every loaded block is padded to exactly
-        ``block + 2 * halo`` (boundary halos and short trailing cores). If
+        `block + 2 * halo` (boundary halos and short trailing cores). If
         False, halos are clipped at the array boundary.
 
     Returns
     -------
     list of Plan
-        In C order. The ``index`` regions partition the array exactly.
+        In C order. The `index` regions partition the array exactly.
     """
     shape = tuple(int(s) for s in shape)
     nblk = len(shape) - lead
@@ -173,7 +173,7 @@ def read_amplification(regions: Sequence[slice], chunk: int, n: int) -> float:
     Returns
     -------
     float
-        ``sum(chunks touched * chunk) / n`` (1 when perfectly aligned).
+        `sum(chunks touched * chunk) / n` (1 when perfectly aligned).
     """
     if n == 0 or chunk <= 0:
         return 1.0
