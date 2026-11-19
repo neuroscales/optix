@@ -1,5 +1,6 @@
-"""Shading: flat field, dark field and per-frame baseline."""
+"""Shading correction: flat field, dark field and per-frame baseline."""
 
+from ._basic import BaSiC
 from ._darkflat import DarkFlatCalibration, correct
 from ._illumination import (
     IlluminationFunction,
@@ -11,6 +12,7 @@ from ._illumination import (
 )
 
 __all__ = [
+    "BaSiC",
     "DarkFlatCalibration",
     "IlluminationFunction",
     "correct",

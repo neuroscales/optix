@@ -7,6 +7,9 @@ Conventions
   default, never silently to zero.
 - `ShadingEstimate.dark` is the whole additive image of
   `x = (y - dark - baseline) / flat`: it **includes** the camera offset.
+- `ShadingEstimate.baseline` is in raw units (`y = flat * x + dark +
+  baseline`) unless `meta["baseline_units"] == "signal"`
+  (`y = flat * (x + baseline) + dark`).
   `SensorEstimate.offset` is the camera offset alone. A model with a
   single additive term returns it in both; corrections never subtract
   both.
@@ -239,9 +242,23 @@ class SensorEstimate(Estimate):
         return self.variance + self.gain * (mean - self.offset)
 
 
+_BASELINE_UNITS = ("raw", "signal")
+
+
 @dataclass(eq=False)
 class ShadingEstimate(Estimate):
-    """Shading model `y = flat * x + dark + baseline`.
+    """Shading model with a per-frame baseline.
+
+    The baseline b_i is a scalar per frame, in one of two units, recorded
+    in `meta["baseline_units"]`:
+
+    - `"raw"` (default, also when the key is absent): an offset of the
+      measured frame, y = flat · x + dark + b.
+    - `"signal"`: an offset of the signal before shading, so that it is
+      shaded too, y = flat · (x + b) + dark (as in BaSiC).
+
+    The two agree only for a uniform flat field: a signal baseline b is
+    the raw offset flat · b, which is not a scalar.
 
     Attributes
     ----------
@@ -250,12 +267,98 @@ class ShadingEstimate(Estimate):
     dark : Tensor, optional
         (H, W) total additive term in ADU (includes the camera offset).
     baseline : Tensor, optional
-        (*batch, frames) per-frame additive offset.
+        (*batch, frames) per-frame offset, in `baseline_units`.
     """
 
     flat: Tensor | None = None
     dark: Tensor | None = None
     baseline: Tensor | None = None
+
+    @property
+    def baseline_units(self) -> str:
+        """`meta["baseline_units"]`: `"raw"` (the default) or `"signal"`."""
+        return _check_units(self.meta.get("baseline_units", "raw"))
+
+    def shade(
+        self,
+        x: Tensor,
+        baseline: Tensor | None = None,
+        *,
+        units: str | None = None,
+    ) -> Tensor:
+        """Apply the model to a signal `x` of shape `(*batch, frames, H, W)`.
+
+        Parameters
+        ----------
+        x : Tensor
+            Unshaded signal.
+        baseline : Tensor, optional
+            `(*batch, frames)` baseline to use instead of `self.baseline`.
+        units : {"raw", "signal"}, optional
+            Units of the baseline (default: `baseline_units`).
+
+        Returns
+        -------
+        Tensor
+            flat · x + dark + b (raw) or flat · (x + b) + dark (signal).
+            Fields that are None are absent terms (flat = 1, dark = 0,
+            b = 0).
+        """
+        units = self.baseline_units if units is None else _check_units(units)
+        b = self.baseline if baseline is None else baseline
+        y = x
+        if b is not None and units == "signal":
+            y = y + b[..., None, None]
+        if self.flat is not None:
+            y = self.flat * y
+        if self.dark is not None:
+            y = y + self.dark
+        if b is not None and units == "raw":
+            y = y + b[..., None, None]
+        return y
+
+    def correct(
+        self,
+        y: Tensor,
+        baseline: Tensor | None = None,
+        *,
+        units: str | None = None,
+        norm: Tensor | float = 0.0,
+    ) -> Tensor:
+        """Invert the model for frames `y` of shape `(*batch, frames, H, W)`.
+
+        Parameters
+        ----------
+        y : Tensor
+            Measured frames.
+        baseline : Tensor, optional
+            `(*batch, frames)` baseline to use instead of `self.baseline`.
+        units : {"raw", "signal"}, optional
+            Units of the baseline (default: `baseline_units`).
+        norm : Tensor or float
+            Background added back, in the units of the baseline
+            (broadcasts against `baseline`).
+
+        Returns
+        -------
+        Tensor
+            (y − dark − (b − norm)) / flat (raw) or
+            (y − dark) / flat − (b − norm) (signal).
+        """
+        units = self.baseline_units if units is None else _check_units(units)
+        b = self.baseline if baseline is None else baseline
+        if b is not None:
+            b = (b - torch.as_tensor(norm).to(b))[..., None, None]
+        x = y
+        if self.dark is not None:
+            x = x - self.dark
+        if b is not None and units == "raw":
+            x = x - b
+        if self.flat is not None:
+            x = x / self.flat
+        if b is not None and units == "signal":
+            x = x - b
+        return x
 
     def normalize(self, mode: str = "mean") -> Self:
         """Rescale the flat field so that its mean (or geometric mean) is 1.
@@ -281,6 +384,14 @@ class ShadingEstimate(Estimate):
         return dataclasses.replace(
             self, flat=self.flat / scale, meta={**self.meta, "flat_norm": mode}
         )
+
+
+def _check_units(units: object) -> str:
+    if units not in _BASELINE_UNITS:
+        raise ValueError(
+            f"baseline units must be one of {_BASELINE_UNITS}: {units!r}"
+        )
+    return str(units)
 
 
 @dataclass(eq=False)
