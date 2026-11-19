@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+import optix
 from optix import stats as ostats
 from optix.distributions import (
     CategoricalStats,
@@ -533,3 +534,99 @@ def test_posterior_keeps_prior_dtype_with_float64_counts():
     assert d.dtype == torch.float32
     torch.testing.assert_close(d.concentration, torch.tensor([2.0, 1.0, 3.0]))
     assert Gamma.fit(stats).dtype == torch.float32
+
+
+# -- fit from data ----------------------------------------------------------
+
+
+class _Lazy:
+    """Array-like that records the size of every read (like zarr)."""
+
+    def __init__(self, a):
+        self._a = a
+        self.shape = a.shape
+        self.dtype = a.dtype
+        self.reads = []
+
+    def __getitem__(self, index):
+        assert isinstance(index, tuple) and len(index) == len(self.shape)
+        out = self._a[index]
+        self.reads.append(out.size)
+        return out
+
+
+def _fit_dirichlet(data, *args, **kwargs):
+    return Dirichlet.fit(data, torch.ones(3, dtype=D64), *args, **kwargs)
+
+
+FITS = {
+    "gamma": (GammaStats, Gamma.fit),
+    "dirichlet": (DirichletStats, _fit_dirichlet),
+}
+
+
+def _params(q):
+    return q.params()
+
+
+@pytest.mark.parametrize("kind", list(FITS))
+@pytest.mark.parametrize("weighted", [False, True])
+def test_fit_from_data_matches_stats(kind, weighted):
+    stats_cls, fit = FITS[kind]
+    x = _data(kind)
+    w = torch.rand(x.shape[:2], generator=_gen(1), dtype=D64)
+    w = w if weighted else None
+    ref = fit(stats_cls.from_samples(x, w, dim=0))
+    for got in (
+        fit(x, w, dim=0),
+        fit(x.numpy(), None if w is None else w.numpy(), dim=0),
+    ):
+        for a, b in zip(_params(got), _params(ref), strict=True):
+            torch.testing.assert_close(a, b)
+    # one-pass fit over all batch dims
+    ref_all = fit(stats_cls.from_samples(x, w, dim=None))
+    got_all = fit(x.numpy(), w, dim=None)
+    for a, b in zip(_params(got_all), _params(ref_all), strict=True):
+        torch.testing.assert_close(a, b)
+
+
+@pytest.mark.parametrize("kind", list(FITS))
+@pytest.mark.parametrize("weighted", [False, True])
+def test_fit_from_lazy_data_is_chunked(kind, weighted):
+    stats_cls, fit = FITS[kind]
+    x = _data(kind, n=200, dtype=torch.float32)
+    w = torch.rand(x.shape[:2], generator=_gen(2)) if weighted else None
+    lazy = _Lazy(x.numpy())
+    item = x[0].numel()
+    with optix.config(memory=4 * 4 * 10 * item):  # 10 samples per chunk
+        got = fit(lazy, w, dim=0)
+    assert len(lazy.reads) == 20 and max(lazy.reads) == 10 * item
+    ref = fit(stats_cls.from_samples(x.double(), w, dim=0))
+    for a, b in zip(_params(got), _params(ref), strict=True):
+        assert a.dtype == torch.float32
+        torch.testing.assert_close(a, b.float(), rtol=1e-4, atol=1e-5)
+
+
+def test_fit_from_data_counts_and_errors():
+    x = _data("gamma")
+    s = Gamma.fit(x, dim=0)
+    assert s.batch_shape == (4,)
+    # streamed counts stay exact: int64 unweighted, float64 weighted
+    st = optix.distributions._stats._as_stats(
+        GammaStats, "t", x.numpy(), None, 0, 0
+    )
+    assert st.n.dtype == torch.int64 and st.n.item() == 30
+    st = optix.distributions._stats._as_stats(
+        GammaStats, "t", x.numpy(), torch.ones(4), 0, 0
+    )
+    assert st.n.dtype == torch.float64
+    with pytest.raises(TypeError, match="dim= is required"):
+        Gamma.fit(x)
+    with pytest.raises(TypeError, match="weight and dim"):
+        Gamma.fit(GammaStats.from_samples(x, dim=0), dim=0)
+    with pytest.raises(TypeError, match="expected GammaStats or data"):
+        Gamma.fit(DirichletStats.zeros(event_shape=(3,)))
+    with pytest.raises(TypeError, match="array-like"):
+        Gamma.fit("abc", dim=0)
+    with pytest.raises(TypeError, match="array-like"):
+        Dirichlet.fit({"a": 1}, torch.ones(3), dim=0)

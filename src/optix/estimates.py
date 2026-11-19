@@ -60,6 +60,8 @@ class Estimate:
     """
 
     _registry: ClassVar[dict[str, type["Estimate"]]] = _REGISTRY
+    # fields indexed by sample (frame), not broadcast against the maps
+    _per_sample: ClassVar[tuple[str, ...]] = ()
 
     meta: dict[str, object] = field(default_factory=dict, kw_only=True)
 
@@ -269,6 +271,8 @@ class ShadingEstimate(Estimate):
     baseline : Tensor, optional
         (*batch, frames) per-frame offset, in `baseline_units`.
     """
+
+    _per_sample: ClassVar[tuple[str, ...]] = ("baseline",)
 
     flat: Tensor | None = None
     dark: Tensor | None = None

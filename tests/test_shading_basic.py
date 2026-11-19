@@ -355,9 +355,8 @@ class UsesShading(Estimator):
 def test_estimate_initialises_other_estimators(tmp_path):
     data, _, _ = make_stack()
     b = BaSiC(working_size=64, darkfield=True, timelapse=True).fit(data)
-    # Estimator._pick checks every field against the map shape, which the
-    # per-frame baseline never matches: pass the profiles only
-    profiles = b.estimates["shading"].replace(baseline=None)
+    # The per-frame baseline is accepted by Estimator._pick (#68)
+    profiles = b.estimates["shading"]
     other = UsesShading().fit(data, init=profiles)
     assert other.estimates["shading"].allclose(profiles)
     b.save(tmp_path / "b.pt")

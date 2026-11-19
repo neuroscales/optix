@@ -319,3 +319,75 @@ def test_apply_blocks_contiguous_option():
     data = labeled(y, axes="zyx", spatial="yz")
     out = DenseBlur().apply(data, out=np.zeros_like(y))
     np.testing.assert_allclose(out, y)
+
+
+# --- issue #68: layout routing, per-frame baseline in init ------------------
+
+
+class ForgetsLayout(Estimator):
+    """Takes `layout=` but does not pass it on to `Estimator.__init__`."""
+
+    tags = Tags(targets=("test",), streaming="pointwise")
+
+    def __init__(self, *, faithful=True, dtype=None, device=None, layout=None):
+        super().__init__(dtype=dtype, device=device)
+        self._resolve(faithful, locals())
+
+
+def test_resolve_routes_layout():
+    layout = Layout("zyx", spatial="yx")
+    e = ForgetsLayout(layout=layout)
+    assert e.layout == layout
+    assert "layout" not in e.options
+    assert ForgetsLayout().layout is None
+    with pytest.raises(TypeError, match="Layout"):
+        ForgetsLayout(layout="zyx")
+
+
+class PicksShading(Estimator):
+    tags = Tags(targets=("test",), streaming="pointwise")
+
+    def _fit(self, data, *, init, callback, verbose):
+        shape = self._map_shape(data)
+        self.estimates = {
+            "shading": self._pick(
+                init, ShadingEstimate, shape=shape, like=data
+            )
+        }
+
+
+@pytest.mark.parametrize("units", ["raw", "signal"])
+def test_pick_accepts_per_frame_baseline(units):
+    data = torch.zeros(7, 5, 4)
+    start = ShadingEstimate(
+        flat=torch.ones(5, 4),
+        dark=torch.zeros(5, 4),
+        baseline=torch.arange(7.0),
+        meta={"baseline_units": units},
+    )
+    got = PicksShading().fit(data, init=start).estimates["shading"]
+    assert got.allclose(start) and got is not start
+    assert got.baseline_units == units
+    # the spatial maps are still checked
+    bad = start.replace(flat=torch.ones(3, 3))
+    with pytest.raises(ValueError, match="flat"):
+        PicksShading().fit(data, init=bad)
+
+
+def test_basic_estimate_initialises_other_estimator():
+    from optix.models import random_shading, simulate_shading
+    from optix.shading import BaSiC
+
+    truth = random_shading((32, 32), seed=0, strength=0.25)
+    g = torch.Generator().manual_seed(1)
+    level = 200 * (1 + 0.3 * torch.sin(torch.arange(12.0) / 3))
+    x = level[:, None, None] + 800 * (
+        torch.rand(12, 32, 32, generator=g) > 0.97
+    )
+    data = simulate_shading(x, truth)
+    b = BaSiC(working_size=32, darkfield=True, timelapse=True).fit(data)
+    shading = b.estimates["shading"]
+    assert shading.baseline is not None and shading.baseline.shape == (12,)
+    got = PicksShading().fit(data, init=b).estimates["shading"]
+    assert got.allclose(shading)
+    assert got.baseline_units == shading.baseline_units == "signal"

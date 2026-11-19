@@ -1,6 +1,7 @@
 """Dirichlet distribution."""
 
-from typing import NamedTuple, Self
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, NamedTuple, Self
 
 import torch
 from torch import Tensor
@@ -8,7 +9,10 @@ from torch import Tensor
 from ..special import fit_dirichlet
 from . import functional as F
 from ._base import Distribution, _register_kl
-from ._stats import DirichletStats
+from ._stats import REQUIRED, DirichletStats, _as_stats
+
+if TYPE_CHECKING:
+    from ..io import ArrayLike
 
 __all__ = ["Dirichlet", "DirichletExpectations"]
 
@@ -119,33 +123,60 @@ class Dirichlet(Distribution):
     @classmethod
     def fit(
         cls,
-        stats: DirichletStats,
+        data: "DirichletStats | Tensor | ArrayLike",
         init: "Dirichlet | Tensor",
+        weight: Tensor | None = None,
         *,
+        dim: int | Sequence[int] | None = REQUIRED,
         niter: int = 16,
     ) -> Self:
-        """Maximum-likelihood (type-II) Dirichlet from mean log-probabilities.
+        """Maximum-likelihood Dirichlet from samples or accumulated statistics.
 
-        Maximises n (log Γ(α₀) − ∑ₖ log Γ(αₖ)) + ∑ₖ (αₖ − 1) `sum_log_x`ₖ with
+        With n = ∑ₙ wₙ and sₖ = ∑ₙ wₙ log xₙₖ, maximises
+        n (log Γ(α₀) − ∑ₖ log Γ(αₖ)) + ∑ₖ (αₖ − 1) sₖ with
         [`fit_dirichlet`][optix.special.fit_dirichlet], started at
         `init`.
 
         Parameters
         ----------
-        stats : DirichletStats
-            Accumulated statistics.
+        data : DirichletStats, Tensor or array-like
+            Either accumulated statistics, or points xₙ of the simplex
+            with shape `(..., K)`. Points are reduced with
+            [`DirichletStats.from_samples`][optix.distributions.DirichletStats.from_samples].
+            A Tensor is reduced in one go. Other array-likes (numpy
+            arrays, memory maps, zarr or h5py arrays, ...) are read in
+            chunks along the first reduced dim, sized by the memory
+            budget of [`config`][optix.config], and their statistics
+            are merged in float64.
         init : Dirichlet or (..., K) Tensor
             Starting point (required: Newton's method only converges
             locally; pass the current estimate). Returned where
             n = 0.
+        weight : Tensor, optional
+            Non-negative frequency weights (or a boolean mask) of the
+            points, broadcastable to `data.shape[:-1]`. Points only.
+        dim : int or sequence of int or None
+            Reduced batch dims of the points (`None`: all, `()`: none;
+            the last dim is the event). Required with points; not
+            accepted with statistics.
         niter : int
             Iterations.
 
         Returns
         -------
         Dirichlet
-            Batch shape `broadcast(stats.batch_shape, init)`.
+            Batch shape: that of the statistics, broadcast with `init`.
+
+        Raises
+        ------
+        TypeError
+            If `data` is neither a
+            [`DirichletStats`][optix.distributions.DirichletStats] nor
+            array-like, or if `dim` is missing with points.
         """
+        stats = _as_stats(
+            DirichletStats, "Dirichlet.fit", data, weight, dim, 1
+        )
         if isinstance(init, Dirichlet):
             alpha0 = init._get("concentration")
         else:
