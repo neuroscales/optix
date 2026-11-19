@@ -320,10 +320,32 @@ def test_estimator_is_stateless():
     assert est.fit(data) is est and est.estimates == {}
     assert "WaveletFFT" in optix.estimators()
     assert est.tags.streaming == "per-frame"
-    with pytest.raises(ValueError, match="wavelet=, level= and sigma="):
-        WaveletFFT(wavelet="db4").apply(data)
+    with pytest.raises(ValueError, match="must not be None"):
+        wavelet_fft(data, wavelet=None)
     with pytest.raises(ValueError, match="Unknown wavelet"):
         WaveletFFT(wavelet="sym4", level=2, sigma=1.0)
+
+
+def test_defaults():
+    """The Section 3.8 suggestions: db10, L = 4, σ = 1.5."""
+    data = make_frames(2, (64, 48))
+    explicit = dict(wavelet="db10", level=4, sigma=1.5)
+    expected = wavelet_fft(data, **explicit)
+    torch.testing.assert_close(wavelet_fft(data), expected)
+    f64 = dict(dtype=torch.float64)
+    est = WaveletFFT(**f64)
+    assert est.is_faithful
+    assert {k: est.options[k] for k in explicit} == explicit
+    assert WaveletFFT.paper == WaveletFFT.recommended
+    torch.testing.assert_close(est.apply(data), expected)
+    torch.testing.assert_close(
+        WaveletFFT(faithful=False, **f64).apply(data), expected
+    )
+    torch.testing.assert_close(
+        WaveletFFT(**explicit, **f64).apply(data), expected
+    )
+    # the three parameters stay free: other values are faithful
+    assert WaveletFFT(wavelet="db4", level=2, sigma=0.5).is_faithful
 
 
 def test_estimator_save_load(tmp_path):
