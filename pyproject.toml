@@ -1,5 +1,5 @@
 [project]
-name = "optix"
+name = "neuroscales-optix"
 authors = [{name = "Yael Balbastre"}]
 description = "Processing algorithms for microscopy"
 readme = "README.md"
