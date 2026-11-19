@@ -126,7 +126,7 @@ def _censored(mu: Tensor, robust: bool, spread: bool) -> tuple:
     """(E_m(μ), S_m(μ)) of Eqs. (32)-(33), free of cancellation.
 
     For μ ≥ 0 the moments are written about μ (as in
-    [`clipped_normal_moments`][optix.sensor.clipped_normal_moments]).
+    [`clipped_normal_moments`][optix.special.clipped_normal_moments]).
     For μ < 0 (mostly clipped), with t = −μ and the Mills ratio
     R(t) = Φ(−t)/φ(t) = √(π/2)·erfcx(t/√2):
 

@@ -15,6 +15,7 @@ Lazy, chunked access to anything that has a shape and can be sliced. See
         - frame_batches
         - row_tiles
         - blocks
+        - group_frames
         - Chunks
         - Chunk
         - chunk_length
@@ -23,6 +24,7 @@ Lazy, chunked access to anything that has a shape and can be sliced. See
         - prepare_out
         - store
         - flush
+        - integer_range
         - ArrayLike
         - WritableArrayLike
         - Index

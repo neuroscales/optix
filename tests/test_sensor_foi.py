@@ -7,18 +7,16 @@ import torch
 import optix
 import optix.sensor._poisson_gaussian as PG
 from optix.estimates import SensorEstimate
-from optix.io import Layout, labeled
+from optix.io import Layout, group_frames, integer_range, labeled
 from optix.models import simulate_sensor
-from optix.sensor import (
-    PoissonGaussian,
+from optix.sensor import PoissonGaussian
+from optix.sensor.utils import (
     SegmentStats,
-    clipped_normal_moments,
     from_normalized,
-    group_frames,
-    integer_range,
     sensor_estimate,
     to_normalized,
 )
+from optix.special import clipped_normal_moments
 
 # (gain a [ADU/e-], read sd [ADU], offset [ADU]) settings of the harness
 SETTINGS = [(0.5, 1.5, 100.0), (2.0, 5.0, 50.0), (0.1, 3.0, 0.0)]

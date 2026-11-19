@@ -4,9 +4,8 @@ import torch
 from optix.estimates import SensorEstimate, ShadingEstimate
 from optix.io import Layout, labeled
 from optix.models import random_sensor, random_shading, simulate_sensor
-from optix.shading import (
-    DarkFlatCalibration,
-    IlluminationFunction,
+from optix.shading import DarkFlatCalibration, IlluminationFunction
+from optix.shading.utils import (
     fit_polynomial,
     gaussian_smooth,
     median_smooth,

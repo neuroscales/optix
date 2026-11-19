@@ -1,17 +1,15 @@
 """Plumbing for the Poisson-Gaussian fit of Foi et al. (2008).
 
 Paper-independent parts of the fit (the method itself is in
-`_foi_local`, `_foi_clip`, `_foi_fit` and [`PoissonGaussian`][]):
+`_foi_local`, `_foi_clip`, `_foi_fit` and
+[`PoissonGaussian`][optix.sensor.PoissonGaussian]):
 
 - per-segment sufficient statistics that merge exactly across frames
-  ([`SegmentStats`][]), for pooling the fit over a stack;
-- the moments of a Gaussian censored at the clipping bounds
-  ([`clipped_normal_moments`][]), derived from first principles;
+  ([`SegmentStats`][optix.sensor.utils.SegmentStats]), for pooling the
+  fit over a stack;
 - unit conversions between normalised and data units, and between the
   (a, b) parametrisation and
-  [`SensorEstimate`][optix.estimates.SensorEstimate];
-- loading of one frame per group under an arbitrary
-  [`Layout`][optix.io.Layout].
+  [`SensorEstimate`][optix.estimates.SensorEstimate].
 
 Model and units
 ---------------
@@ -23,23 +21,15 @@ extrapolated to y = 0 ADU and is negative when the offset is large.
 Clipped data are clip(z, low, high).
 """
 
-import math
-from collections.abc import Iterator
-
-import numpy as np
 import torch
 from torch import Tensor
 
 from ..estimates import SensorEstimate
-from ..io import ArrayLike, Labeled, Layout, as_tensor
 from ..stats import Moments
 
 __all__ = [
     "SegmentStats",
-    "clipped_normal_moments",
     "from_normalized",
-    "group_frames",
-    "integer_range",
     "sensor_estimate",
     "to_normalized",
 ]
@@ -138,7 +128,7 @@ class SegmentStats:
         return self
 
     def merge(self, other: "SegmentStats") -> "SegmentStats":
-        """Merge another [`SegmentStats`][] (same number of segments)."""
+        """Merge another `SegmentStats` (same number of segments)."""
         if other.segments != self.segments:
             raise ValueError("Cannot merge SegmentStats of different sizes")
         self.value.merge(other.value)
@@ -199,68 +189,6 @@ def _moments(order: int, count: Tensor, mean: Tensor, *m: Tensor) -> Moments:
     )
 
 
-def clipped_normal_moments(
-    mean: Tensor,
-    std: Tensor,
-    low: float | None = 0.0,
-    high: float | None = 1.0,
-) -> tuple[Tensor, Tensor]:
-    """Mean and standard deviation of `clip(z, low, high)`.
-
-    The variable is z ~ 𝒩(μ, σ²), with μ = `mean` and σ = `std`. With
-    t ~ 𝒩(0, 1), α = (low − μ)/σ and β = (high − μ)/σ,
-    clip(z) = μ + σ·clip(t, α, β), and
-
-        m  = E[clip(t)]  = α Φ(α) + β Φ(−β) + φ(α) − φ(β)
-        s² = E[clip(t)²] = α² Φ(α) + β² Φ(−β) + Φ(β) − Φ(α)
-                           + α φ(α) − β φ(β)
-        E[clip(z)]   = μ + σ m
-        Var[clip(z)] = σ² (s² − m²)
-
-    Parameters
-    ----------
-    mean, std : Tensor
-        Parameters of the unclipped Gaussian (`std > 0`).
-    low, high : float or None
-        Clipping bounds (None: no clipping on that side).
-
-    Returns
-    -------
-    mean, std : Tensor
-        Moments of the clipped variable.
-
-    Notes
-    -----
-    Writing the moments about μ in units of σ avoids the cancellation
-    of E[z²] − E[z]² when clipping is negligible: then m → 0 and
-    s² → 1. Φ(−β) is used instead of 1 − Φ(β). Compute in float64 when
-    nearly every sample is clipped, because s² − m² then cancels.
-    """
-    mean, std = torch.broadcast_tensors(
-        torch.as_tensor(mean), torch.as_tensor(std).to(mean)
-    )
-    zero = torch.zeros_like(mean)
-    ndtr = torch.special.ndtr
-
-    def pdf(x: Tensor) -> Tensor:
-        return torch.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
-
-    m = zero.clone()
-    s2 = torch.ones_like(mean)
-    if low is not None:
-        a = (low - mean) / std
-        pa, fa = ndtr(a), pdf(a)
-        m = m + a * pa + fa
-        s2 = s2 + a * a * pa - pa + a * fa
-    if high is not None:
-        b = (high - mean) / std
-        qb, fb = ndtr(-b), pdf(b)
-        m = m + b * qb - fb
-        s2 = s2 + b * b * qb - qb - b * fb
-    var = (s2 - m * m).clamp_min(0)
-    return mean + std * m, std * var.sqrt()
-
-
 def to_normalized(
     a: float, b: float, low: float, scale: float
 ) -> tuple[float, float]:
@@ -274,7 +202,10 @@ def to_normalized(
 def from_normalized(
     a: float, b: float, low: float, scale: float
 ) -> tuple[float, float]:
-    """Inverse of [`to_normalized`][] (back to data units)."""
+    """Inverse of [`to_normalized`][optix.sensor.utils.to_normalized].
+
+    Back to data units.
+    """
     an = a * scale
     return an, b * scale**2 - an * low
 
@@ -318,64 +249,3 @@ def sensor_estimate(
     return SensorEstimate(
         offset=offset, variance=b + a * offset, gain=a, meta=meta
     )
-
-
-def integer_range(dtype: object) -> tuple[float, float]:
-    """`(min, max)` of an integer dtype (torch or numpy-like)."""
-    if isinstance(dtype, torch.dtype):
-        info = torch.iinfo(dtype)
-    else:
-        info = np.iinfo(np.dtype(dtype))
-    return float(info.min), float(info.max)
-
-
-def group_frames(
-    data: ArrayLike,
-    layout: Layout | None = None,
-    frame: int = 0,
-    *,
-    dtype: torch.dtype | None = None,
-    device: torch.device | None = None,
-) -> Iterator[tuple[tuple[int, ...], Tensor]]:
-    """Load one frame of each group.
-
-    Parameters
-    ----------
-    data : array-like or Labeled
-    layout : Layout, optional
-        Default: that of a labelled `data`, else `(*samples, H, W)`.
-    frame : int
-        Index of the frame in the flattened sample axes (storage order).
-
-    Yields
-    ------
-    group : tuple of int
-        Position along the group axes (layout order).
-    image : Tensor
-        The frame, with its spatial axes in layout order. Only this frame
-        is read.
-    """
-    raw = data.array if isinstance(data, Labeled) else data
-    if layout is None:
-        layout = (
-            data.layout
-            if isinstance(data, Labeled)
-            else Layout.default(len(data.shape), 2)
-        )
-    shape = tuple(int(s) for s in data.shape)
-    gpos, spos, xpos = layout.positions(len(shape))
-    sshape = tuple(shape[p] for p in spos)
-    nsamples = math.prod(sshape)
-    if not -nsamples <= frame < nsamples:
-        raise IndexError(f"frame {frame} out of range ({nsamples} frames)")
-    sidx = np.unravel_index(frame % max(nsamples, 1), sshape)
-    remaining = sorted(xpos)
-    perm = [remaining.index(p) for p in xpos]
-    for g in np.ndindex(*(shape[p] for p in gpos)):
-        index: list[object] = [slice(None)] * len(shape)
-        for p, i in zip(gpos, g, strict=True):
-            index[p] = int(i)
-        for p, i in zip(spos, sidx, strict=True):
-            index[p] = int(i)
-        image = as_tensor(raw[tuple(index)], dtype=dtype, device=device)
-        yield tuple(int(i) for i in g), image.permute(perm)

@@ -19,3 +19,5 @@ order statistics computed over row tiles.
         - order_statistics
         - median_mad
         - tile_reduce
+        - pixel_stats
+        - PixelStats

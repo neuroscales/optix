@@ -1,24 +1,17 @@
-"""Shading correction: flat field, dark field and per-frame baseline."""
+"""Shading correction: flat field, dark field and per-frame baseline.
 
+Building blocks of these estimators are in `optix.shading.utils`.
+"""
+
+from . import utils
 from ._basic import BaSiC
 from ._darkflat import DarkFlatCalibration, correct
-from ._illumination import (
-    IlluminationFunction,
-    fit_polynomial,
-    gaussian_smooth,
-    median_smooth,
-    median_window,
-    robust_minimum,
-)
+from ._illumination import IlluminationFunction
 
 __all__ = [
     "BaSiC",
     "DarkFlatCalibration",
     "IlluminationFunction",
     "correct",
-    "fit_polynomial",
-    "gaussian_smooth",
-    "median_smooth",
-    "median_window",
-    "robust_minimum",
+    "utils",
 ]
