@@ -141,6 +141,46 @@ def project(x: Tensor, bases: Sequence[Tensor]) -> Tensor:
     return _apply(x, bases, transpose=True)
 
 
+def gram(weight: Tensor, bases: Sequence[Tensor]) -> Tensor:
+    """Weighted Gram matrix of a separable basis over the trailing dims.
+
+    G = Bᵀ diag(w) B with B = B₁ ⊗ … ⊗ B_d, i.e.
+    G[j, j′] = ∑ᵢ wᵢ ∏_d B_d[i_d, j_d] B_d[i_d, j′_d]. It is the normal
+    matrix of a weighted least-squares fit of coefficients `c` to a
+    signal `x`, ‖x − reconstruct(c)‖²_w, whose right-hand side is
+    `project(w * x, bases)`.
+
+    Parameters
+    ----------
+    weight : (..., n1, ..., nd) Tensor
+        Weights wᵢ.
+    bases : sequence of (n_i, k_i) Tensor
+        One basis per trailing dim.
+
+    Returns
+    -------
+    (..., K, K) Tensor
+        With K = k1 ⋯ kd, coefficients flattened in row-major order (as
+        `project(x, bases).flatten(-d)`).
+    """
+    nb = len(bases)
+    if weight.ndim < nb:
+        raise ValueError(f"Need at least {nb} dims, got {weight.ndim}")
+    lead = weight.ndim - nb
+    x = weight
+    for basis in bases:
+        n, k = basis.shape
+        pairs = (basis[:, :, None] * basis[:, None, :]).reshape(n, k * k)
+        x = torch.movedim(x, lead, -1) @ pairs
+    ks = [b.shape[1] for b in bases]
+    x = x.reshape(*x.shape[:lead], *[s for k in ks for s in (k, k)])
+    perm = list(range(lead))
+    perm += [lead + 2 * i for i in range(nb)]
+    perm += [lead + 2 * i + 1 for i in range(nb)]
+    size = math.prod(ks)
+    return x.permute(perm).reshape(*x.shape[:lead], size, size)
+
+
 def reconstruct(coef: Tensor, bases: Sequence[Tensor]) -> Tensor:
     """Separable synthesis over the trailing dims.
 

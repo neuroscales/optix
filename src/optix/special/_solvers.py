@@ -157,7 +157,13 @@ def dirichlet_elog(alpha: Tensor) -> Tensor:
     )
 
 
-def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
+def fit_dirichlet(
+    elogpi: Tensor,
+    alpha: Tensor,
+    niter: int = 16,
+    *,
+    bounds: tuple[float, float] | None = None,
+) -> Tensor:
     """Dirichlet maximum likelihood given expected log-probabilities.
 
     Maximises log Γ(∑ₖ aₖ) − ∑ₖ log Γ(aₖ) + ∑ₖ (aₖ − 1) `elogpi`ₖ over a > 0
@@ -173,6 +179,12 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
         Initial concentration parameters (broadcast against `elogpi`).
     niter : int
         Number of iterations.
+    bounds : (float, float), optional
+        Box constraint (lo, hi) on every concentration: the start and
+        each iterate are clamped to it (projected Newton). It keeps the
+        concentrations finite when the maximum lies at infinity (for
+        example, when every observation is the same point of the
+        simplex).
 
     Returns
     -------
@@ -206,6 +218,8 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
     elogpi, alpha = torch.broadcast_tensors(elogpi, alpha)
     alpha = alpha.to(elogpi.dtype)
     tiny = torch.finfo(alpha.dtype).tiny
+    lo, hi = (tiny, None) if bounds is None else bounds
+    alpha = alpha.clamp(lo, hi)
     for _ in range(niter):
         alpha0 = alpha.sum(-1, keepdim=True)
         psi0 = torch.digamma(alpha0)
@@ -219,5 +233,5 @@ def fit_dirichlet(elogpi: Tensor, alpha: Tensor, niter: int = 16) -> Tensor:
         # A float32 cancellation can make the Newton step non-finite.
         ok = (torch.isfinite(newton) & (newton > 0)).all(-1, keepdim=True)
         fixed = inv_digamma(psi0 + elogpi)
-        alpha = torch.where(ok, newton, fixed).clamp_min(tiny)
+        alpha = torch.where(ok, newton, fixed).clamp(lo, hi)
     return alpha

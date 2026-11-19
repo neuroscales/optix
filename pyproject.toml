@@ -67,6 +67,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 79
 target-version = "py311"
+# verbatim copy of the reference prototype (test oracle)
+extend-exclude = ["tests/reference"]
 
 [tool.ruff.lint]
 select = ["ANN", "B", "E", "F", "I", "UP", "W"]

@@ -407,7 +407,11 @@ class Classification(Estimate):
         (K,) mixing weights.
     parameters : Tensor, optional
         (K, P) class parameters (meaning recorded in `meta`).
+    concentration : Tensor, optional
+        (K,) Dirichlet concentration of the mixing weights, for models
+        that treat them as uncertain (`weights` is then its mean).
     """
 
     weights: Tensor | None = None
     parameters: Tensor | None = None
+    concentration: Tensor | None = None

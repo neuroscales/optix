@@ -10,10 +10,12 @@ from ._illumination import (
     median_window,
     robust_minimum,
 )
+from .mix import GammaMixture
 
 __all__ = [
     "BaSiC",
     "DarkFlatCalibration",
+    "GammaMixture",
     "IlluminationFunction",
     "correct",
     "fit_polynomial",
