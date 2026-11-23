@@ -203,6 +203,19 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
 
+## Views
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $v$, $V$ | view index; number of views | `MultiviewRL(psfs)` |
+| $\mathbf{y}_v$ | recorded image of view $v$ | the views `data` |
+| $\mathbf{h}_v$, $\mathbf{A}_v$ | PSF of view $v$; its blur | `psfs` |
+| $\check{\mathbf{h}}_v$ | mirrored PSF, $\check{h}(\mathbf{r}) = h(-\mathbf{r})$ (kernel of $\mathbf{A}_v^\top$) | |
+| $\mathbf{h}_{b,v}$, $\mathbf{B}_v$ | back-projection kernel of view $v$ and its convolution | `MultiviewRL.kernels` |
+| $\mathbf{c}_v$ | multiplicative correction of view $v$ | |
+| $\mathbf{w}_v$, $k$ | weight image of view $v$; sum of the weights over the views | `weights`, `weight_sum` |
+| $\rho_v$ | reach of view $v$ on the margin of the object domain | |
+
 ## Indices and layouts
 
 | Symbol | Ranges over |

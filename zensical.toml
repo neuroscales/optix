@@ -40,6 +40,7 @@ nav = [
       "algorithms/deconv/wiener.md",
       "algorithms/deconv/tikhonov.md",
       "algorithms/deconv/wiener-butterworth.md",
+      "algorithms/deconv/multiview.md",
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
