@@ -34,6 +34,7 @@ nav = [
     "reference/deconv.md",
     "reference/destripe.md",
     "reference/psf.md",
+    "reference/attenuation.md",
     "reference/models.md",
     "reference/distributions.md",
     "reference/functional.md",
