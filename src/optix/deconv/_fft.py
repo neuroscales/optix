@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import torch
 from torch import Tensor
 
-__all__ = ["PaddedConvolution", "next_fast_len"]
+__all__ = ["PaddedConvolution", "next_fast_len", "transfer_function"]
 
 
 def next_fast_len(n: int) -> int:
@@ -38,6 +38,49 @@ def next_fast_len(n: int) -> int:
             p35 *= 3
         p5 *= 5
     return best
+
+
+def transfer_function(psf: Tensor, grid: Sequence[int]) -> Tensor:
+    """Transfer function of a PSF on a periodic grid (half spectrum).
+
+    The PSF S, of shape K and centred at index `K // 2`, is placed on a
+    grid of shape N ≥ K with its centre at the origin (wrapped around),
+    and
+
+        H(ν) = ∑ⱼ S(j − K//2) e^{−2πi ν·j},   νₐ = kₐ / Nₐ,
+
+    is returned for the frequencies of `torch.fft.rfftn` (the last dim
+    holds N₋₁ // 2 + 1 of them). Multiplying the spectrum of an image by
+    H is the circular convolution with S.
+
+    Parameters
+    ----------
+    psf : Tensor
+        Point spread function, `(*K)`, used as given.
+    grid : sequence of int
+        Grid shape N, one entry per PSF dim, with N ≥ K.
+
+    Returns
+    -------
+    Tensor
+        Complex tensor of shape `(*N[:-1], N[-1] // 2 + 1)`.
+    """
+    grid = tuple(int(n) for n in grid)
+    if len(grid) != psf.ndim:
+        raise ValueError(
+            f"grid has {len(grid)} dims but the PSF has {psf.ndim}"
+        )
+    if any(n < k for n, k in zip(grid, psf.shape, strict=True)):
+        raise ValueError(
+            f"grid {grid} is smaller than the PSF {tuple(psf.shape)}"
+        )
+    buf = psf.new_zeros(grid)
+    buf[tuple(slice(0, k) for k in psf.shape)] = psf
+    dims = tuple(range(psf.ndim))
+    buf = torch.roll(
+        buf, shifts=tuple(-(k // 2) for k in psf.shape), dims=dims
+    )
+    return torch.fft.rfftn(buf, dim=dims)
 
 
 class PaddedConvolution:
@@ -104,15 +147,8 @@ class PaddedConvolution:
             next_fast_len(n + k - 1)
             for n, k in zip(shape, psf.shape, strict=True)
         )
-        buf = psf.new_zeros(self.grid)
-        buf[tuple(slice(0, k) for k in psf.shape)] = psf
-        buf = torch.roll(
-            buf,
-            shifts=tuple(-(k // 2) for k in psf.shape),
-            dims=tuple(range(self.ndim)),
-        )
         self._dims = tuple(range(-self.ndim, 0))
-        self.otf = torch.fft.rfftn(buf, dim=self._dims)
+        self.otf = transfer_function(psf, self.grid)
         self.norm = self.adjoint(psf.new_ones(shape))
 
     def _crop(self, x: Tensor) -> Tensor:
