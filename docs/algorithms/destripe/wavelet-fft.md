@@ -38,7 +38,9 @@ There is no noise model; the filter rests on a deterministic signal model:
     \qquad s(r_1, r_2) = s(r_2),
     $$
 
-    a frame $\mathbf{y}$ is the stripe-free image $\mathbf{x}$ plus stripes
+    a frame $\mathbf{y} \in \mathbb{R}^{P_1\times P_2}$ ($P_1$ pixels along
+    the stripe axis, $P_2$ across) is the stripe-free image $\mathbf{x}$ of
+    the same shape plus stripes
     $\mathbf{s}$ constant along the stripe axis $r_1$ (the first spatial axis by
     default).
 
@@ -50,15 +52,17 @@ There is no noise model; the filter rests on a deterministic signal model:
 
     stripes along $y$: offsets depending on $x$ only (Eq. 8).
 
-| optix | [Münch et al. 2009](https://doi.org/10.1364/OE.17.008567) |
-|---|---|
-| $\mathbf{y}$ (recorded frame) | $f$ |
-| $\mathbf{x}$ (stripe-free) | $f_0$ |
-| $\mathbf{s}$ | $s$ |
-| $r_1$, $r_2$ (stripe axis, across) | $y$, $x$ |
-| $\mathbf{c}_l$, $\hat{\mathbf{c}}_l$ | $c_{v,l}$, $\hat c_{v,l}$ |
-| $\omega$ | $\hat y$ |
-| $L$, $\sigma$ | `decNum`, $\sigma$ |
+| optix | [Münch et al. 2009](https://doi.org/10.1364/OE.17.008567) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$ | $f$ | recorded frame | $\mathbb{R}^{P_1\times P_2}$, per frame |
+| $\mathbf{x}$ | $f_0$ | stripe-free frame | $\mathbb{R}^{P_1\times P_2}$, per frame |
+| $\mathbf{s}$ | $s$ | stripe offsets, constant along $r_1$ | $\mathbb{R}^{P_2}$, per frame |
+| $r_1$, $r_2$ | $y$, $x$ | pixel index along and across the stripes | scalars |
+| $\mathbf{c}_l$ | $c_{v,l}$ | vertical detail band at level $l$ | about $\mathbb{R}^{P_1/2^l\times P_2/2^l}$, per frame |
+| $\hat{\mathbf{c}}_l$ | $\hat c_{v,l}$ | its 1-D FFT along the stripe axis | same shape as $\mathbf{c}_l$, complex |
+| $\omega$ | $\hat y$ | frequency along the stripe axis | scalar |
+| $L$ | `decNum` | number of wavelet levels | scalar, whole stack |
+| $\sigma$ | $\sigma$ | width of the Gaussian band-stop | scalar or one per level, whole stack |
 
 ## Inference / derivation
 
@@ -88,16 +92,25 @@ The approximation and the other detail bands are left untouched, so the image
 content outside the stripe direction and scale is preserved exactly. $\sigma = 0$
 is the limit of ideal stripes: only $\omega = 0$ is removed.
 
+Nothing is estimated statistically: the filter is a fixed linear projection.
+For $\sigma = 0$ it is the least-squares estimate of $\mathbf{s}$ restricted
+to the chosen bands (the mean of each band column along the stripe axis is
+taken as stripe and subtracted); $\sigma > 0$ softens this projection into a
+shrinkage of the low frequencies along the stripes.
+
 ## Algorithm
 
-```text
-Input: frame y, wavelet = db10, L = 4, sigma = 1.5
-1. multilevel 2-D DWT of y down to level L (symmetric boundary extension)
-2. for each chosen level l: FFT of the vertical detail band along the stripe axis,
-   multiply by 1 − exp(−ω²/(2σ²)), inverse FFT
-3. inverse DWT
-Return the destriped frame
-```
+**Input:** a frame $\mathbf{y} \in \mathbb{R}^{P_1\times P_2}$;
+`wavelet = "db10"`; $L = 4$; $\sigma = 1.5$ \
+**Output:** the destriped frame $\hat{\mathbf{x}}$, same shape.
+
+1. **Decompose** $\mathbf{y}$ by a multilevel 2-D DWT down to level $L$
+   (symmetric boundary extension).
+2. **For each chosen level** $l$:
+    1. FFT the vertical detail band $\mathbf{c}_l$ along the stripe axis;
+    2. multiply by $1 - e^{-\omega^2/(2\sigma^2)}$;
+    3. invert the FFT.
+3. **Reconstruct** $\hat{\mathbf{x}}$ by the inverse DWT.
 
 The FFT runs over the whole band, without padding or windowing (the paper
 specifies none). The Daubechies filters db1–db45 are tabulated in optix.

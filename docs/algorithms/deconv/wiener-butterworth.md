@@ -39,12 +39,13 @@ paper uses a periodic model; see
     \mathbb{E}[y] = H e = f * e
     $$
 
-| optix | [Guo et al. 2020](https://doi.org/10.1038/s41587-020-0560-x) |
-|---|---|
-| $\mathbf{y}$ (recorded image) | $y$ |
-| $\mathbf{x}$ (latent image) | $e$ |
-| $\mathbf{h}$, $\mathbf{A}$ (PSF, blur) | $f$ (forward projector), $H$ |
-| $\hat{\mathbf{h}} = \mathrm{DFT}(\mathbf{h})$ (OTF) | $F$ |
+| optix | [Guo et al. 2020](https://doi.org/10.1038/s41587-020-0560-x) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$ | $y$ | recorded image, $P$ pixels | $\mathbb{R}^P$, per image |
+| $\mathbf{x}$ | $e$ | latent image, on the extended domain of $Q \ge P$ pixels | $\mathbb{R}^Q$, per image |
+| $\mathbf{h}$ | $f$ (forward projector) | PSF, unit sum | kernel, one per group |
+| $\mathbf{A}$ | $H$ | convolution by $\mathbf{h}$, cropped to the image | $\mathbb{R}^{P\times Q}$, one per group |
+| $\hat{\mathbf{h}} = \mathrm{DFT}(\mathbf{h})$ | $F$ | OTF | one value per frequency, one per group |
 
 The paper's $f$ is the PSF, not the flat field of optix.
 
@@ -97,19 +98,25 @@ boosting the noise outside the band.
     \quad \text{(Suppl. Note 2, Eq. 25)}.
     $$
 
-| optix | [Guo et al. 2020](https://doi.org/10.1038/s41587-020-0560-x) |
-|---|---|
-| $\mathbf{x}_k$ | $e^{(k)}$ |
-| $\mathbf{h}_b$, $\mathbf{B}$ (back projector) | $b$, $B$ |
-| $\hat{\mathbf{h}}$ | $F$ |
-| $\alpha$ (Wiener parameter) | $\alpha$ |
-| $\beta$ (gain at the cutoff) | $\beta$ |
-| $n$ (Butterworth order) | $n$ |
-| $k_{c,a}$ | $k_c$ |
+| optix | [Guo et al. 2020](https://doi.org/10.1038/s41587-020-0560-x) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{x}_k$ | $e^{(k)}$ | estimate after $k$ iterations | $\mathbb{R}^Q$, per image |
+| $\mathbf{h}_b$ | $b$ | back-projector kernel, unit sum | kernel, one per group |
+| $\mathbf{B}$ | $B$ | convolution by $\mathbf{h}_b$ | $\mathbb{R}^{Q\times P}$, one per group |
+| $\hat{\mathbf{h}}$ | $F$ | OTF | one value per frequency, one per group |
+| $\alpha$ | $\alpha$ | Wiener parameter | scalar, whole stack |
+| $\beta$ | $\beta$ | Butterworth gain at the cutoff | scalar, whole stack |
+| $n$ | $n$ | Butterworth order | scalar, whole stack |
+| $k_{c,a}$ | $k_c$ | cutoff frequency along axis $a$ | one per spatial axis |
+| $k_a$ | $k$ | spatial frequency along axis $a$ | one per spatial axis |
 
 The first factor is a [Wiener](wiener.md) inverse of the OTF (the [Tikhonov](tikhonov.md) zero-order filter with $\lambda = \alpha$); the second a Butterworth
 low-pass filter whose gain at the cutoff is $\beta$. optix uses $|F|^2$ where
-the paper writes $F^2$ (the same for a real, symmetric OTF). Without the
+the paper writes $F^2$ (the same for a real, symmetric OTF). With the matched
+back projector $\mathbf{B} = \mathbf{A}^\top$ the update is the EM algorithm
+for the Poisson maximum-likelihood estimate (Richardson–Lucy); with an
+unmatched one it is a preconditioned fixed-point iteration whose early
+stopping acts as the regulariser. Without the
 Poisson-likelihood structure, the iteration is not EM: the likelihood need not
 increase, flux need not be conserved and convergence is not guaranteed. The
 kernel has negative lobes, so negative values of the update are set to 0 at
@@ -119,17 +126,23 @@ PSF), which is plain Richardson–Lucy.
 
 ## Algorithm
 
-```text
-Input: data Y, PSF h, back_projector = "wiener-butterworth",
-       α = 0.001, β = 0.001, n = 8, n_iter = 1, start = "data"
-k_c = 1 / FWHM(h) per axis (or 1 / fwhm)
-h_b = DFT⁻¹ of the WB filter, sampled on a 2× grid, cropped to 12 FWHM per axis, unit sum
-Initialise x(0) = y with values < 0.001 set to 0.001;
-           outside the image (margin of the object domain): mean of y
-Repeat n_iter times:
-    x_{k+1} = x_k / (B 1) ⊙ B[y / (A x_k)],  negative values set to 0
-Return x, cropped to the observed region
-```
+**Input:** images $\mathbf{y} \in \mathbb{R}^P$; PSF $\mathbf{h}$;
+`back_projector = "wiener-butterworth"`; $\alpha = 0.001$; $\beta = 0.001$;
+$n = 8$; `n_iter = 1`; `start = "data"` \
+**Output:** the deconvolved images, cropped to the observed region.
+
+1. **Cutoff:** $k_{c,a} = 1/\mathrm{FWHM}_a(\mathbf{h})$ per axis (or the
+   inverse of `fwhm`).
+2. **Back projector:** $\mathbf{h}_b$ is the inverse DFT of the
+   Wiener–Butterworth filter, sampled on a grid twice as fine, cropped to 12
+   FWHM per axis and normalised to unit sum.
+3. **Initialise** $\mathbf{x}_0 = \mathbf{y}$, with values below $0.001$ set
+   to $0.001$, and the mean of $\mathbf{y}$ on the margin outside the image.
+4. **Repeat** `n_iter` times:
+    1. update
+       $\mathbf{x}_{k+1} = \dfrac{\mathbf{x}_k}{\mathbf{B}\mathbf{1}} \odot \mathbf{B}\,\dfrac{\mathbf{y}}{\mathbf{A}\mathbf{x}_k}$;
+    2. set negative values to 0.
+5. **Return** $\mathbf{x}$ cropped to the observed region.
 
 The defaults are those of Supplementary Table S2.1 (iSIM and confocal data);
 the paper uses $\alpha, \beta \in [0.001, 0.05]$, $n \in [4, 10]$ and 1–5
