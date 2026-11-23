@@ -46,6 +46,9 @@ nav = [
     {"Point-spread function" = [
       "algorithms/psf/bead-psf.md",
     ]},
+    {"Fusion" = [
+      "algorithms/fusion/intensity-adjustment.md",
+    ]},
     "algorithms/_template.md",
   ]},
   {"Contributing" = [

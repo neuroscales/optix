@@ -144,6 +144,20 @@ stray light. This is the reason why corrections never subtract both
 | $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
 | $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
 
+## Tiles
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $T$ | number of tiles of a mosaic | |
+| $i$, $j$ | tile indices (as frame indices elsewhere) | |
+| $\mathbf{y}_i$, $y_i(\mathbf{r})$ | tile $i$; its value at grid pixel $\mathbf{r}$ | the tiles `data` |
+| $a_i$, $c_i$ | scale and shift of tile $i$, $\hat{\mathbf{x}}_i = a_i \mathbf{y}_i + c_i$ | `TileIntensityEstimate.scale`, `.shift` |
+| $g_i$, $o_i$ | gain and offset of tile $i$ in a simulation, $\mathbf{y}_i = g_i \mathbf{x} + o_i$ | `simulate_tiles(gain=, offset=)` |
+| $a'_i$, $c'_i$, $c''_i$ | linear and additive sub-models of tile $i$ | |
+| $\lambda_1$, $\lambda_2$, $\lambda_3$ | weights of the linear, additive and identity sub-models | `weights` |
+| $O_{ij}$ | overlap of tiles $i$ and $j$ | `overlap_box` |
+| $F$ | set of fixed tiles | `fixed` |
+
 ## Distributions
 
 These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).
