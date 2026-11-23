@@ -22,9 +22,15 @@ over the voxels that are foreground in both tiles (both excesses more
 than `threshold` standard deviations of an empty pixel), with the delta-
 method weight w = 1 / (Var[yᵢ]/(yᵢ − c)² + Var[yⱼ]/(yⱼ − c)²), scaled by
 `weight`. Because log m = Φ·θ, the term is a quadratic in θ that enters
-the Fisher-scoring system of θ (its curvature is exact); d and w are
-recomputed from the current c and v at each local step and held fixed
-in the parameter step.
+the Fisher-scoring system of θ (its curvature is exact).
+
+d and w are computed once, from the initial c and v (the background
+quantiles of the initialisation, which depend on `bg_fraction`), and
+are then frozen for the whole fit: the term stays an exact quadratic in
+θ and the bound consistent across steps. An error in the initial offset
+c therefore biases d (more so at low signal) and is not corrected by
+later updates of c. The weight uses the same noisy excesses as d, which
+attenuates d toward 0 at low signal.
 
 Conventions. Each tile has a pose: an integer position in a common
 voxel frame, with one signed component per axis of the (group-free) data
@@ -66,6 +72,7 @@ from torch import Tensor
 
 from ...basis import project
 from ...io import ArrayLike, Layout
+from ...stats._base import state_dtype
 
 __all__ = ["TileOverlap", "overlap_slices", "tile_pairs"]
 
@@ -216,12 +223,38 @@ def tile_pairs(
     Returns `(i, j, s)` with s = positions[j] − positions[i]: voxel p of
     tile i is voxel p − s of tile j.
     """
+    pos = np.asarray(positions, dtype=np.int64)
+    n = len(pos)
+    if n == 0:
+        return []
+    shape = np.asarray(shape, dtype=np.int64)
+    if pos.ndim != 2 or pos.shape[1] != len(shape):
+        raise ValueError(
+            f"tile positions of shape {pos.shape} for tiles of shape "
+            f"{tuple(shape.tolist())}"
+        )
+    if np.any(shape <= 0):
+        return []
+    # bucket the tiles on a grid of cells of the tile size: boxes that
+    # intersect lie in the same or in adjacent cells
+    cell = np.floor_divide(pos, shape)
+    buckets: dict[tuple, list[int]] = {}
+    for t, c in enumerate(map(tuple, cell.tolist())):
+        buckets.setdefault(c, []).append(t)
+    near = np.stack(
+        np.meshgrid(*[[-1, 0, 1]] * len(shape), indexing="ij"), -1
+    ).reshape(-1, len(shape))
     out = []
-    for i in range(len(positions)):
-        for j in range(i + 1, len(positions)):
-            s = tuple(int(v) for v in positions[j] - positions[i])
-            if overlap_slices(s, shape) is not None:
-                out.append((i, j, s))
+    for i in range(n):
+        ci = cell[i]
+        for off in near:
+            for j in buckets.get(tuple((ci + off).tolist()), ()):
+                if j <= i:
+                    continue
+                s = pos[j] - pos[i]
+                if np.all(np.abs(s) < shape):
+                    out.append((i, j, tuple(int(v) for v in s)))
+    out.sort()
     return out
 
 
@@ -263,6 +296,7 @@ class OverlapStats:
     count: int = 0
     ntiles: int = 0
     fit_gain: bool = False
+    dtype: torch.dtype = torch.float64
     _A: Tensor | None = field(default=None, repr=False)
 
     def add(
@@ -298,7 +332,7 @@ class OverlapStats:
         if self._A is not None:
             return self._A
         n = self.ntiles
-        L = torch.zeros((n, n), dtype=torch.float64)
+        L = torch.zeros((n, n), dtype=self.dtype)
         parent = list(range(n))
 
         def root(t: int) -> int:
@@ -317,7 +351,7 @@ class OverlapStats:
             L[j, i] -= w
             parent[root(i)] = root(j)
         roots = torch.tensor([root(t) for t in range(n)])
-        P = (roots[:, None] == roots[None]).double()
+        P = (roots[:, None] == roots[None]).to(self.dtype)
         # pinning blocks scaled like L, for conditioning
         scale = max(float(L.diagonal().max()), 1.0)
         self._A = L + scale * P / P.sum(1, keepdim=True)
@@ -325,7 +359,7 @@ class OverlapStats:
 
     def log_gain(self, logm: Tensor) -> Tensor:
         """Profiled log gains a*(θ), `(ntiles,)` (zeros without gains)."""
-        a = torch.zeros(self.ntiles, dtype=torch.float64)
+        a = torch.zeros(self.ntiles, dtype=self.dtype)
         if not self.gains:
             return a
         b = torch.zeros_like(a)
@@ -364,7 +398,7 @@ class OverlapStats:
         g = by.new_zeros(k)
         gains = self.gains
         a = self.log_gain(logm).tolist()
-        U = torch.zeros((k, self.ntiles), dtype=torch.float64)
+        U = torch.zeros((k, self.ntiles), dtype=self.dtype)
         for si, sj, (sw, swd, _), i, j in self.terms.values():
             sw, swd = sw.to(by), swd.to(by)
             delta = self._delta(logm, si, sj)
@@ -381,7 +415,7 @@ class OverlapStats:
             H += ii + jj - ij - ij.T
             if gains:
                 u = project(sw, [yi, xi]) - project(sw, [yj, xj])
-                u = u.flatten().double()
+                u = u.flatten().to(U)
                 U[:, i] += u
                 U[:, j] -= u
         if gains:
@@ -437,6 +471,8 @@ class Overlap:
         keep = [a for a in range(ndim) if a not in group]
         sub_axis = keep.index(axis)
         tile = tuple(raw_shape[a] for a in keep if a != axis)
+        if raw_shape[axis] == 0:
+            raise ValueError("the overlap term needs at least one tile")
         pos = spec.poses(raw_shape[axis], len(tile))
         pairs = tile_pairs(pos, tile)
         return cls(
@@ -467,7 +503,10 @@ class Overlap:
         # positions of the spatial axes among the non-tile axes
         sp = [other.index(a) for a in spatial]
         rest = [a for a in range(len(other)) if a not in sp]
-        out = OverlapStats(ntiles=self.ntiles, fit_gain=self.fit_gain)
+        dtype = state_dtype(C.device)
+        out = OverlapStats(
+            ntiles=self.ntiles, fit_gain=self.fit_gain, dtype=dtype
+        )
         if not self.weight > 0:
             return out
         sd = V.sqrt()
@@ -482,9 +521,7 @@ class Overlap:
             Ci, Cj = C[pi], C[pj]
             Vi, Vj = V[pi], V[pj]
             ti, tj = self.threshold * sd[pi], self.threshold * sd[pj]
-            acc = torch.zeros(
-                (3, *Ci.shape), dtype=torch.float64, device=C.device
-            )
+            acc = torch.zeros((3, *Ci.shape), dtype=dtype, device=C.device)
             # read in blocks along the first non-spatial, non-tile axis
             npix = math.prod(Ci.shape)
             if rest:
@@ -512,9 +549,9 @@ class Overlap:
                 w = torch.where(ok, self.weight / var, 0)
                 d = torch.where(ok, ri.log() - rj.log(), 0)
                 wd = w * d
-                acc[0] += w.sum(0).double()
-                acc[1] += wd.sum(0).double()
-                acc[2] += (wd * d).sum(0).double()
+                acc[0] += w.sum(0, dtype=dtype)
+                acc[1] += wd.sum(0, dtype=dtype)
+                acc[2] += (wd * d).sum(0, dtype=dtype)
                 out.count += int(ok.sum())
             if self.fit_gain:
                 key = (i, j)

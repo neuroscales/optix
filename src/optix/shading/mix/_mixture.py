@@ -170,8 +170,11 @@ class GammaMixture(Estimator):
     background standard deviations above c), with the delta-method
     weight w = 1 / (Var yᵢ / (yᵢ − c)² + Var yⱼ / (yⱼ − c)²). It is a
     quadratic in θ, added to the system of the θ step (and to the
-    initial moment fit of the flat field); d and w follow the current c
-    and v. This identifies the flat field even where the mean signal of
+    initial moment fit of the flat field). d and w are computed once
+    from the initial c and v (whose background quantiles depend on
+    `bg_fraction`) and frozen for the rest of the fit, so an error in
+    the initial offset biases d and is not undone by later updates of c.
+    This identifies the flat field even where the mean signal of
     the scene depends on the position in the tiles.
 
     With `TileOverlap(fit_gain=True)` the overlap term also fits a gain
