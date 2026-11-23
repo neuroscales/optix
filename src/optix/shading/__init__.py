@@ -8,6 +8,7 @@ from ._basic import BaSiC
 from ._cidre import CIDRE
 from ._darkflat import DarkFlatCalibration, correct
 from ._illumination import IlluminationFunction
+from ._likar import Likar
 from .mix import GammaMixture
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "DarkFlatCalibration",
     "GammaMixture",
     "IlluminationFunction",
+    "Likar",
     "correct",
     "utils",
 ]

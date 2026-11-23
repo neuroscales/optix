@@ -15,6 +15,7 @@ Estimators of the flat field, dark field and per-frame baseline, and the correct
         - DarkFlatCalibration
         - GammaMixture
         - IlluminationFunction
+        - Likar
 
 ## Transforms
 
