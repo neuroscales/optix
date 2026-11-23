@@ -21,15 +21,34 @@ another algorithm is a better choice. What it returns.*
 
 ## Image formation (optics)
 
-*The physical process behind the data that the algorithm assumes. Refer to the
-shared models in [Image formation and noise](../concepts/image-formation.md)
-and state only what is specific here.*
+*The forward model: the physical process behind the data that the algorithm
+assumes, more concisely than the paper but precisely. Refer to the shared
+models in [Image formation and noise](../concepts/image-formation.md) and state
+only what is specific here. Give the equations in tabs, in optix notation and
+in the paper's, followed by a table mapping one set of symbols onto the other.*
+
+=== "optix"
+
+    $$
+    \mathbf{y}_i = \ldots
+    $$
+
+=== "Author et al. 2000"
+
+    $$
+    I_i = \ldots
+    $$
+
+| optix | Author et al. 2000 |
+|---|---|
+| $\mathbf{y}_i$ | $I_i$ |
 
 ## Probabilistic model
 
-*The generative model and its assumptions as equations: observation model,
-noise, priors or regularisers. Define every symbol when it first appears, in the
-notation of [Concepts](../concepts/notation.md).*
+*The assumptions, stated explicitly, and the generative model or objective
+they lead to: observation model, noise, priors or regularisers. Define every
+symbol when it first appears, in the [notation](../concepts/notation.md); use
+the same tabs as above wherever the paper has its own notation.*
 
 $$
 y = \ldots
@@ -37,8 +56,12 @@ $$
 
 ## Inference / derivation
 
-*From the model to the update equations, one step at a time. State how any
-ambiguity is resolved (normalisation of a flat field, for instance).*
+*The estimation strategy, clearly explained but without every derivation:
+what is optimised or inferred, by what kind of scheme (alternation, convex
+splitting, EM, fixed point, ...), which terms are fixed or updated in turn, and
+how any ambiguity is resolved (normalisation of a flat field, for instance).
+Full update equations are only needed where the strategy cannot be understood
+without them.*
 
 ## Algorithm
 
