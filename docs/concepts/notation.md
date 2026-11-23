@@ -154,6 +154,21 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
 
+## Stationary noise
+
+These extend the stripe notation ($\mathbf{y} = \mathbf{x} + \mathbf{s}$, $\nabla$,
+$\lVert \nabla \mathbf{x} \rVert_{2,1}$, $\iota_S$) to noise made of known
+patterns, as in [VSNR](../algorithms/destripe/vsnr.md).
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\boldsymbol{\psi}_i$ | known pattern $i$ of the noise (a kernel, centred on its middle pixel) | `filters` |
+| $\boldsymbol{\lambda}_i$ | white noise convolved with $\boldsymbol{\psi}_i$, so that $\mathbf{s} = \sum_i \boldsymbol{\lambda}_i * \boldsymbol{\psi}_i$ (unrelated to the photoelectrons $\lambda$) | `VSNRSolution.weights` |
+| $*$ | convolution with periodic boundaries | |
+| $\phi_i$, $\alpha_i$ | prior of $\boldsymbol{\lambda}_i$ and its weight | `prior`, `alpha` |
+| $\epsilon$, $h_\epsilon$ | Huber parameter and function; $\lVert \cdot \rVert_{2,1}^{\epsilon}$ is the total variation with $h_\epsilon$ in place of the norm (unrelated to the read noise $\varepsilon$) | `eps` |
+| $\vartheta$ | over-relaxation of a primal-dual scheme (unrelated to the stripe direction $\theta$) | |
+
 ## Indices and layouts
 
 | Symbol | Ranges over |
