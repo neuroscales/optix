@@ -12,6 +12,7 @@ Deconvolution with a known point spread function.
       members:
         - RichardsonLucy
         - Snyder
+        - BiggsAndrews
 
 ## Transforms
 
@@ -22,6 +23,7 @@ Deconvolution with a known point spread function.
       show_root_toc_entry: false
       members:
         - richardson_lucy
+        - biggs_andrews
 
 ## Utilities
 
@@ -38,4 +40,5 @@ Deconvolution with a known point spread function.
         - next_fast_len
         - rl_step
         - rl_block
+        - biggs_andrews_alpha
         - chi2_probability

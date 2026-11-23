@@ -23,6 +23,7 @@ from ._fft import PaddedConvolution
 
 __all__ = [
     "RichardsonLucy",
+    "biggs_andrews_alpha",
     "chi2_probability",
     "richardson_lucy",
     "rl_block",
@@ -30,6 +31,7 @@ __all__ = [
 ]
 
 _OVERHEAD = 12.0  # working buffers per loaded voxel (FFT grid, ratios, ...)
+_OVERHEAD_ACCEL = 16.0  # + previous iterate, two changes, prediction
 
 
 def rl_step(
@@ -128,6 +130,36 @@ def chi2_probability(data: Tensor, mu: Tensor) -> float:
     return float(torch.special.gammaincc(nu / 2, chi2.cpu() / 2))
 
 
+def biggs_andrews_alpha(g: Tensor, g_prev: Tensor) -> float:
+    """Acceleration parameter of Biggs and Andrews (1997, Eq. 10).
+
+        αₖ = ∑ gₖ₋₁ · gₖ₋₂ / ∑ gₖ₋₂ · gₖ₋₂,   clipped to [0, 1],
+
+    with gₖ = ψ(yₖ) − yₖ the change made by the k-th iteration ψ. A
+    negative value is set to 0, which stops the extrapolation until the
+    successive changes point the same way again; the upper bound keeps
+    the predicted step from growing exponentially. The sums are
+    accumulated in float64.
+
+    Parameters
+    ----------
+    g : Tensor
+        Last change gₖ₋₁.
+    g_prev : Tensor
+        Change before it, gₖ₋₂.
+
+    Returns
+    -------
+    float
+        αₖ ∈ [0, 1]; 0 when gₖ₋₂ = 0.
+    """
+    num = float((g * g_prev).sum(dtype=torch.float64))
+    den = float(g_prev.square().sum(dtype=torch.float64))
+    if not den > 0 or not num > 0:
+        return 0.0
+    return min(num / den, 1.0)
+
+
 def rl_block(
     data: Tensor,
     op: PaddedConvolution,
@@ -141,8 +173,10 @@ def rl_block(
     flat: Tensor | None = None,
     expect: Callable[[Tensor], Tensor] | None = None,
     variance: Tensor | float = 0.0,
+    accelerate: bool = False,
+    trace: dict | None = None,
 ) -> tuple[Tensor, int]:
-    """Richardson–Lucy iterations on one block.
+    """Richardson–Lucy iterations on one block, optionally accelerated.
 
     Parameters
     ----------
@@ -176,6 +210,20 @@ def rl_block(
     variance : Tensor or float
         Variance of additive Gaussian noise on `data`, used by the χ²
         test: χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / (μᵢ + σᵢ²).
+    accelerate : bool
+        Biggs–Andrews vector extrapolation (see
+        [`BiggsAndrews`][optix.deconv.BiggsAndrews]): the iteration is
+        applied to the prediction yₖ = xₖ + αₖ (xₖ − xₖ₋₁), clipped at 0,
+        with αₖ from
+        [`biggs_andrews_alpha`][optix.deconv.utils.biggs_andrews_alpha].
+        The first update (from the uniform start) is not part of the
+        extrapolation history, so the first prediction is made at the
+        fourth update.
+    trace : dict, optional
+        Filled with per-update diagnostics: `"alpha"` (list of αₖ, 0 for
+        plain updates), `"clipped"` (number of predictions with negative
+        pixels set to 0) and `"effective"` (estimated number of
+        unaccelerated iterations, ∑ₖ ηₖ, Biggs and Andrews 1997, Eq. 12).
 
     Returns
     -------
@@ -192,15 +240,40 @@ def rl_block(
     f = torch.zeros_like(norm)
     f = torch.where(valid, f + start, f)
     limit = max_iter if n_iter is None else n_iter
+    alphas: list[float] = []
+    clipped = 0
+    effective = 0.0
+    eta = 1.0
+    f_prev: Tensor | None = None  # xₖ₋₁
+    g1: Tensor | None = None  # gₖ₋₁
+    g2: Tensor | None = None  # gₖ₋₂
     n = 0
     while n < limit:
-        mu = _expected(f, op, background, flat)
+        a = gamma = 0.0
+        if accelerate and g2 is not None:
+            a = biggs_andrews_alpha(g1, g2)
+            if a > 0:
+                # γₖ = (αₖ βₖ)², βₖ = ∑ gₖ₋₁·gₖ₋₂ / ∑ gₖ₋₁·gₖ₋₁ (Eqs. 11, 13)
+                den = float(g1.square().sum(dtype=torch.float64))
+                num = float((g1 * g2).sum(dtype=torch.float64))
+                gamma = (a * num / den) ** 2 if den > 0 else 0.0
+        mu = None
         if n_iter is None:
-            p = chi2_probability(data + variance, mu + variance)
-            if p >= alpha:
+            mu = _expected(f, op, background, flat)
+            if chi2_probability(data + variance, mu + variance) >= alpha:
                 break
-        f = rl_step(
-            f,
+        if a > 0:
+            y = f + a * (f - f_prev)
+            if (y < 0).any():
+                clipped += 1
+                y.clamp_(min=0)
+            mu = None  # μ at xₖ, not at the prediction yₖ
+        else:
+            y = f
+        if expect is not None and mu is None:
+            mu = _expected(y, op, background, flat)
+        new = rl_step(
+            y,
             data if expect is None else expect(mu),
             op,
             inv_norm=inv_norm,
@@ -209,7 +282,20 @@ def rl_block(
             mu=mu,
             flat=flat,
         )
+        if accelerate:
+            if n > 0:  # the first update only sets the starting image
+                g1, g2 = new - y, g1
+            f_prev = f
+        f = new
+        alphas.append(a)
+        # ηₖ = 1 + γₖ ηₖ₋₁ (Eq. 12)
+        eta = 1.0 + gamma * eta
+        effective += eta
         n += 1
+    if trace is not None:
+        trace["alpha"] = alphas
+        trace["clipped"] = clipped
+        trace["effective"] = effective
     return f, n
 
 
@@ -341,6 +427,7 @@ class RichardsonLucy(Estimator):
         "block": None,
     }
     recommended = dict(paper)
+    _accelerate = False
 
     def __init__(
         self,
@@ -484,9 +571,17 @@ class RichardsonLucy(Estimator):
         self.is_faithful = self._faithful_options and self.sensor is None
 
     def _solve(
-        self, blk: _Block, op: PaddedConvolution, start: float
+        self,
+        blk: _Block,
+        op: PaddedConvolution,
+        start: float,
+        trace: dict | None = None,
     ) -> tuple[Tensor, int]:
-        """Deconvolve one prepared block: estimate on `op.grid`, updates."""
+        """Deconvolve one prepared block: estimate on `op.grid`, updates.
+
+        `trace` receives the per-update diagnostics of
+        [`rl_block`][optix.deconv.utils.rl_block].
+        """
         n_iter = self.options["n_iter"]
         return rl_block(
             blk.data,
@@ -496,6 +591,8 @@ class RichardsonLucy(Estimator):
             alpha=float(self.options["alpha"]),
             max_iter=int(self.options["max_iter"]),
             damping=float(self.options["damping"]),
+            accelerate=self._accelerate,
+            trace=trace,
         )
 
     # -- estimator protocol ----------------------------------------------
@@ -532,6 +629,8 @@ class RichardsonLucy(Estimator):
         level = total / weight.clamp(min=torch.finfo(torch.float64).tiny)
         self.level = level.clamp(min=torch.finfo(backend["dtype"]).tiny)
         self.history.extras["iterations"] = []
+        if self._accelerate:
+            self.history.extras["effective_iterations"] = []
 
     def _apply(
         self, data: ArrayLike, out: WritableArrayLike | None
@@ -557,11 +656,17 @@ class RichardsonLucy(Estimator):
         maps = self._maps(data, backend)
         ops: dict[tuple[int, ...], PaddedConvolution] = {}
         iterations = self.history.extras.setdefault("iterations", [])
+        effective = (
+            self.history.extras.setdefault("effective_iterations", [])
+            if self._accelerate
+            else []
+        )
+        trace: dict = {}
         chunks = blocks(
             data,
             self.options["block"],
             halo,
-            overhead=_OVERHEAD,
+            overhead=_OVERHEAD_ACCEL if self._accelerate else _OVERHEAD,
             contiguous=True,
             align=chunks_of(out),
             **backend,
@@ -573,8 +678,10 @@ class RichardsonLucy(Estimator):
                 ops[key] = PaddedConvolution(psf, key)
             op = ops[key]
             start = float(self.level[chunk.group + chunk.samples].squeeze())
-            f, n = self._solve(blk, op, start)
+            f, n = self._solve(blk, op, start, trace)
             iterations.append(float(n))
+            if self._accelerate:
+                effective.append(float(trace["effective"]))
             chunk.store(out, op.crop(f)[chunk.inner])
         flush(out)
         return out

@@ -345,7 +345,11 @@ class Snyder(RichardsonLucy):
         return _Block(r, mu0, at("flat"), var)
 
     def _solve(
-        self, blk: _Block, op: PaddedConvolution, start: float
+        self,
+        blk: _Block,
+        op: PaddedConvolution,
+        start: float,
+        trace: dict | None = None,
     ) -> tuple[Tensor, int]:
         var = blk.variance
         expect = None
