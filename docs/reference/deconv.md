@@ -16,6 +16,7 @@ Deconvolution with a known point spread function.
         - BiggsAndrews
         - Wiener
         - Tikhonov
+        - Ikoma
 
 ## Transforms
 
@@ -30,6 +31,7 @@ Deconvolution with a known point spread function.
         - biggs_andrews
         - wiener
         - tikhonov
+        - ikoma
 
 ## Utilities
 

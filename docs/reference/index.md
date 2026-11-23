@@ -14,9 +14,10 @@ the reference to look up a signature.
 | [`optix.filters`](filters.md) | spatial neighbourhood filters (`median_filter`, `median_disk`) |
 | [`optix.basis`](basis.md) | DCT bases and their smoothness penalties |
 | [`optix.special`](special.md) | quadrature, Newton solvers and cancellation-free KL divergences |
+| [`optix.optim`](optim.md) | proximity operators, difference operators and the ADMM solver `admm_fft` |
 | [`optix.sensor`](sensor.md) | sensor calibration estimators and variance-stabilising transforms |
 | [`optix.shading`](shading.md) | shading estimators and `correct` |
-| [`optix.deconv`](deconv.md) | Richardson–Lucy deconvolution and `richardson_lucy` |
+| [`optix.deconv`](deconv.md) | deconvolution: Richardson–Lucy and its variants, Wiener, Tikhonov, `Ikoma` |
 | [`optix.background`](background.md) | `RollingBall`, `TopHat`, `rolling_ball` and `top_hat`: background subtraction by grey-scale opening |
 | [`optix.psf`](psf.md) | point spread functions: `BeadPSF`, `bead_psf` and `lightsheet_psf` |
 | [`optix.models`](models.md) | simulators of the camera and shading models |

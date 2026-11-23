@@ -25,6 +25,7 @@ example. The sections follow the modules of the
 | | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
 | | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
+| | [Ikoma](deconv/ikoma.md) (`Ikoma`) | deconvolved image, regularised, with shifted-Poisson noise |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
 
