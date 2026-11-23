@@ -22,11 +22,13 @@ def bessel_j012(x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
 
     with the trapezoidal rule on 64 points. The integrand is periodic
     and entire, so the rule converges exponentially; the aliasing error
-    is of order J₆₄(x), below 10⁻¹⁵ for |x| < 25, and the sum has no
-    cancellation, including J₂ near 0. For |x| ≥ 25,
+    is of order J₆₄(x), below 10⁻¹⁵ for |x| < 25. The bound is on the
+    absolute error: near 0 the sum for J₂ ≈ x²/8 cancels, so its relative
+    error grows there (J₂(10⁻⁸) has an absolute error of about 10⁻¹⁷).
+    For |x| ≥ 25,
     `torch.special.bessel_j0` / `bessel_j1` are used, with
     J₂(x) = 2 J₁(x) / x − J₀(x). Below 25, the torch functions
-    themselves have absolute errors up to about 3·10⁻⁷ in float64 (near
+    themselves have absolute errors up to about 5·10⁻⁷ in float64 (near
     x = 5), which this evaluation avoids.
 
     Parameters
