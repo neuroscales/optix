@@ -1,3 +1,4 @@
+import itertools
 import math
 
 import pytest
@@ -146,6 +147,52 @@ def test_compensation_independent_of_passes_and_pixel_size():
     a = compensate(data, pixel_size=0.01, passes=2)
     b = compensate(data, pixel_size=1.0, passes=1)
     torch.testing.assert_close(a, b)
+    # Smith: λ ∝ (2/p)/Δ keeps the TV strength on the scale of μ̂
+    data, sensor, _, dz = _noisy_bscan(n=16, m=120)
+    kw = dict(method="smith", tv_axis=0, background=sensor)
+    a = compensate(data, pixel_size=dz, passes=2, **kw)
+    b = compensate(data, pixel_size=1.0, passes=1, **kw)
+    c = compensate(data, pixel_size=dz, passes=2, eta=0.0, **kw)
+    torch.testing.assert_close(a, b, rtol=1e-9, atol=1e-9)
+    assert (a - c).abs().max() > 1e-3  # the TV term is active
+
+
+def test_smith_noisy_tail_is_finite():
+    # zero-mean noise in the tail after background subtraction: tail sums
+    # near 0 or negative must not overflow the gain
+    data, sensor, _, dz = _noisy_bscan(n=16, m=120)
+    tail = torch.randn(
+        16, 200, dtype=data.dtype, generator=torch.Generator().manual_seed(1)
+    )
+    noisy = torch.cat([data, 100.0 + 2.0 * tail], dim=-1)
+    for kw in (dict(eta=0.0), dict(), dict(noise_power=1.0)):
+        for dtype in (torch.float32, torch.float64):
+            x = noisy.to(dtype)
+            mu = depth_resolved(
+                x, pixel_size=dz, background=100.0, method="smith", **kw
+            )
+            assert torch.isfinite(mu).all()
+            out = compensate(
+                x, pixel_size=dz, background=100.0, method="smith", **kw
+            )
+            assert torch.isfinite(out).all()
+            xi = (x - 100.0).double()
+            c = kw.get("noise_power", 0.0)
+            t = tail_sums(xi * xi**2 / (xi**2 + c) if c else xi)
+            assert (out[t.to(out.dtype) <= 0] == 0).all()
+    # μ̂ = 0 where the tail sum is ≤ 0
+    x = torch.tensor([1.0, 2.0, -5.0, 1.0], dtype=torch.float64)
+    est = smith_attenuation(x)
+    assert est[0] == 0 and est[1] == 0 and est[2] == 0 and est[3] == 0.5
+    # the exponent is capped: finite gain
+    assert torch.isfinite(
+        compensation_gain(torch.full((4,), 1e300, dtype=torch.float64))
+    ).all()
+
+
+def test_vermeer_gain_zero_when_profile_sum_not_positive():
+    x = torch.tensor([-5.0, 1.0, 2.0], dtype=torch.float64)
+    assert (vermeer_gain(x) == 0).all()
 
 
 def test_max_gain_caps():
@@ -214,24 +261,113 @@ def test_smith_eq10_and_restoration_filter():
     torch.testing.assert_close(filt, x / (2 * dz * tail_sums(x)))
 
 
-def test_weighted_tv_optimality():
-    torch.manual_seed(0)
-    y = torch.cat([torch.zeros(20), torch.ones(20)]).double()
-    y = y + 0.2 * torch.randn(40, dtype=torch.float64)
-    w = torch.rand(39, dtype=torch.float64) + 0.5
-    x, it, gap = weighted_tv(y, w, 0.3, tol=1e-10, max_iter=20000)
-    assert gap <= 1e-10 and (x >= 0).all()
+def _kkt_brute_force(y, bound, nonneg):
+    """Weighted TV prox by enumeration of the KKT active sets.
 
-    def objective(v):
-        return 0.5 * (v - y).square().sum() + 0.3 * (w * v.diff().abs()).sum()
+    Unknowns x (n), dual p (n − 1) and multipliers ν ≥ 0 of x ≥ 0 (n):
+    x − y + Dᵀp − ν = 0, and for every difference k either p_k = ±bound_k
+    (with the matching sign of (Dx)_k) or (Dx)_k = 0, for every pixel
+    either x_i = 0 or ν_i = 0. The strongly convex problem has a single
+    solution, the x of any feasible combination.
+    """
+    n = y.numel()
+    d = torch.diff(torch.eye(n, dtype=torch.float64), dim=0)
+    m = 3 * n - 1
+    pixels = itertools.product((0, 1), repeat=n) if nonneg else [(1,) * n]
+    for zeros in pixels:
+        for signs in itertools.product((-1, 0, 1), repeat=n - 1):
+            a = torch.zeros(m, m, dtype=torch.float64)
+            r = torch.zeros(m, dtype=torch.float64)
+            a[:n, :n] = torch.eye(n)
+            a[:n, n : 2 * n - 1] = d.T
+            a[:n, 2 * n - 1 :] = -torch.eye(n)
+            r[:n] = y
+            for k, s in enumerate(signs):
+                if s == 0:
+                    a[n + k, :n] = d[k]
+                else:
+                    a[n + k, n + k] = 1
+                    r[n + k] = s * bound[k]
+            for i, free in enumerate(zeros):
+                a[2 * n - 1 + i, i if free == 0 else 2 * n - 1 + i] = 1
+            z, info = torch.linalg.solve_ex(a, r)
+            if info != 0:
+                continue
+            x, p, nu = z[:n], z[n : 2 * n - 1], z[2 * n - 1 :]
+            dx, e = d @ x, 1e-10
+            ok = bool((p.abs() <= bound + e).all() and (nu >= -e).all())
+            ok = ok and bool((x >= -e).all() or not nonneg)
+            ok = ok and all(
+                (s != 1 or dx[k] >= -e) and (s != -1 or dx[k] <= e)
+                for k, s in enumerate(signs)
+            )
+            if ok:
+                return x
+    raise AssertionError("no KKT point found")
 
-    best = objective(x)
-    for _ in range(50):
-        v = (x + 1e-3 * torch.randn_like(x)).clamp_min(0)
-        assert objective(v) >= best - 1e-9
+
+def _fista_reference(y, bound, iterations=100000, tol=1e-14):
+    """Dual accelerated projected gradient for the nonneg weighted TV."""
+
+    def d(v):
+        return v.diff(dim=-1)
+
+    def dt(p):
+        zero = torch.zeros_like(p[..., :1])
+        return -torch.cat([zero, p, zero], -1).diff(dim=-1)
+
+    def primal(p):
+        return (y - dt(p)).clamp_min(0)
+
+    p = q = torch.zeros_like(bound)
+    t = 1.0
+    for it in range(1, iterations + 1):
+        p_new = torch.clamp(q + d(primal(q)) / 4, -bound, bound)
+        t_new = (1 + (1 + 4 * t * t) ** 0.5) / 2
+        q = p_new + ((t - 1) / t_new) * (p_new - p)
+        p, t = p_new, t_new
+        if it % 50 == 0:
+            x = primal(p)
+            fit = 0.5 * (x - y).square().sum(-1)
+            obj = fit + (bound * d(x).abs()).sum(-1)
+            gap = (obj - fit - (p * d(x)).sum(-1)) / obj.clamp_min(1e-300)
+            if bool((gap <= tol).all()):
+                break
+    return primal(p)
+
+
+def test_weighted_tv_exact_against_brute_force():
+    g = torch.Generator().manual_seed(0)
+    for _ in range(20):
+        n = int(torch.randint(2, 6, (), generator=g))
+        y = torch.randn(n, dtype=torch.float64, generator=g)
+        w = torch.rand(n - 1, dtype=torch.float64, generator=g) * 1.5
+        w[torch.rand(n - 1, generator=g) < 0.2] = 0.0  # zero weights
+        lam = 0.7
+        x = weighted_tv(y, w, lam, nonneg=False)
+        ref = _kkt_brute_force(y, lam * w, nonneg=False)
+        torch.testing.assert_close(x, ref, rtol=0, atol=1e-12)
+        # nonneg: max(prox_TV, 0), against the constrained KKT system
+        x = weighted_tv(y, w, lam)
+        ref = _kkt_brute_force(y, lam * w, nonneg=True)
+        torch.testing.assert_close(x, ref, rtol=0, atol=1e-12)
+
+
+def test_weighted_tv_matches_fista_and_dims():
+    g = torch.Generator().manual_seed(1)
+    y = torch.rand(30, 64, dtype=torch.float64, generator=g) * 3 - 0.5
+    w = torch.rand(30, 64, dtype=torch.float64, generator=g) + 0.1
+    x = weighted_tv(y, w, 0.4)  # N weights: the last is ignored
+    ref = _fista_reference(y, 0.4 * w[:, :-1])
+    torch.testing.assert_close(x, ref, rtol=0, atol=1e-9)
+    # along another dim, float32 in and out
+    xt = weighted_tv(y.T.float(), w.T[:-1].float(), 0.4, dim=0)
+    assert xt.dtype == torch.float32
+    torch.testing.assert_close(xt.T.double(), x, rtol=0, atol=1e-5)
     # lam = 0 is the identity (projected on x >= 0)
-    x0, _, _ = weighted_tv(y, w, 0.0)
-    torch.testing.assert_close(x0, y.clamp_min(0))
+    torch.testing.assert_close(weighted_tv(y, w, 0.0), y.clamp_min(0))
+    with pytest.raises(ValueError, match="weights"):
+        weighted_tv(y, -w, 0.4)
 
 
 def test_axis_handling():
@@ -304,6 +440,9 @@ def test_estimator_faithful_flags_and_registry():
     assert not DepthResolved(method="smith").is_faithful
     assert not DepthResolved(passes=1).is_faithful
     assert not DepthResolved(max_gain=5.0).is_faithful
+    # recommended: single-pass light-sheet excitation
+    rec = DepthResolved(faithful=False)
+    assert rec.options["passes"] == 1 and not rec.is_faithful
     with pytest.raises(ValueError, match="method"):
         DepthResolved(method="other")
 
@@ -327,7 +466,8 @@ def test_streaming_blocks_and_zarr_parity():
     src[:] = vol.float().numpy()
     dst = zarr.zeros(vol.shape, chunks=(1, 3, 120), dtype="f4")
     # tiny budget: one block per (z, y-chunk), whole profiles
-    with optix.config(memory=3 * 120 * 4 * 8):
+    # float64 accumulation, 8 block-sized arrays
+    with optix.config(memory=3 * 120 * 8 * 8):
         est.apply(src, out=dst)
     torch.testing.assert_close(torch.from_numpy(dst[:]), ref)
     # Smith: whole extent of the TV axis (y) as well
@@ -337,6 +477,6 @@ def test_streaming_blocks_and_zarr_parity():
     ref = depth_resolved(
         vol.float(), pixel_size=dz, background=sensor, method="smith"
     )
-    with optix.config(memory=6 * 120 * 4 * 8):
+    with optix.config(memory=6 * 120 * 8 * 24):
         mu = est.attenuation(src)
     torch.testing.assert_close(mu, ref, rtol=1e-4, atol=1e-4)

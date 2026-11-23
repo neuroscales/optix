@@ -1,5 +1,7 @@
 """Depth-resolved attenuation kernels (Vermeer 2014, Smith 2015)."""
 
+import math
+
 import torch
 from torch import Tensor
 
@@ -96,7 +98,8 @@ def vermeer_gain(data: Tensor, dim: int = -1) -> Tensor:
 
     which is computed directly (no exponential, no cumulated logarithm).
     G does not depend on p nor on Δ. Where T[i] ≤ 0 (no signal from i
-    on), G = 0.
+    on) or T[0] ≤ 0 (no signal in the profile, e.g. after a background
+    subtraction), G = 0.
 
     Parameters
     ----------
@@ -114,7 +117,7 @@ def vermeer_gain(data: Tensor, dim: int = -1) -> Tensor:
     t = tail_sums(data, dim, inclusive=True)
     first = t.narrow(dim, 0, 1)
     gain = first / t
-    return torch.where(t > 0, gain, torch.zeros_like(gain))
+    return torch.where((t > 0) & (first > 0), gain, torch.zeros_like(gain))
 
 
 def compensation_gain(
@@ -124,7 +127,8 @@ def compensation_gain(
 
     The attenuation of the model, I[i] ∝ μ[i]·exp(−p·∫₀^{z_i} μ), up to
     the front of pixel i. The cumulative sum is taken in float64 (float32
-    on MPS).
+    on MPS), and the exponent is capped at log of the largest finite value
+    of that dtype, so that G stays finite.
 
     Parameters
     ----------
@@ -143,7 +147,8 @@ def compensation_gain(
     acc = torch.float32 if mu.device.type == "mps" else torch.float64
     m = mu.to(acc)
     before = m.cumsum(dim) - m
-    return torch.exp(passes * pixel_size * before)
+    top = math.log(torch.finfo(acc).max)
+    return torch.exp((passes * pixel_size * before).clamp_max(top))
 
 
 def smith_attenuation(
@@ -161,7 +166,8 @@ def smith_attenuation(
 
     with the confocal and fall-off functions of Eq. (9) set to 1, and
     |c|² the noise power. The sum includes pixel m, so the last pixel
-    gets μ̂ = 1/(p·Δ). Where the sum is 0, μ̂ = 0.
+    gets μ̂ = 1/(p·Δ). Where the sum is ≤ 0 (no signal from m on, or
+    noise of negative sum after a background subtraction), μ̂ = 0.
 
     Parameters
     ----------
@@ -183,27 +189,116 @@ def smith_attenuation(
     _check(pixel_size, passes)
     if not noise_power >= 0:
         raise ValueError(f"noise_power must be >= 0, got {noise_power!r}")
+    x = _restored(data, noise_power)
+    t = tail_sums(x, dim, inclusive=True)
+    mu = x / (passes * pixel_size * t)
+    mu = torch.where(t > 0, mu, torch.zeros_like(mu))
+    return mu.to(data.dtype)
+
+
+def _restored(data: Tensor, noise_power: float = 0.0) -> Tensor:
+    """Restoration filter of Smith et al. (2015), Eqs. (8)–(9).
+
+        Î[m] = I[m] · I[m]² / (I[m]² + |c|²),
+
+    with the confocal and fall-off functions set to 1; `noise_power=0` is
+    the identity.
+
+    Parameters
+    ----------
+    data : Tensor
+        I.
+    noise_power : float
+        |c|² ≥ 0.
+
+    Returns
+    -------
+    Tensor
+        Î, in float64 (float32 on MPS).
+    """
     acc = torch.float32 if data.device.type == "mps" else torch.float64
     x = data.to(acc)
     if noise_power > 0:
         sq = x.square()
         x = x * sq / (sq + noise_power)
-    t = tail_sums(x, dim, inclusive=True)
-    mu = x / (passes * pixel_size * t)
-    mu = torch.where(t != 0, mu, torch.zeros_like(mu))
-    return mu.to(data.dtype)
+    return x
 
 
-def _d(x: Tensor, dim: int) -> Tensor:
-    """Forward differences x[n + 1] − x[n] along `dim` (N − 1 values)."""
-    return torch.diff(x, dim=dim)
+def _scan(
+    knots: Tensor,
+    end: Tensor,
+    stop: Tensor,
+    a: Tensor,
+    b: Tensor,
+    level: Tensor,
+    step: int,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Remove the knots of one end that lie beyond the crossing of `level`.
+
+    `knots` holds, for every line (last dim), the knots of a continuous,
+    increasing, piecewise-linear derivative: position, and the increments
+    of its slope and offset across the knot. `end` indexes the end knot
+    of each line (the first one with `step=1`, the last one with
+    `step=-1`), `stop` the other end, and a·x + b is the derivative on the
+    outer segment. Knots are removed while the derivative at the end knot
+    is ≤ `level` (`step=1`) or ≥ `level` (`step=-1`). Returns the point
+    where the derivative equals `level`, the coefficients of the segment
+    holding it, and the new end.
+    """
+    last = knots.shape[1] - 1
+    while True:
+        index = end.clamp(0, last).view(1, 1, -1).expand(3, 1, -1)
+        pos, da, db = torch.gather(knots, 1, index)[:, 0]
+        d = a * pos + b
+        if step > 0:
+            pop = (end <= stop) & (d <= level)
+        else:
+            pop = (end >= stop) & (d >= level)
+        if not bool(pop.any()):
+            break
+        a = torch.where(pop, a + step * da, a)
+        b = torch.where(pop, b + step * db, b)
+        end = end + step * pop.long()
+    return (level - b) / a, a, b, end
 
 
-def _dt(p: Tensor, dim: int) -> Tensor:
-    """Adjoint of `_d`: (Dᵀp)[n] = p[n − 1] − p[n], p[−1] = p[N − 1] = 0."""
-    zero = torch.zeros_like(p.narrow(dim, 0, 1))
-    padded = torch.cat([zero, p, zero], dim)
-    return -torch.diff(padded, dim=dim)
+def _tv_lines(y: Tensor, lam: Tensor) -> Tensor:
+    """Exact weighted 1-D TV denoising of the columns of `y` (N, L).
+
+    argmin_x ½‖x − y‖² + ∑_n lam[n]·|x[n + 1] − x[n]|, for every column,
+    by dynamic programming (Johnson 2013): the derivative of the partial
+    objective F_n(x) = min over x[0..n−1] (x[n] = x) is increasing and
+    piecewise linear. Minimising out x[n] in F_n(x[n]) + lam[n]·|x − x[n]|
+    clamps that derivative to [−lam[n], lam[n]]; the points b⁻[n] ≤ b⁺[n]
+    where it reaches ∓lam[n] are stored, and x[n] = clamp(x[n + 1], b⁻[n],
+    b⁺[n]) in the backward pass. Each step adds two knots, so the forward
+    pass removes at most 2N knots per column: O(N) work per column.
+    """
+    n, lines = y.shape
+    kw = {"dtype": y.dtype, "device": y.device}
+    knots = torch.zeros(3, 2 * n + 2, lines, **kw)
+    head = torch.full((lines,), n + 1, dtype=torch.long, device=y.device)
+    tail = head - 1
+    lower = torch.empty(n - 1, lines, **kw)
+    upper = torch.empty_like(lower)
+    one = torch.ones(lines, **kw)
+    left = right = -y[0]
+    for k in range(n - 1):
+        w = lam[k]
+        xl, a1, b1, head = _scan(knots, head, tail, one, left, -w, 1)
+        xr, a2, b2, tail = _scan(knots, tail, head, one, right, w, -1)
+        lower[k], upper[k] = xl, xr
+        head, tail = head - 1, tail + 1
+        new = torch.stack([xl, a1, b1 + w])[:, None]
+        knots.scatter_(1, head.view(1, 1, -1).expand(3, 1, -1), new)
+        new = torch.stack([xr, -a2, w - b2])[:, None]
+        knots.scatter_(1, tail.view(1, 1, -1).expand(3, 1, -1), new)
+        left, right = -w - y[k + 1], w - y[k + 1]
+    x = torch.empty_like(y)
+    x[-1] = _scan(knots, head, tail, one, left, torch.zeros_like(one), 1)[0]
+    for k in range(n - 2, -1, -1):
+        x[k] = torch.minimum(torch.maximum(x[k + 1], lower[k]), upper[k])
+    return x
 
 
 def weighted_tv(
@@ -213,23 +308,41 @@ def weighted_tv(
     dim: int = -1,
     *,
     nonneg: bool = True,
-    max_iter: int = 2000,
-    tol: float = 1e-6,
-) -> tuple[Tensor, int, float]:
+) -> Tensor:
     """Weighted 1-D total-variation denoising along `dim`.
 
-    Solves, independently for every line along `dim`,
+    Solves exactly, independently for every line along `dim`,
 
         minimise ½‖x − y‖² + λ ∑_n w[n]·|x[n + 1] − x[n]|   s.t. x ≥ 0,
 
     the problem (11) of Smith et al. (2015) with the weighted TV of
     Eqs. (13)–(15). The weights `w` hold N − 1 values along `dim` (or N,
-    the last one being ignored). The dual problem, a box-constrained
-    quadratic in the N − 1 dual variables, is solved by accelerated
-    projected gradient (FISTA) with step 1/4 (‖D‖² ≤ 4); the primal
-    solution is x = max(y − Dᵀp, 0). The iterations stop when the
-    duality gap, summed over all lines, falls below `tol` times the
-    primal objective.
+    the last one being ignored). The unconstrained problem is solved by
+    the direct dynamic-programming algorithm of Johnson (2013), which
+    handles a weight per difference, in O(N) per line and vectorised
+    across lines; the constraint is then imposed by clamping, since in 1-D
+    prox(TV + ι_{x ≥ 0})(y) = max(prox_TV(y), 0). Smith et al. use CVX.
+    Computed in float64 (float32 on MPS).
+
+    !!! references "References"
+
+        1. Johnson NA. *A dynamic programming algorithm for the fused
+           lasso and L0-segmentation.* J Comput Graph Stat
+           **22**(2):246–260, 2013.
+           [doi:10.1080/10618600.2012.681238](https://doi.org/10.1080/10618600.2012.681238)
+
+        ??? quote "BibTeX"
+
+            ```bibtex
+            @article{johnson2013dynamic,
+              author  = {Johnson, Nicholas A.},
+              title   = {A dynamic programming algorithm for the fused
+                         lasso and {L0}-segmentation},
+              journal = {Journal of Computational and Graphical Statistics},
+              volume  = {22}, number = {2}, pages = {246--260},
+              year    = {2013}, doi = {10.1080/10618600.2012.681238}
+            }
+            ```
 
     Parameters
     ----------
@@ -242,57 +355,34 @@ def weighted_tv(
     dim : int
     nonneg : bool
         Impose x ≥ 0.
-    max_iter : int
-    tol : float
 
     Returns
     -------
-    x : Tensor
-        Shape of `data`.
-    iterations : int
-    gap : float
-        Relative duality gap reached.
+    Tensor
+        x, of the shape and dtype of `data`.
     """
     if not lam >= 0:
         raise ValueError(f"lam must be >= 0, got {lam!r}")
     dim = dim % data.ndim
     n = data.shape[dim]
-    y = data
     if n < 2 or lam == 0:
-        x = y.clamp_min(0) if nonneg else y.clone()
-        return x, 0, 0.0
-    shape = _d(y, dim).shape
-    w = torch.as_tensor(weights, dtype=y.dtype, device=y.device)
+        return data.clamp_min(0) if nonneg else data.clone()
+    acc = torch.float32 if data.device.type == "mps" else torch.float64
+    y = data.to(acc)
+    shape = list(y.shape)
+    shape[dim] = n - 1
+    w = torch.as_tensor(weights, dtype=acc, device=y.device)
     try:
         w = torch.broadcast_to(w, y.shape).narrow(dim, 0, n - 1)
     except RuntimeError:
         w = torch.broadcast_to(w, shape)
     if bool((w < 0).any()):
         raise ValueError("weights must be >= 0")
-    bound = lam * w
-
-    def primal(p: Tensor) -> Tensor:
-        x = y - _dt(p, dim)
-        return x.clamp_min(0) if nonneg else x
-
-    p = torch.zeros_like(bound)
-    q = p
-    t = 1.0
-    gap = float("inf")
-    it = 0
-    for it in range(1, max_iter + 1):
-        x = primal(q)
-        p_new = torch.clamp(q + _d(x, dim) / 4, -bound, bound)
-        t_new = (1 + (1 + 4 * t * t) ** 0.5) / 2
-        q = p_new + ((t - 1) / t_new) * (p_new - p)
-        p, t = p_new, t_new
-        if it % 10 == 0 or it == max_iter:
-            x = primal(p)
-            dx = _d(x, dim)
-            fit = 0.5 * (x - y).square().sum()
-            obj = fit + (bound * dx.abs()).sum()
-            dual = fit + (p * dx).sum()
-            gap = float((obj - dual) / obj.abs().clamp_min(1e-300))
-            if gap <= tol:
-                break
-    return primal(p), it, gap
+    # lines as columns: (N, lines)
+    lines = y.movedim(dim, 0).reshape(n, -1)
+    bound = (lam * w).movedim(dim, 0).reshape(n - 1, -1)
+    x = _tv_lines(lines, bound)
+    x = x.reshape(y.movedim(dim, 0).shape).movedim(0, dim)
+    if nonneg:
+        x = x.clamp_min(0)
+    return x.to(data.dtype)

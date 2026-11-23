@@ -22,8 +22,10 @@ from ..io import (
     prepare_out,
 )
 from ._kernels import (
+    _restored,
     compensation_gain,
     smith_attenuation,
+    tail_sums,
     vermeer_attenuation,
     vermeer_gain,
     weighted_tv,
@@ -88,8 +90,6 @@ def _mu(
     eta: float,
     epsilon: float,
     noise_power: float,
-    max_iter: int,
-    tol: float,
 ) -> Tensor:
     """μ of an in-memory block holding whole profiles (after background)."""
     if method == "vermeer":
@@ -106,11 +106,10 @@ def _mu(
     if eta == 0:
         return mu
     weights = 1 / (data.clamp_min(0) + epsilon)
-    lam = eta / (data.shape[tv] * pixel_size)
-    mu, _, _ = weighted_tv(
-        mu, weights, lam, tv, nonneg=True, max_iter=max_iter, tol=tol
-    )
-    return mu
+    # η is on the scale of the round-trip μ (p = 2): μ̂ ∝ 1/p, so λ ∝ 1/p
+    # keeps μ̃·p, hence the compensation, independent of p
+    lam = (2 / passes) * eta / (data.shape[tv] * pixel_size)
+    return weighted_tv(mu, weights, lam, tv, nonneg=True)
 
 
 def _corrected(
@@ -132,9 +131,16 @@ def _corrected(
             pixel_size=options["pixel_size"],
             passes=options["passes"],
         )
+        # no signal from pixel i on (or in the profile): G = 0, as for
+        # Vermeer's closed form
+        t = tail_sums(_restored(data, options["noise_power"]), axis)
+        keep = (t > 0) & (t.narrow(axis, 0, 1) > 0)
+        gain = torch.where(keep, gain, torch.zeros_like(gain))
     if max_gain is not None:
         gain = gain.clamp_max(max_gain)
-    return (data.to(gain.dtype) * gain).to(data.dtype)
+    out = data.to(gain.dtype) * gain
+    top = torch.finfo(data.dtype).max
+    return out.clamp(-top, top).to(data.dtype)
 
 
 def _check_options(
@@ -142,8 +148,6 @@ def _check_options(
     max_gain: float | None,
     eta: float,
     epsilon: float,
-    max_iter: int,
-    tol: float,
 ) -> None:
     if method not in _METHODS:
         raise ValueError(f"method must be one of {_METHODS}, got {method!r}")
@@ -153,10 +157,6 @@ def _check_options(
         raise ValueError(f"eta must be >= 0, got {eta!r}")
     if not epsilon > 0:
         raise ValueError(f"epsilon must be > 0, got {epsilon!r}")
-    if int(max_iter) != max_iter or max_iter < 1:
-        raise ValueError(f"max_iter must be a positive int, got {max_iter!r}")
-    if not tol > 0:
-        raise ValueError(f"tol must be > 0, got {tol!r}")
 
 
 def _prepare(data: Tensor, axis: int) -> tuple[Tensor, int]:
@@ -185,8 +185,6 @@ def depth_resolved(
     eta: float = 6.0,
     epsilon: float = 1e-3,
     noise_power: float = 0.0,
-    max_iter: int = 2000,
-    tol: float = 1e-6,
 ) -> Tensor:
     """Per-pixel attenuation coefficient along the propagation axis.
 
@@ -197,7 +195,8 @@ def depth_resolved(
 
     the ratio of the local intensity to the sum of all deeper
     intensities, with Δ the pixel size and p = 2 (the light crosses the
-    tissue twice in OCT, Eq. (8)). It follows from the single-scattering
+    tissue twice in OCT, Eq. (8); p is written s on the docs page). It
+    follows from the single-scattering
     model I(z) = α·β·L₀·μ(z)·exp(−2∫₀^z μ(u) du) (Eq. (8)) and the
     assumption that almost all the light is attenuated within the
     profile, which truncates ∫_z^∞ to the end of the profile (Eq. (13)).
@@ -221,8 +220,8 @@ def depth_resolved(
         the default `passes=2` (the paper's Eq. (17)), μ is half the
         single-pass coefficient. The compensated intensity
         ([`compensate`][optix.attenuation.compensate]) does not depend on
-        `passes`. Attenuation of the emitted light on its way to the
-        detector is not modelled.
+        `passes`, with either method. Attenuation of the emitted light
+        on its way to the detector is not modelled.
 
     Extensions (off by default):
 
@@ -243,16 +242,24 @@ def depth_resolved(
       every depth m, the line μ̂_m across the lateral axis `tv_axis` is
       replaced by the solution of
 
-          minimise ½‖μ̃ − μ̂_m‖² + η/(N·Δ) ∑_n W[n]·|μ̃[n + 1] − μ̃[n]|
+          minimise ½‖μ̃ − μ̂_m‖² + λ ∑_n W[n]·|μ̃[n + 1] − μ̃[n]|
           subject to μ̃ ≥ 0,   W[n] = 1/(I[m, n] + ε),
+          λ = (2/p)·η/(N·Δ),
 
-      with N the number of lateral positions. No tissue mask is used
+      with N the number of lateral positions. For p = 2, λ = η/(N·Δ) as
+      in the paper; the factor 2/p keeps η on the scale of the
+      round-trip μ, so that μ̃ scales as 1/p like μ̂ and the compensated
+      intensity does not depend on p. No tissue mask is used
       (X = identity in Eq. (15), N_x = N). The weight W[n] goes with the
       difference μ̃[n + 1] − μ̃[n] (the paper indexes the weights by
       pixel and the differences by pair). Negative intensities count as
-      0 in W. The problem is solved through its dual (see
+      0 in W. The TV strength λ·W scales as 1/intensity, so η = 6 and
+      ε = 0.001 are tied to the intensity units of Smith et al.: scaling
+      the data by c divides the regularisation by about c. The problem
+      is solved exactly by a direct algorithm (see
       [`weighted_tv`][optix.attenuation.utils.weighted_tv]); Smith et
-      al. use CVX. `eta=0` skips the denoising.
+      al. use CVX. `eta=0` skips the denoising. Where the tail sum of Î
+      is ≤ 0, μ̂ = 0 and the compensation gain is 0.
 
     !!! references "References"
 
@@ -323,8 +330,8 @@ def depth_resolved(
     pixel_size : float, default 1.0
         Δ, in the length unit of μ⁻¹ (e.g. mm for μ in mm⁻¹).
     passes : {1, 2}, default 2
-        p: 2 in the papers (OCT round trip); 1 for single-pass
-        illumination (see the note above).
+        p (s on the docs page): 2 in the papers (OCT round trip); 1 for
+        single-pass illumination (see the note above).
     method : {"vermeer", "smith"}, default "vermeer"
         Estimator: Vermeer et al. (2014), Eq. (17), or the extension of
         Smith et al. (2015), Eqs. (8)–(15).
@@ -337,19 +344,16 @@ def depth_resolved(
         is one of them.
     eta : float, default 6.0
         `method="smith"`: η ≥ 0 of Eq. (11) (6 in Smith et al.,
-        Section II-E).
+        Section II-E). It refers to the round-trip (p = 2) scale of μ:
+        the TV weight is λ = (2/p)·η/(N·Δ). The TV strength λ·W, with
+        W = 1/(I + ε), scales as 1/intensity, so η (like ε) is
+        meaningful in the intensity units of Smith et al.
     epsilon : float, default 1e-3
         `method="smith"`: ε of Eq. (14) (0.001 in Smith et al., chosen
         for the magnitude of their intensities).
     noise_power : float, default 0.0
         `method="smith"`: |c|² of Eq. (9) (user-specified in the paper);
         0 disables the restoration filter.
-    max_iter : int, default 2000
-        `method="smith"`: iterations of the TV solver (not specified in
-        the paper).
-    tol : float, default 1e-6
-        `method="smith"`: relative duality gap at which the TV solver
-        stops (not specified in the paper).
 
     Returns
     -------
@@ -357,7 +361,7 @@ def depth_resolved(
         μ, of the shape of `data`, in units of 1/`pixel_size`.
     """
     data, axis = _prepare(data, axis)
-    _check_options(method, None, eta, epsilon, max_iter, tol)
+    _check_options(method, None, eta, epsilon)
     tv = _other_axis(axis, data.ndim, tv_axis) if method == "smith" else None
     data = _subtract(data, _background_field(background))
     return _mu(
@@ -370,8 +374,6 @@ def depth_resolved(
         eta=eta,
         epsilon=epsilon,
         noise_power=noise_power,
-        max_iter=max_iter,
-        tol=tol,
     )
 
 
@@ -388,8 +390,6 @@ def compensate(
     eta: float = 6.0,
     epsilon: float = 1e-3,
     noise_power: float = 0.0,
-    max_iter: int = 2000,
-    tol: float = 1e-6,
 ) -> Tensor:
     """Compensate the attenuation along the propagation axis.
 
@@ -408,8 +408,12 @@ def compensate(
         I_c[i] = I[i] · T[0] / T[i],
 
     which is what is computed (it depends neither on p nor on Δ). Where
-    T[i] ≤ 0 (no signal from pixel i on), I_c[i] = 0. With
-    `method="smith"`, the cumulated sum of the denoised μ̃ is used. The
+    T[i] ≤ 0 (no signal from pixel i on) or T[0] ≤ 0, I_c[i] = 0. With
+    `method="smith"`, the cumulated sum of the denoised μ̃ is used, with
+    the same zeroing on the tail sums of Î; it does not depend on p nor
+    on Δ either (see `eta` in
+    [`depth_resolved`][optix.attenuation.depth_resolved]). The
+    exponential is capped so that the output stays finite. The
     compensated intensity is proportional to μ·L₀ (for fluorescence:
     the local emission under the uniform-emission assumption), so a
     uniform medium gives a flat profile. See
@@ -427,7 +431,7 @@ def compensate(
         See [`depth_resolved`][optix.attenuation.depth_resolved].
     max_gain : float, optional
         Upper bound ≥ 1 of the gain (extension; default: none).
-    tv_axis, eta, epsilon, noise_power, max_iter, tol
+    tv_axis, eta, epsilon, noise_power
         `method="smith"` options; see
         [`depth_resolved`][optix.attenuation.depth_resolved].
 
@@ -438,7 +442,7 @@ def compensate(
         subtraction).
     """
     data, axis = _prepare(data, axis)
-    _check_options(method, max_gain, eta, epsilon, max_iter, tol)
+    _check_options(method, max_gain, eta, epsilon)
     tv = _other_axis(axis, data.ndim, tv_axis) if method == "smith" else None
     data = _subtract(data, _background_field(background))
     return _corrected(
@@ -452,8 +456,6 @@ def compensate(
         eta=eta,
         epsilon=epsilon,
         noise_power=noise_power,
-        max_iter=max_iter,
-        tol=tol,
     )
 
 
@@ -569,12 +571,11 @@ class DepthResolved(Estimator):
         "eta": 6.0,
         "epsilon": 1e-3,
         "noise_power": 0.0,
-        "max_iter": 2000,
-        "tol": 1e-6,
     }
-    recommended = dict(paper)
+    # single-pass excitation of a light sheet: physical μ
+    recommended = {**paper, "passes": 1}
     # data-dependent settings: any value is faithful
-    _free = ("axis", "pixel_size", "tv_axis", "max_iter", "tol")
+    _free = ("axis", "pixel_size", "tv_axis")
 
     def __init__(
         self,
@@ -589,8 +590,6 @@ class DepthResolved(Estimator):
         eta: float | None = None,
         epsilon: float | None = None,
         noise_power: float | None = None,
-        max_iter: int | None = None,
-        tol: float | None = None,
         faithful: bool = True,
         dtype: object = None,
         device: object = None,
@@ -606,8 +605,9 @@ class DepthResolved(Estimator):
         pixel_size : float, default 1.0
             Pixel size Δ along `axis`, in the length unit of μ⁻¹.
         passes : {1, 2}, default 2
-            p of Eq. (17): 2 in the paper, 1 for single-pass
-            illumination; see
+            p of Eq. (17) (s on the docs page): 2 in the paper, 1 for
+            single-pass illumination (the recommended value,
+            `faithful=False`); see
             [`depth_resolved`][optix.attenuation.depth_resolved].
         method : {"vermeer", "smith"}, default "vermeer"
             `"smith"` selects the extension of Smith et al. (2015).
@@ -622,7 +622,7 @@ class DepthResolved(Estimator):
             `method="smith"`: lateral axis of the TV term (storage
             position or label). Default: the other spatial axis when the
             layout has two spatial axes, one of which is `axis`.
-        eta, epsilon, noise_power, max_iter, tol
+        eta, epsilon, noise_power
             `method="smith"` options; see
             [`depth_resolved`][optix.attenuation.depth_resolved].
         faithful, dtype, device, layout
@@ -642,10 +642,7 @@ class DepthResolved(Estimator):
             for name in o
             if name not in free
         )
-        _check_options(
-            o["method"], o["max_gain"], o["eta"], o["epsilon"],
-            o["max_iter"], o["tol"],
-        )  # fmt: skip
+        _check_options(o["method"], o["max_gain"], o["eta"], o["epsilon"])
         if isinstance(o["passes"], bool) or o["passes"] not in (1, 2):
             raise ValueError(f"passes must be 1 or 2, got {o['passes']!r}")
         if not o["pixel_size"] > 0:
@@ -736,7 +733,6 @@ class DepthResolved(Estimator):
         data: ArrayLike,
         out: WritableArrayLike | None,
         compute: Callable[[Tensor, int, int | None], Tensor],
-        overhead: float,
     ) -> WritableArrayLike:
         raw = data.array if isinstance(data, Labeled) else data
         shape = tuple(int(s) for s in raw.shape)
@@ -747,10 +743,15 @@ class DepthResolved(Estimator):
         out = prepare_out(out, shape, like=raw, dtype=self.dtype)
         backend = resolve_backend(self.dtype, self.device, like=raw)
         whole = {axis} if tv is None else {axis, tv}
+        # the kernels work in float64 (float32 on MPS): about 8 block-sized
+        # arrays for Vermeer, 24 with the TV solver of Smith
+        device = torch.device(backend["device"])
+        acc = torch.float32 if device.type == "mps" else torch.float64
+        overhead = 8.0 if tv is None else 24.0
         block = _block_shape(
             shape,
             whole,
-            get_config().memory / (backend["dtype"].itemsize * overhead),
+            get_config().memory / (acc.itemsize * overhead),
             chunks_of(out),
         )
         chunks = blocks(
@@ -782,7 +783,7 @@ class DepthResolved(Estimator):
             k: o[k]
             for k in (
                 "pixel_size", "passes", "method", "eta", "epsilon",
-                "noise_power", "max_iter", "tol",
+                "noise_power",
             )
         }  # fmt: skip
 
@@ -795,7 +796,7 @@ class DepthResolved(Estimator):
         def compute(x: Tensor, axis: int, tv: int | None) -> Tensor:
             return _corrected(x, axis, tv, max_gain=max_gain, **options)
 
-        return self._stream(data, out, compute, overhead=8.0)
+        return self._stream(data, out, compute)
 
     def attenuation(
         self, data: ArrayLike, out: WritableArrayLike | None = None
@@ -822,7 +823,7 @@ class DepthResolved(Estimator):
             return _mu(x, axis, tv, **options)
 
         with torch.no_grad():
-            return self._stream(data, out, compute, overhead=8.0)
+            return self._stream(data, out, compute)
 
 
 def _block_shape(
