@@ -15,16 +15,30 @@ from ._dwt import (
     waverec2,
 )
 from ._munch import stripe_damping
+from ._vsnr import (
+    VSNRSolution,
+    dirac,
+    gaussian_stripe,
+    line,
+    operator_norm,
+    vsnr_solve,
+)
 
 __all__ = [
+    "VSNRSolution",
     "Wavelet",
+    "dirac",
     "dwt",
     "dwt2",
+    "gaussian_stripe",
     "get_wavelet",
     "idwt",
     "idwt2",
+    "line",
     "max_level",
+    "operator_norm",
     "stripe_damping",
+    "vsnr_solve",
     "wavedec2",
     "waverec2",
 ]
