@@ -17,12 +17,16 @@ from [Richardson–Lucy](richardson-lucy.md) in three ways. The noise model keep
 the read noise of the camera, as a shifted Poisson law. The estimate is
 regularised by the Frobenius norm of the Hessian, which favours locally smooth
 structures and preserves edges, and it is constrained to be non-negative.
-And the problem is solved to convergence by the alternating direction method of
-multipliers (ADMM), with no early stopping to tune. In the simulations of the
-paper the shifted-Poisson fidelity beats the Gaussian and Poisson ones at every
-photon count, and the Hessian penalty, with the Laplacian, beats the other
-penalties it compares (squared $\ell_2$, $\ell_1$, total variation) at every
-noise level, and the Laplacian in almost all cases.
+And the problem is solved by the alternating direction method of
+multipliers (ADMM), started from zero and stopped by the rule of the paper
+(a relative change of $10^{-3}$, or 150 iterations). That rule is part of the
+method: the result is an early-stopped iterate, not the minimiser of the
+objective (see [below](#the-stopping-rule-is-part-of-the-method)). In the simulations of the
+paper the shifted-Poisson fidelity matches or beats the Gaussian and Poisson
+ones at every photon count (it ties with Poisson at 1000 photoelectrons). The
+Hessian penalty and the Laplacian beat the other penalties it compares (squared
+$\ell_2$, $\ell_1$, total variation) at every noise level, and the Hessian beats
+the Laplacian in almost all cases.
 
 Use it for images with peaks of a few to a few hundred photoelectrons, where
 read noise matters and Richardson–Lucy amplifies noise. The price is one weight $\nu$ to choose (a default is
@@ -45,8 +49,8 @@ number recorded in the whole stack.
 
 The data are first brought to electrons. The dark field (or, without a shading
 estimate, the camera offset) is subtracted, the result is divided by the flat
-field, rescaled to unit median, and by the gain; the read-noise variance
-becomes $\tilde\sigma^2 = \sigma^2 / g^2$. Both come from the
+field, rescaled to unit median, and by the gain; the read-noise variance of the
+result is $\tilde\sigma^2 = \sigma^2 / (g\,f)^2$ pixel by pixel. The camera terms come from the
 [`SensorEstimate`](../../reference/estimates.md) and
 [`ShadingEstimate`](../../reference/estimates.md) given to `fit`. Without a
 sensor estimate the data are taken to be in electrons and $\tilde\sigma^2 = 0$.
@@ -62,7 +66,7 @@ sensor estimate the data are taken to be in electrons and $\tilde\sigma^2 = 0$.
     \quad
     \tilde{\boldsymbol{\varepsilon}} \sim \mathcal{N}(\mathbf{0}, \tilde\sigma^2),
     \qquad
-    \tilde\sigma^2 = \frac{\sigma^2}{g^2},
+    \tilde\sigma^2 = \frac{\sigma^2}{(g\,\mathbf{f})^2},
     $$
 
     with $\mathbf{y}$ the recorded stack in ADU, $\mathbf{d}$ the dark field
@@ -89,7 +93,7 @@ sensor estimate the data are taken to be in electrons and $\tilde\sigma^2 = 0$.
 | $\tilde{\mathbf{y}}$ (electrons) | $\tilde{y}$ |
 | $g$ | $\gamma$ |
 | $\sigma^2$ (ADU²) | $\sigma^2$ |
-| $\tilde\sigma^2$ (e⁻²) | $\tilde\sigma^2 = (\sigma/\gamma)^2$ |
+| $\tilde\sigma^2$ (e⁻²) | $\tilde\sigma^2 = (\sigma/\gamma)^2$ (equal to the optix one for $\mathbf{f} \equiv \mathbf{1}$) |
 | $\mathbf{A}$, $\mathbf{h}$ | $A$, $h$ |
 | $\mathbf{d}$, $\mathbf{f}$ | dark-field and flat-field images (Methods) |
 
@@ -97,8 +101,10 @@ The paper estimates $g$ and $\sigma$ from the focal stack itself with the method
 [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399), after the flat-field
 correction (SI §F); in optix that is the job of
 [`PoissonGaussian`](../sensor/poisson-gaussian.md), and the result is passed as
-`init=sensor`. As in the paper, these estimates should describe the
-flat-corrected data: the code divides the variance by $g^2$ only.
+`init=sensor`. A `SensorEstimate` describes the raw data, so the flat field enters
+the read-noise variance as above, and equals the paper's model for a flat field
+of 1. The shot noise of the corrected data, of variance
+$(\mathbf{A}\mathbf{x})/\mathbf{f}$, is still modelled as $\mathbf{A}\mathbf{x}$, as in the paper.
 
 ## Probabilistic model
 
@@ -194,7 +200,7 @@ splits, then the duals (SI Eqs. S9–S15):
     \mathbf{z}_1 &\leftarrow \mathrm{prox}_{\ell/\rho}(\mathbf{A}\mathbf{x} + \mathbf{u}_1)
       \text{ on } \mathcal{C}, \quad \mathbf{A}\mathbf{x} + \mathbf{u}_1 \text{ elsewhere} \\
     \mathbf{z}_2 &\leftarrow \max(\mathbf{x} + \mathbf{u}_2, 0) \\
-    \mathbf{z}_3 &\leftarrow \max\!\Bigl(1 - \frac{\nu/\rho}{\lVert (\mathbf{H}\mathbf{x} + \mathbf{u}_3)_j \rVert_2}, 0\Bigr)
+    [\mathbf{z}_3]_j &\leftarrow \max\!\Bigl(1 - \frac{\nu/\rho}{\lVert (\mathbf{H}\mathbf{x} + \mathbf{u}_3)_j \rVert_2}, 0\Bigr)
       (\mathbf{H}\mathbf{x} + \mathbf{u}_3)_j \\
     \mathbf{u}_k &\leftarrow \mathbf{u}_k + \mathbf{A}_k\mathbf{x} - \mathbf{z}_k,
       \quad \mathbf{A}_1 = \mathbf{A},\ \mathbf{A}_2 = \mathbf{I},\ \mathbf{A}_3 = \mathbf{H}
@@ -242,7 +248,7 @@ Input: data Y, PSF h, sensor (g, σ²) and shading (d, f) estimates, nu (optiona
 Preprocess: ỹ = (y − d) / f / g;  σ̃² = σ² / g²;  ỹ ← max(ỹ, −σ̃²)
             h ← h / (sum of each xy-plane of h)
 For each image:
-    ν = nu, or κ · (sum of h) / max(ỹ) with κ = 0.1
+    ν = nu, or κ · (sum of h) / q(ỹ) with κ = 0.1 and q the 99.9th percentile
     ρ = 6000 ν / max(ỹ)               (6 / max(ỹ) without a regulariser)
     Initialise x = z1 = z2 = z3 = u1 = u2 = u3 = 0 on the grid of size ≥ L + K − 1
     Repeat for k = 1 … 150:
@@ -255,10 +261,12 @@ For each image:
 Return x, cropped to the observed region
 ```
 
-The number of iterations and the last relative change of every block are
-recorded in `history.extras["iterations"]` and `history.extras["change"]`; the
-values of $\nu$, $\rho$ and $\max \tilde{y}$ used for each image are the
-attributes `nu`, `rho` and `peak` after `fit`.
+The number of iterations, the last relative change and the last primal and dual
+residuals of every block are recorded in `history.extras["iterations"]`,
+`["change"]`, `["primal_residual"]` and `["dual_residual"]`; the residuals tend to
+0 only at convergence. The values of $\nu$, $\rho$, $\max \tilde{y}$ and the
+99.9th percentile of $\tilde{y}$ used for each image are the attributes `nu`,
+`rho`, `peak` and `robust_peak` after `fit`.
 
 ## Faithful mode and extensions
 
@@ -267,20 +275,21 @@ $\rho = 6000\nu / \max\tilde{y}$, the per-plane PSF normalisation, the start fro
 zero, the update of $\mathbf{x}$ first, and the stopping rule. The defaults of
 `faithful=False` are the same. The weight `nu` is tuned per data set in the paper
 and any value keeps the estimate faithful, as does `regulariser="none"`, one of
-the paper's comparison variants (Table 1). Every other option marks the
-estimate as not faithful.
+the paper's comparison variants (Table 1). `halo` and `block` are memory settings
+and keep it faithful too, even when they split an image; every other option marks
+the estimate as not faithful.
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
-| `nu` | regularisation weight $\nu \ge 0$ | `None` (rule below, not in the paper) | `None` |
+| `nu` | regularisation weight $\nu \ge 0$ (any value is faithful) | `None` (rule below, not in the paper) | `None` |
 | `regulariser` | `"hessian"`: Frobenius norm of the Hessian; `"none"`: non-negativity only, $\rho = 6/\max\tilde{y}$; `"tv"`: isotropic total variation, extension | `"hessian"` | `"hessian"` |
 | `rho` | ADMM penalty $\rho > 0$ | `None` ($6000\nu/\max\tilde{y}$) | `None` |
 | `max_iter` | iteration cap | 150 | 150 |
 | `tol` | relative-change tolerance; `None` runs `max_iter` iterations | $10^{-3}$ | $10^{-3}$ |
 | `psf_norm` | `"plane"`: each xy-plane sums to 1; `"sum"`: the PSF sums to 1 (extension) | `"plane"` | `"plane"` |
 | `weights` | per-axis weights $w_a$ of the differences, $\mathbf{D}_a \to w_a \mathbf{D}_a$ (extension) | `None` (unit weights) | `None` |
-| `halo` | halo width per spatial axis, at least the PSF size | `None` (twice the PSF size) | `None` |
-| `block` | core block size per spatial axis | `None` (memory budget) | `None` |
+| `halo` | halo width per spatial axis, at least the PSF size (memory setting, faithful) | `None` (twice the PSF size) | `None` |
+| `block` | core block size per spatial axis (memory setting, faithful) | `None` (memory budget) | `None` |
 
 A variant with the Poisson likelihood ($\tilde\sigma^2 = 0$) is obtained by
 fitting without a sensor estimate. The total-variation regulariser is one of
@@ -293,29 +302,50 @@ instance $w_a = \min(s) / s_a$ for the voxel spacings $s_a$.
 as such in the docstrings:
 
 - **Default $\nu$.** The paper tunes $\nu$ per data set (it scans 0.005 to 0.1) and gives
-  no default. The default is $\nu = \kappa \sum\mathbf{h} / \max\tilde{y}$ with
-  $\kappa = 0.1$, per image, where $\sum\mathbf{h}$ is the sum of the normalised PSF (1 for
-  `psf_norm="sum"`, the number of planes for `"plane"`). The rule is
-  scale-invariant: writing $\mathbf{x} = s\hat{\mathbf{x}}$ with $s = \max\tilde{y}$,
-  the shifted-Poisson fidelity is, to second order, a weighted least squares with
-  the noise variance of the data, and a prior that does not depend on the
-  photon count, $\nu' \lVert \mathbf{H}\hat{\mathbf{x}} \rVert$, gives $\nu = \nu' / s$.
-  The read noise drops out. The constant $\kappa$ was calibrated on 18 simulated cases
-  (blobs, filaments and their mixture, in 2-D and 3-D, with peaks of 10, 100 and
-  1000 photoelectrons, $\gamma = 2$, $\sigma = 3$ as in the paper): on average its
-  SNR is 1.3 dB below that of the best $\nu$ of a fine grid, and 4 dB in the worst
-  case, where the image content decides (smooth blobs want a larger $\nu$, thin
-  filaments a smaller one). Pass `nu` to set it.
+  no default. The default is $\nu = \kappa \sum\mathbf{h} / q_{99.9}(\tilde{y})$ with
+  $\kappa = 0.1$, per image, where $q_{99.9}$ is the 99.9th percentile of the prepared
+  data (computed exactly in the pass of `fit`, stored as `robust_peak`: unlike the
+  maximum, a hot pixel or a single bright bead barely changes it) and
+  $\sum\mathbf{h}$ is the sum of the normalised PSF (1 for `psf_norm="sum"`, the number
+  of planes for `"plane"`). $\rho$ still uses $\max\tilde{y}$, the paper's rule.
+  The $1/q$ scaling is that of a MAP estimate whose prior on the normalised image
+  $\hat{\mathbf{x}} = \mathbf{x}/s$, with $s$ the peak, is the same at every photon count,
+  $-\log p(\hat{\mathbf{x}}) = \kappa \lVert \mathbf{H}\hat{\mathbf{x}} \rVert + \text{const}$.
+  The Poisson likelihood is homogeneous, $\ell(s\hat{\mathbf{x}}; s\hat{\mathbf{y}}) = s\,\ell(\hat{\mathbf{x}}; \hat{\mathbf{y}})$ up to
+  a constant, so the objective is $\ell(\mathbf{x}) + (\kappa/s) \lVert \mathbf{H}\mathbf{x} \rVert$ and
+  $\nu = \kappa/s$. The rule does not use $\tilde\sigma^2$; with read noise the
+  shifted-Poisson likelihood is not homogeneous in $s$, so it is an approximation there.
+  The constant $\kappa$ was calibrated for the default stopping rule, and is not valid with
+  other `tol`, `max_iter` or `rho`, on 54 simulated cases (blobs, filaments and their
+  mixture, in 2-D and 3-D, with peaks of 10, 100 and 1000 photoelectrons,
+  $\gamma = 2$, $\sigma = 3$ as in the paper, three seeds each): on average its SNR is
+  1.2 dB below that of the best $\nu$ of a fine grid, and 4.8 dB in the worst case
+  (3-D filaments at 100 photoelectrons), where the image content decides (smooth blobs
+  want a larger $\nu$, thin filaments a smaller one). In 6 of the 54 cases the default is
+  0.6 to 1.1 dB below `regulariser="none"`. Pass `nu` to set it.
 - **Grid.** $P$ is, along each axis, the observed size plus the PSF size minus one,
   rounded up to a fast FFT size. The paper says only that $N > M$.
-- **Output.** The result is $\mathbf{x}$, which may be slightly negative, cropped
-  to the observed region. The paper does not say whether $\mathbf{x}$ or $\mathbf{z}_2$ is returned.
+- **Output.** The result is $\mathbf{x}$, cropped to the observed region, not
+  projected onto $\mathbf{x} \ge 0$: 13 to 26 % of its voxels are negative at the stop,
+  by less than 0.4 % of the peak. The paper does not say whether $\mathbf{x}$ or
+  $\mathbf{z}_2$ is returned.
 - **Stopping rule.** The paper stops on the "relative change" of the iterates, without
   saying of which variable; it is $\mathbf{x}$, in float64 norms.
 - **Halo.** Twice the PSF size.
 - **Camera.** The dark field replaces the offset when a shading estimate is given.
   The flat field is rescaled to unit median, as in the Methods. A per-frame baseline
   of the shading estimate is ignored, with a warning.
+
+### The stopping rule is part of the method
+
+With the paper's $\rho$ rule, tolerance and iteration cap, the result is an
+early-stopped ADMM iterate, not the minimiser of the objective of Eq. (5). On
+simulated 2-D data ($\gamma = 2$, $\sigma = 3$, peaks of 10 to 1000 photoelectrons) it is
+26 to 34 % (relative $\ell_2$ distance) from the minimiser, and its SNR is 2 to
+4.5 dB higher. The stop regularises too: the result depends on `tol`, `max_iter` and
+`rho`, not only on $\nu$, and tightening `tol` with the default $\nu$ lowers the SNR.
+The primal and dual residuals recorded in `history.extras` are large at the stop and
+vanish only at convergence, so a small relative change is not convergence.
 
 !!! warning "PSF normalisation"
     The per-plane normalisation assumes that every plane of the PSF carries the same
@@ -331,20 +361,29 @@ as such in the docstrings:
 Large images are cut into blocks with a halo and each block is solved as an
 image of its own, as for [Richardson–Lucy](richardson-lucy.md#memory-and-streaming)
 (`blocks`, halo streaming, `PaddedConvolution`). `fit` makes one pass over the
-data to find the maximum $\max\tilde{y}$ of every image, from which $\nu$ and $\rho$ follow,
+data to find, for every image, its maximum $\max\tilde{y}$ and its 99.9th percentile
+(exactly, by keeping the largest 0.1 % of its values), from which $\rho$ and $\nu$ follow,
 so that every block of an image shares them. `apply` makes a second pass.
 
-The solver is much hungrier than Richardson–Lucy. It holds, per voxel of the
-loaded block and its padding, the grid, the splits and the duals: about
-$17 + 6C$ buffers for $C$ regulariser components, that is 53 for the 3-D
-Hessian ($C = 6$), 35 for the 2-D Hessian ($C = 3$), and 17 without a
-regulariser. An iteration costs $5 + 2C$ FFTs of the grid, 17 for the 3-D Hessian. The block size is chosen from the
-memory budget (`optix.config(memory=...)`), or set with `block`.
+The solver is much hungrier than Richardson–Lucy. Its memory is counted on the FFT
+grid of a block, the loaded block (core and halo) plus the PSF, rounded up: about
+$21 + 2.5C$ buffers per grid voxel for $C$ regulariser components (36 for the 3-D
+Hessian, $C = 6$; 28.5 for the 2-D Hessian, $C = 3$; 21 without a regulariser),
+measured on the peak use of the solver, plus 4 per loaded voxel for the data and
+the read noise. An iteration costs $5 + 2C$ FFTs of the grid, 17 for the 3-D
+Hessian. The block size is chosen from the memory budget
+(`optix.config(memory=...)`), or set with `block`.
 
-The $\mathbf{x}$-update is a global solve, so the block-wise result is not the
-whole-image one near the seams, which Richardson–Lucy's is along image edges.
-The seams fade with the halo; a `RuntimeWarning` says when an image is split.
-Raise the memory budget or pass `block=` to avoid it.
+When the budget leaves a core under a quarter of the loaded block, almost all of
+every solve would be discarded, and `apply` raises a `ValueError` instead. The
+message gives the budget, the core and loaded sizes, the fraction kept, the memory a
+whole-image solve needs and the memory of blocks that keep at least a quarter. Raise
+the budget, pass a smaller `halo` or choose `block` explicitly (an explicit `block`
+is respected).
+
+The $\mathbf{x}$-update is a global solve, so the block-wise result differs from the
+whole-image one near the seams, and the difference fades with the halo width. A
+`RuntimeWarning` says when an image is split.
 
 ## Usage
 
@@ -376,11 +415,13 @@ The example blurs a test pattern with a Gaussian PSF from
 
 >>> # 3. The weights that were used, and the errors against the truth.
 >>> round(float(ikoma.nu), 4), round(float(ikoma.rho), 2)
-(0.0078, 3.68)
+(0.0094, 4.41)
 >>> ikoma.history.extras["iterations"], ikoma.is_faithful
 ([150.0], True)
+>>> sorted(ikoma.history.extras)
+['change', 'dual_residual', 'iterations', 'primal_residual']
 >>> [round(float((e - x).abs().mean()), 2) for e in (x_ikoma, x_rl)]
-[1.38, 1.99]
+[1.35, 1.99]
 ```
 
 Common variations: `Ikoma(psf, nu=0.02)` to set the weight, then
@@ -391,11 +432,16 @@ for a `ShadingEstimate` with the dark and flat fields; a 3-D PSF and a
 and `out`, processed block by block. The function `ikoma(data, psf, ...)` is a
 one-line shortcut. See the [API reference](../../reference/deconv.md).
 
-The implementation is checked against the ADMM written out from the equations of
-the SI on small problems, and on synthetic stacks from `optix.models` for the
-orderings of the paper's Table 1 (shifted Poisson over Poisson over Gaussian,
-and the Hessian penalty over the others), for the gain from modelling the
-unknown boundary, and for the agreement of float32 and float64.
+The implementation is checked against the equations of the SI: S16 to S19 written
+out independently of `admm_fft` on a 3-D problem, with explicit FFTs, must give the
+same estimate. On synthetic stacks from `optix.models` the tests check that the
+Hessian penalty is above no regulariser and above the raw data, and within 0.3 dB of
+total variation or better; that the shifted-Poisson fidelity is at least as good as the
+Poisson one at 10 photoelectrons; that the stopping rule stops where it should; that
+modelling the unknown boundary lowers the error at the edges; that a hot pixel
+moves $\rho$ but barely $\nu$; that a flat field with read noise gives the corrected
+data of the camera model; that the memory budget is counted on the FFT grid; and that
+float32 and float64 agree.
 
 ## References
 

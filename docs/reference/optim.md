@@ -35,6 +35,20 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - SquaredL2
         - ShiftedPoisson
 
+## Linear operators
+
+::: optix.optim
+    options:
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      members:
+        - LinearOperator
+        - Circulant
+        - Identity
+        - Convolution
+        - as_circulant
+
 ## Difference operators
 
 ::: optix.optim
