@@ -139,17 +139,19 @@ from optix.sensor import PhotonTransferCurve
 truth = random_sensor((64, 64), offset=100.0, read_sd=2.0, gain=0.5, seed=0)
 electrons = [100.0 * 2**k for k in range(8)] + [40000.0]
 levels = [
-    simulate_sensor(torch.full((2, 64, 64), e), truth, seed=i,
-                    quantize=torch.uint16)
+    simulate_sensor(
+        torch.full((2, 64, 64), e), truth, seed=i, quantize=torch.uint16
+    )
     for i, e in enumerate(electrons)
 ]
-dark = simulate_sensor(torch.zeros(16, 64, 64), truth, seed=99,
-                       quantize=torch.uint16)
+dark = simulate_sensor(
+    torch.zeros(16, 64, 64), truth, seed=99, quantize=torch.uint16
+)
 
 ptc = PhotonTransferCurve(max_value=65535).fit(levels, dark=dark)
 s = ptc.estimates["sensor"]
-print(float(s.gain), float(s.variance))   # about 0.5 and 4.0
-print(s.meta["read_noise_e"])              # sigma / K, about 4 e-
+print(float(s.gain), float(s.variance))  # about 0.5 and 4.0
+print(s.meta["read_noise_e"])  # sigma / K, about 4 e-
 ```
 
 Pass `exposure=` (photons per pixel for each level) for the responsivity and

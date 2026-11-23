@@ -176,18 +176,15 @@ Richardson–Lucy iteration.
 ```python
 import torch
 from optix.deconv import RichardsonLucy, WienerButterworth
-from optix.deconv.utils import PaddedConvolution
+from optix.models import gaussian_psf, simulate_blur
 
 torch.manual_seed(0)
 
 # 1. A Gaussian PSF and a blurred, Poisson-noisy test pattern.
-r = torch.arange(-7, 8, dtype=torch.float32)
-psf = torch.exp(-(r[:, None] ** 2 + r[None, :] ** 2) / (2 * 2.0**2))
-psf = psf / psf.sum()
+psf = gaussian_psf((15, 15), sigma=2.0)
 x = torch.full((96, 96), 5.0)
 x[20:76:8, 20:76] = 200.0
-op = PaddedConvolution(psf, (96, 96))
-y = torch.poisson(op.forward(op.pad(x)))
+y = torch.poisson(simulate_blur(x, psf))
 
 # 2. One WB iteration, against 20 Richardson–Lucy iterations.
 wb = WienerButterworth(psf).fit(y)

@@ -215,27 +215,28 @@ makes an iteration dearer than one of Richardson–Lucy;
 ```python
 import torch
 from optix.deconv import Snyder, RichardsonLucy
-from optix.deconv.utils import PaddedConvolution
+from optix.models import gaussian_psf, simulate_blur
 from optix.estimates import SensorEstimate
 
 torch.manual_seed(0)
 
 # 1. A Gaussian PSF and a test pattern, imaged by a camera with read noise.
-r = torch.arange(-7, 8, dtype=torch.float32)
-psf = torch.exp(-(r[:, None] ** 2 + r[None, :] ** 2) / (2 * 2.0**2))
-psf = psf / psf.sum()
+psf = gaussian_psf((15, 15), sigma=2.0)
 x = torch.full((64, 64), 2.0)
 x[16:48:8, 16:48] = 40.0
-op = PaddedConvolution(psf, (64, 64))
 gain, offset, sigma = 2.0, 100.0, 3.0
-counts = torch.poisson(op.forward(op.pad(x)))
+counts = torch.poisson(simulate_blur(x, psf))
 y = offset + gain * counts + sigma * torch.randn(64, 64)
 sensor = SensorEstimate(offset=offset, gain=gain, variance=sigma**2)
 
 # 2. Snyder with the camera model; Richardson–Lucy for comparison.
 sn = Snyder(psf, n_iter=30).fit(y, init=sensor)
 x_sn = sn.apply(y)
-x_sp = Snyder(psf, n_iter=30, noise="shifted-poisson").fit(y, init=sensor).apply(y)
+x_sp = (
+    Snyder(psf, n_iter=30, noise="shifted-poisson")
+    .fit(y, init=sensor)
+    .apply(y)
+)
 x_rl = RichardsonLucy(psf, n_iter=30).fit(y, init=sensor).apply(y)
 
 # 3. Errors against the truth (in electrons).

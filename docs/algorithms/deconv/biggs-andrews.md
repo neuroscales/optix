@@ -150,18 +150,15 @@ noisy data.
 ```python
 import torch
 from optix.deconv import BiggsAndrews, RichardsonLucy
-from optix.deconv.utils import PaddedConvolution
+from optix.models import gaussian_psf, simulate_blur
 
 torch.manual_seed(0)
 
 # 1. A Gaussian PSF and a blurred, Poisson-noisy test pattern.
-r = torch.arange(-7, 8, dtype=torch.float32)
-psf = torch.exp(-(r[:, None] ** 2 + r[None, :] ** 2) / (2 * 2.0**2))
-psf = psf / psf.sum()
+psf = gaussian_psf((15, 15), sigma=2.0)
 x = torch.full((96, 96), 5.0)
 x[20:76:8, 20:76] = 200.0
-op = PaddedConvolution(psf, (96, 96))
-y = torch.poisson(op.forward(op.pad(x)))
+y = torch.poisson(simulate_blur(x, psf))
 
 # 2. Accelerated and plain deconvolution, both with the χ² stopping rule.
 ba = BiggsAndrews(psf).fit(y)
@@ -170,7 +167,9 @@ rl = RichardsonLucy(psf).fit(y)
 x_rl = rl.apply(y)
 
 # 3. Iterations used, and their unaccelerated equivalent.
-print(ba.history.extras["iterations"], ba.history.extras["effective_iterations"])
+print(
+    ba.history.extras["iterations"], ba.history.extras["effective_iterations"]
+)
 print(rl.history.extras["iterations"])
 print(float((x_ba - x).abs().mean()), float((x_rl - x).abs().mean()))
 ```

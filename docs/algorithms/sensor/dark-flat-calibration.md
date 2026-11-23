@@ -98,8 +98,8 @@ flats = simulate_sensor(1000 * illumination.expand(50, 32, 32), camera, seed=2)
 
 cal = DarkFlatCalibration().fit(flats, dark=darks)
 shading = cal.estimates["shading"]  # flat has mean 1
-sensor = cal.estimates["sensor"]    # offset and read variance
-corrected = cal.apply(flats)        # about uniform
+sensor = cal.estimates["sensor"]  # offset and read variance
+corrected = cal.apply(flats)  # about uniform
 ```
 
 Variations: pass a precomputed dark map, or a `SensorEstimate` from an

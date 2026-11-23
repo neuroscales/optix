@@ -150,15 +150,16 @@ import torch
 from optix.models import random_sensor, simulate_sensor
 from optix.sensor import PoissonGaussian
 
-truth = random_sensor((128, 128), offset=100.0, offset_sd=0.0,
-                      read_sd=2.0, gain=0.5, seed=0)
+truth = random_sensor(
+    (128, 128), offset=100.0, offset_sd=0.0, read_sd=2.0, gain=0.5, seed=0
+)
 ramp = 20.0 + 3000.0 * torch.linspace(0, 1, 128).expand(128, 128)
 y = simulate_sensor(ramp.expand(4, 128, 128), truth, seed=1)
 
-est = PoissonGaussian(faithful=False).fit(y)       # pooled over the 4 frames
+est = PoissonGaussian(faithful=False).fit(y)  # pooled over the 4 frames
 s = est.estimates["sensor"]
-print(float(s.gain))                                 # about 0.5
-print(float(s.variance), 2.0**2 - 0.5 * 100.0)      # b = sigma^2 - g o, about -46
+print(float(s.gain))  # about 0.5
+print(float(s.variance), 2.0**2 - 0.5 * 100.0)  # b = sigma^2 - g o, about -46
 ```
 
 Pass `data_range=(0, 4095)` (or `"auto"`) for integer data. To obtain the

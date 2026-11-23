@@ -170,8 +170,9 @@ torch.manual_seed(0)
 
 # 1. A Gaussian PSF (sigma 1.5 voxels) at 40 random sub-voxel positions.
 H = W = 256
-yy, xx = torch.meshgrid(torch.arange(H) * 1.0,
-                        torch.arange(W) * 1.0, indexing="ij")
+yy, xx = torch.meshgrid(
+    torch.arange(H) * 1.0, torch.arange(W) * 1.0, indexing="ij"
+)
 img = torch.full((H, W), 20.0)
 g = torch.Generator().manual_seed(1)
 centres = 16 + torch.rand(40, 2, generator=g) * (H - 32)
