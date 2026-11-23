@@ -11,6 +11,22 @@ from ._stable import stirling_residual as _res
 def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
     """KL(Dir(a) ‖ Dir(b)).
 
+    !!! note
+        With a₀ = ∑ₖ aₖ and b₀ = ∑ₖ bₖ,
+        KL = log Γ(a₀) − log Γ(b₀) − ∑ₖ (log Γ(aₖ) − log Γ(bₖ)) +
+        ∑ₖ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀)), rewritten with
+        [`stirling_residual`][optix.special.stirling_residual] r,
+        [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
+        [`ratio_minus_log`][optix.special.ratio_minus_log] g as
+
+        ```text
+        ∑ₖ (bₖ g(aₖ/bₖ) + ½ log(aₖ/bₖ)) − (b₀ g(a₀/b₀) + ½ log(a₀/b₀))
+        + r(a₀) − r(b₀) − ∑ₖ (r(aₖ) − r(bₖ))
+        − ∑ₖ (aₖ − bₖ) lmd(aₖ) + (a₀ − b₀) lmd(a₀)
+        ```
+
+        so that the log Γ terms of large concentrations cancel exactly.
+
     Parameters
     ----------
     a, b : (..., K) Tensor
@@ -21,23 +37,6 @@ def kl_dirichlet(a: Tensor, b: Tensor) -> Tensor:
     -------
     (...) Tensor
         Divergence, summed over the last dim.
-
-    Notes
-    -----
-    With a₀ = ∑ₖ aₖ and b₀ = ∑ₖ bₖ,
-    KL = log Γ(a₀) − log Γ(b₀) − ∑ₖ (log Γ(aₖ) − log Γ(bₖ)) +
-    ∑ₖ (aₖ − bₖ) (ψ(aₖ) − ψ(a₀)), rewritten with
-    [`stirling_residual`][optix.special.stirling_residual] r,
-    [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
-    [`ratio_minus_log`][optix.special.ratio_minus_log] g as
-
-    ```text
-    ∑ₖ (bₖ g(aₖ/bₖ) + ½ log(aₖ/bₖ)) − (b₀ g(a₀/b₀) + ½ log(a₀/b₀))
-    + r(a₀) − r(b₀) − ∑ₖ (r(aₖ) − r(bₖ))
-    − ∑ₖ (aₖ − bₖ) lmd(aₖ) + (a₀ − b₀) lmd(a₀)
-    ```
-
-    so that the log Γ terms of large concentrations cancel exactly.
     """
     a0 = a.sum(-1)
     b0 = b.sum(-1)
@@ -59,6 +58,27 @@ def kl_gamma(
 ) -> Tensor:
     """KL(Gamma(shape_q, rate_q) ‖ Gamma(shape_p, rate_p)), elementwise.
 
+    !!! note
+        With shapes a and rates b,
+
+        ```text
+        KL = (a_q − a_p) ψ(a_q) − log Γ(a_q) + log Γ(a_p)
+             + a_p log(b_q/b_p) + a_q (b_p − b_q) / b_q
+        ```
+
+        rewritten with
+        [`stirling_residual`][optix.special.stirling_residual] r,
+        [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
+        [`ratio_minus_log`][optix.special.ratio_minus_log] g as
+
+        ```text
+        a_p (g(a_q/a_p) + g(b_p/b_q)) + ½ log(a_q/a_p)
+        + (a_q − a_p) ((b_p − b_q) / b_q − lmd(a_q)) + r(a_p) − r(a_q)
+        ```
+
+        which has no cancellation between large log Γ / ψ values (float32
+        stays accurate at shapes ≈ 1e6).
+
     Parameters
     ----------
     shape_q, rate_q : Tensor
@@ -70,27 +90,6 @@ def kl_gamma(
     -------
     Tensor
         Divergence (broadcast shape of the inputs).
-
-    Notes
-    -----
-    With shapes a and rates b,
-
-    ```text
-    KL = (a_q − a_p) ψ(a_q) − log Γ(a_q) + log Γ(a_p)
-         + a_p log(b_q/b_p) + a_q (b_p − b_q) / b_q
-    ```
-
-    rewritten with [`stirling_residual`][optix.special.stirling_residual] r,
-    [`log_minus_digamma`][optix.special.log_minus_digamma] lmd and
-    [`ratio_minus_log`][optix.special.ratio_minus_log] g as
-
-    ```text
-    a_p (g(a_q/a_p) + g(b_p/b_q)) + ½ log(a_q/a_p)
-    + (a_q − a_p) ((b_p − b_q) / b_q − lmd(a_q)) + r(a_p) − r(a_q)
-    ```
-
-    which has no cancellation between large log Γ / ψ values (float32
-    stays accurate at shapes ≈ 1e6).
     """
     aq, bq, ap, bp = map(torch.as_tensor, (shape_q, rate_q, shape_p, rate_p))
     return (

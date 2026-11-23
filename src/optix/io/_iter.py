@@ -616,6 +616,14 @@ def frame_batches(
 ) -> Chunks:
     """Batches of samples (frames), one group at a time.
 
+    !!! note
+        Groups are visited one at a time. Within a group, the innermost (in
+        storage) sample axes are taken whole while the budget allows; the
+        next one is split into blocks (rounded down to a multiple of its
+        storage chunk when at least that large) and the outer ones are
+        iterated one index at a time. A warning is emitted when the read
+        amplification over the group and sample axes is large.
+
     Parameters
     ----------
     data : array-like or Labeled
@@ -652,15 +660,6 @@ def frame_batches(
         `(index, data)`: `data` is `(n, *spatial)`, the sample axes
         being flattened in storage order and the spatial axes in layout
         order. Write a result back with `chunk.store(out, result)`.
-
-    Notes
-    -----
-    Groups are visited one at a time. Within a group, the innermost (in
-    storage) sample axes are taken whole while the budget allows; the
-    next one is split into blocks (rounded down to a multiple of its
-    storage chunk when at least that large) and the outer ones are
-    iterated one index at a time. A warning is emitted when the read
-    amplification over the group and sample axes is large.
     """
     source, layout = _layout_for(data, layout, ndim)
     opt = _resolve(source, memory, batch, prefetch, dtype, device, align)
@@ -747,6 +746,11 @@ def row_tiles(
 ) -> Chunks:
     """Strips along one spatial axis holding all samples of one group.
 
+    !!! note
+        On a store chunked along samples, every tile touches every chunk; the
+        read amplification is computed and a warning is emitted when it is
+        large.
+
     Parameters
     ----------
     data : array-like or Labeled
@@ -769,12 +773,6 @@ def row_tiles(
         cut along `axis`).
         Store a per-pixel reduction with `chunk.store(map, r,
         into="map")`.
-
-    Notes
-    -----
-    On a store chunked along samples, every tile touches every chunk; the
-    read amplification is computed and a warning is emitted when it is
-    large.
     """
     source, layout = _layout_for(data, layout, ndim)
     opt = _resolve(source, memory, batch, prefetch, dtype, device, align)
@@ -879,6 +877,10 @@ def blocks(
 ) -> Chunks:
     """nD blocks over the spatial axes, with a halo.
 
+    !!! note
+        Writing results back into `data` itself is wrong when `halo > 0` (a
+        block's halo would read already-processed neighbours).
+
     Parameters
     ----------
     data : array-like or Labeled
@@ -918,11 +920,6 @@ def blocks(
         axes in layout order, `data[inner]` is the core, and `index` is
         where the core lives in `data`. `chunk.store(out, result)`
         crops and writes back.
-
-    Notes
-    -----
-    Writing results back into `data` itself is wrong when `halo > 0` (a
-    block's halo would read already-processed neighbours).
     """
     source, layout = bind(data, layout)
     shape = tuple(int(s) for s in source.shape)

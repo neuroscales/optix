@@ -42,14 +42,13 @@ class Reducer:
     State tensors (named in `_state`) are created on the first
     `update`; a never-updated reducer is the identity of `merge`.
 
-    Notes
-    -----
-    Every reducer satisfies, up to floating-point round-off:
+    !!! note
+        Every reducer satisfies, up to floating-point round-off:
 
-    ```python
-    R().update(cat(a, b)) == R().update(a).update(b)
-                          == R().update(a).merge(R().update(b))
-    ```
+        ```python
+        R().update(cat(a, b)) == R().update(a).update(b)
+                              == R().update(a).merge(R().update(b))
+        ```
     """
 
     _state: ClassVar[tuple[str, ...]] = ()

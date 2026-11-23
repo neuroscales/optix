@@ -135,6 +135,13 @@ def as_tensor(
 ) -> Tensor:
     """Materialise an (already sliced) array-like as a working tensor.
 
+    !!! note
+        Non-native byte order and non-contiguous / negatively strided arrays
+        are normalised first. Data are moved to the device *before* the cast,
+        so e.g. uint16 data cross the host-device link at half the size of
+        float32. A tensor aliasing a read-only buffer (read-only memmap) is
+        never returned: such data are copied.
+
     Parameters
     ----------
     x : array-like
@@ -156,14 +163,6 @@ def as_tensor(
     ------
     TypeError
         For structured, object, string or datetime dtypes.
-
-    Notes
-    -----
-    Non-native byte order and non-contiguous / negatively strided arrays
-    are normalised first. Data are moved to the device *before* the cast,
-    so e.g. uint16 data cross the host-device link at half the size of
-    float32. A tensor aliasing a read-only buffer (read-only memmap) is
-    never returned: such data are copied.
     """
     backend = resolve_backend(dtype, device, like=x)
     if isinstance(x, Tensor):
@@ -242,6 +241,16 @@ def _cast_for(value: Tensor, dtype: object) -> Tensor:
 def store(out: WritableArrayLike, index: Index, value: Tensor) -> None:
     """Write a tensor into a region of a tensor / numpy / zarr output.
 
+    !!! note
+        Floating values written to an integer output are rounded and clamped
+        to the output's range on the value's device, before the transfer (a
+        raw cast wraps around); NaN becomes 0. Floating values of less than
+        single precision (float16, bfloat16) are promoted to float32 first.
+        Integer values written to a narrower integer output are clamped to
+        its range in the same way, instead of wrapping around. Floating values
+        written to a boolean output become `value != 0`. An output without a
+        `dtype` receives the values as they are.
+
     Parameters
     ----------
     out : writable array-like
@@ -250,17 +259,6 @@ def store(out: WritableArrayLike, index: Index, value: Tensor) -> None:
         Region of `out` to write.
     value : Tensor
         Data, broadcastable to `out[index]`.
-
-    Notes
-    -----
-    Floating values written to an integer output are rounded and clamped
-    to the output's range on the value's device, before the transfer (a
-    raw cast wraps around); NaN becomes 0. Floating values of less than
-    single precision (float16, bfloat16) are promoted to float32 first.
-    Integer values written to a narrower integer output are clamped to
-    its range in the same way, instead of wrapping around. Floating values
-    written to a boolean output become `value != 0`. An output without a
-    `dtype` receives the values as they are.
     """
     value = value.detach()
     if isinstance(out, Tensor):
