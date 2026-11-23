@@ -16,7 +16,7 @@ they produce the same kind of result. So algorithms are grouped by **what they
 estimate**, such as:
 
 - the **sensor**: offset, gain and read noise of the camera, defective pixels;
-- the **shading**: flat field, dark image and per-frame baseline;
+- the **shading**: flat field, dark field and per-frame baseline;
 - **stripes and shadows** of a light sheet, and the **attenuation** of light along
   its path;
 - the **background** of an image;

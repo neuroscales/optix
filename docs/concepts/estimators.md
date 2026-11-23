@@ -68,7 +68,7 @@ torch.Size([64, 80])
 estimator itself, so calls can be chained. It reads `Y` in batches (see
 [Axes and layouts](axes-and-layouts.md#streaming-over-large-arrays)) and stores
 what it learns in `estimator.estimates`, a dictionary from the name of a
-*target* to an estimate: `"shading"` for a flat field and a dark image,
+*target* to an estimate: `"shading"` for a flat field and a dark field,
 `"sensor"` for an offset, a gain and a read noise. Calling `fit` again starts
 afresh. For an iterative algorithm the progress of the optimisation is kept in
 `estimator.history`; the layout that was used is kept in `estimator.layout`.
@@ -171,7 +171,7 @@ the same argument, `init`, which accepts
 0.0
 ```
 
-Here `MeanFlat` found the dark image of `MeanDark` in `init` and subtracted it.
+Here `MeanFlat` found the dark field of `MeanDark` in `init` and subtracted it.
 Three rules make this safe:
 
 1. **Nothing is modified.** The estimator works on a clone of what it takes from
