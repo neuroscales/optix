@@ -253,10 +253,15 @@ def test_hooks_compose_with_the_matched_back_projector(accelerate):
     )
     assert n == m == 6
 
-    def close(a, b):  # FFT round-off, relative to the peak
-        return float((a - b).abs().max() / b.abs().max()) < 1e-12
+    # FFT round-off between BackProjection and op.adjoint, relative to the
+    # peak. With acceleration the extrapolation and its clipping at 0
+    # amplify it (seen on torch 2.3), hence a looser float64 bound.
+    tol = 1e-9 if accelerate else 1e-12
 
-    assert close(out, ref)
+    def err(a, b):
+        return float((a - b).abs().max() / b.abs().max())
+
+    assert err(out, ref) < tol, err(out, ref)
     # through the estimator hooks (_init_from, _solve)
     est = WienerButterworth(
         psf,
@@ -268,7 +273,8 @@ def test_hooks_compose_with_the_matched_back_projector(accelerate):
     )
     est._back = lambda op: BackProjection(flipped(psf).to(op.norm), op)
     out = est.fit(data).apply(data)
-    assert close(out, richardson_lucy(data, psf, n_iter=6, dtype=F64))
+    ref = richardson_lucy(data, psf, n_iter=6, dtype=F64)
+    assert err(out, ref) < 1e-12, err(out, ref)
     with pytest.raises(ValueError, match="back and flat"):
         rl_block(data, op, 40.0, n_iter=1, back=back, flat=torch.ones(shape))
 
