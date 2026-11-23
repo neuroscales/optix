@@ -388,7 +388,7 @@ M &= M_a + M_b + \theta^2\,\frac{N_a N_b}{N},
 $$
 
 and the variance is $M / (N - 1)$ (`var(ddof=1)`; for non-integer weights such as
-responsibilities use $M / N$, `var(ddof=0)`). These are Pébay's pairwise formulas.
+responsibilities use $M / N$, `var(ddof=0)`). These are [Pébay's pairwise formulas](https://doi.org/10.1007/s00180-015-0637-z).
 `Moments` never accumulates raw power sums, which lose all their digits when
 the mean is large compared with the spread, and that is exactly the situation
 of a camera whose offset is 100 ADU and whose noise is a few. It also keeps

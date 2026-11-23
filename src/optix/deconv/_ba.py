@@ -30,8 +30,8 @@ class BiggsAndrews(RichardsonLucy):
 
     The iteration ψ of [`RichardsonLucy`][optix.deconv.RichardsonLucy]
     (same model, start, stopping rule, blocks and extensions) is applied
-    to a point predicted from the last two iterates (Biggs and Andrews
-    1997, "technique II"):
+    to a point predicted from the last two iterates ([Biggs and Andrews
+    1997, "technique II"](https://doi.org/10.1364/AO.36.001766)):
 
         yₖ = xₖ + αₖ hₖ,        hₖ = xₖ − xₖ₋₁,
         xₖ₊₁ = yₖ + gₖ,         gₖ = ψ(yₖ) − yₖ,
@@ -87,11 +87,12 @@ class BiggsAndrews(RichardsonLucy):
     fits in one block and the block-wise α otherwise. The scope used for
     each image is recorded in `history.extras["alpha_scope"]`.
 
-    **Stopping rule.** Not specified in the paper, which compares
-    restorations at fixed iteration counts; the default is Lucy's χ²
-    rule of [`RichardsonLucy`][optix.deconv.RichardsonLucy], evaluated on
-    the iterates xₖ. Accelerated iterations amplify noise sooner, so the
-    stopping rule or `n_iter` matters more than for the plain iteration.
+    **Stopping rule.** Not specified in the paper, which compares restorations
+    at fixed iteration counts; the default is
+    [Lucy's](https://doi.org/10.1086/111605) χ² rule of
+    [`RichardsonLucy`][optix.deconv.RichardsonLucy], evaluated on the iterates
+    xₖ. Accelerated iterations amplify noise sooner, so the stopping rule or
+    `n_iter` matters more than for the plain iteration.
 
     !!! references "References"
 
@@ -194,14 +195,14 @@ class BiggsAndrews(RichardsonLucy):
         damping, halo, block
             See [`RichardsonLucy`][optix.deconv.RichardsonLucy].
         alpha_scope : {"global", "block", "auto"}
-            Pixels over which the sums of the acceleration parameter αₖ
-            (Eq. 10) run. `"global"`: the whole image, as in the paper;
-            images larger than one block are iterated in lockstep, with
-            one pass over the data per iteration. `"block"`: each block
-            on its own, in a single pass over the data. `"auto"`:
-            `"global"` when each image fits in one block, else
-            `"block"`. Default (Biggs and Andrews 1997): `"global"`;
-            `"auto"` with `faithful=False`.
+            Pixels over which the sums of the acceleration parameter αₖ (Eq.
+            10) run. `"global"`: the whole image, as in the paper; images
+            larger than one block are iterated in lockstep, with one pass over
+            the data per iteration. `"block"`: each block on its own, in a
+            single pass over the data. `"auto"`: `"global"` when each image
+            fits in one block, else `"block"`. Default ([Biggs and Andrews
+            1997](https://doi.org/10.1364/AO.36.001766)): `"global"`; `"auto"`
+            with `faithful=False`.
         faithful, dtype, device, layout
             See [`Estimator`][optix.Estimator]. After
             [`apply`][optix.Estimator.apply], `is_faithful` is False if
