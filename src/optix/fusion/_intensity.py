@@ -93,6 +93,24 @@ def _core(
     return core
 
 
+def _reservoirs(
+    size: int, seed: int | None, group: int, pair: int, weights: object
+) -> tuple[Reservoir, Reservoir | None]:
+    """Reservoirs of the pixel pairs (and bin weights) of one overlap.
+
+    The seed of each (group, overlap) is derived from (`seed`, group,
+    overlap), so that the samples are independent across groups and
+    overlaps. The weights, when given, go to a twin reservoir with the
+    same seed: both see streams of the same lengths, so they draw the
+    same keys and keep the same positions.
+    """
+    entropy = None if seed is None else (int(seed), group, pair)
+    ss = np.random.SeedSequence(entropy)
+    s = int(ss.generate_state(1, np.uint64)[0]) >> 1
+    values = Reservoir(size, seed=s)
+    return values, (None if weights is None else Reservoir(size, seed=s))
+
+
 class IntensityAdjustment(Estimator):
     """Brightness and contrast adjustment of overlapping tiles (BigStitcher).
 
@@ -102,13 +120,18 @@ class IntensityAdjustment(Estimator):
 
         x̂ᵢ = aᵢ yᵢ + cᵢ,
 
-    estimated by minimising the squared difference of the transformed
-    intensities of all corresponding pixels in the overlap Oᵢⱼ of every
-    pair of tiles (Supplementary Note 17, eq. 8)
+    chosen so that the transformed intensities of corresponding pixels
+    agree in the overlap Oᵢⱼ of every pair of tiles. The mismatch is the
+    squared difference (Supplementary Note 17, eq. 8, read with both
+    tiles of a pair transformed)
 
         Σᵢ Σ_{j ≠ i} Σ_{r ∈ Oᵢⱼ} ((aⱼ yⱼ(r) + cⱼ) − (aᵢ yᵢ(r) + cᵢ))².
 
-    As unconstrained, this has the trivial solution a = c = 0. Each
+    As printed, eq. 8 transforms only one tile of the pair; the two-sided
+    reading is the one of the point-correspondence objective of the
+    paper's global optimisation (Supplementary Note 12, eq. 3), which the
+    paper uses to solve it. As unconstrained, this sum has the trivial
+    solution a = c = 0. Each
     transform is therefore the weighted average of a linear, an additive
     and the identity transform (eq. 9),
 
@@ -119,30 +142,34 @@ class IntensityAdjustment(Estimator):
     Without the identity term (λ₃ = 0), a common offset of all tiles is
     left free (and with λ₂ = 0 a common scale too), so tiles must then be
     fixed (`fixed=`). The
-    paper minimises eq. 8 with the iterative optimiser of its image
+    paper solves eq. 8 with the iterative optimiser of its image
     registration (Supplementary Note 12): each tile's models are fitted by
     least squares to its corresponding points, the pixel values pᵣ = yᵢ(r)
     paired with the current transformed values qᵣ = aⱼ yⱼ(r) + cⱼ of the
-    other tiles, and the fits are repeated until they agree. Those fits
+    other tiles, and the fits are repeated until they agree. The result
+    is the fixed point of these regularised per-tile fits: it minimises
+    the sum above only for λ = (1, 0, 0), not for other weights. Those fits
     only need the count, means, scatters and co-scatter of the pixel pairs
     of each overlap, which are accumulated in one streaming pass over the
     overlaps; the agreed transforms are then the solution of one linear
-    system of size 2T for T tiles (see
+    system of size 2T for T tiles, whose solution is the limit of the
+    paper's iteration (see
     [`solve_intensity`][optix.fusion.utils.solve_intensity]).
 
     Paper notation: Iₐ → yᵢ, α^{Iₐ} → aᵢ, β^{Iₐ} → cᵢ, α′ → a′ᵢ,
     β₁ → c′ᵢ, β₂ → c″ᵢ, Oₐᵦ → Oᵢⱼ.
 
     !!! note "Faithful mode"
-        Eq. 8 and eq. 9 as in the paper. The paper leaves the weights λ
-        to the user and does not give defaults; the default here,
-        (λ₁, λ₂, λ₃) = (0.8, 0.1, 0.1), is not specified in the paper.
-        The paper fits on precomputed downsampled images and offers to cap
-        the number of corresponding pixels per overlap, without stating
-        the factor or the cap: both are off by default (`downsample=1`,
-        `max_pixels=None`). Tiles held at the identity (`fixed=`) are
-        those of the paper's global optimisation (Supplementary Note 12,
-        eq. 3).
+        Eq. 8 (read with both tiles transformed) and eq. 9. The paper
+        leaves the weights λ to the user and does not give defaults; the
+        default here, (λ₁, λ₂, λ₃) = (0.8, 0.1, 0.1), is not specified in
+        the paper. The paper fits on precomputed downsampled images and
+        offers to cap the number of corresponding pixels per overlap,
+        without stating the factor or the cap: both are off in the
+        faithful preset (`downsample=1`, `max_pixels=None`). The
+        `recommended` preset (`faithful=False`) bins by `downsample=4`
+        (see "Noise"). Tiles held at the identity (`fixed=`) are those of
+        the paper's global optimisation (Supplementary Note 12, eq. 3).
 
     !!! note "Positions and correspondences"
         Tiles are placed by translations on a common pixel grid:
@@ -157,7 +184,25 @@ class IntensityAdjustment(Estimator):
     !!! note "Downsampling"
         With `downsample=f`, both tiles of an overlap are averaged over the
         same bins of f pixels per axis (anchored at the corner of the
-        overlap), so that binned values still correspond exactly.
+        overlap), so that binned values still correspond exactly. Partial
+        bins at the far edges of an overlap are weighted by the fraction
+        of a full bin that they hold, i.e. by the inverse of their noise
+        variance relative to a full bin.
+
+    !!! warning "Noise"
+        The per-tile fits regress the other tiles' values on the tile's
+        own noisy values, so noise biases them (errors-in-variables
+        attenuation): with signal variance s² and noise variance σ² in the
+        overlaps, each linear fit shrinks the slope by about
+        s² / (s² + σ²), and the fixed point compounds the shrinkage along
+        the chain of overlaps from the fixed tiles. On a 3 × 3 mosaic with
+        signal standard deviation s ≈ 50 and 20 % overlap
+        (λ = (1, 0, 0), centre tile fixed), the mean error of `scale` is
+        about −6 % at σ = 5 and −48 % at σ = 20 without binning, and
+        −0.4 % and −6 % with `downsample=4`. Binning by f per axis divides
+        σ² by f^D, which is why the paper fits on downsampled images; use
+        `downsample` > 1 on noisy data. `max_pixels` does not reduce the
+        bias.
 
     !!! references "References"
         1. Hörl D, Rojas Rusak F, Preusser F, Tillberg P, Randel N,
@@ -205,7 +250,7 @@ class IntensityAdjustment(Estimator):
         "max_pixels": None,
         "seed": None,
     }
-    recommended = dict(paper)
+    recommended = {**paper, "downsample": 4}
     _free = ("seed",)
 
     def __init__(
@@ -233,15 +278,19 @@ class IntensityAdjustment(Estimator):
             0.1), not specified in the paper.
         downsample : int or sequence of int
             Bin size along each spatial axis (layout order) before the
-            fit. Default 1 (no binning); the paper fits on downsampled
-            images without stating the factor.
+            fit, which reduces the bias that noise puts on the fit (see
+            "Noise" above). Default 1 (no binning) in faithful mode, 4
+            with `faithful=False`; the paper fits on downsampled images
+            without stating the factor.
         max_pixels : int, optional
             Maximum number of corresponding pixels (after binning) per
             overlap, drawn uniformly at random without replacement, so
             that large overlaps do not dominate small ones. Default None:
             all pixels.
         seed : int, optional
-            Seed of the random selection of `max_pixels`.
+            Seed of the random selection of `max_pixels`. Each overlap
+            and group draws from its own stream, derived from
+            (`seed`, group, overlap).
         faithful, dtype, device, layout
             See [`Estimator`][optix.Estimator].
         """
@@ -401,8 +450,8 @@ class IntensityAdjustment(Estimator):
         self._warn_unused(init)
         pos, fixed = self._positions, self._fixed
         ntiles, ndim = pos.shape
+        # an inferred layout is not stored: the next fit infers its own
         layout = self._tile_layout(data, ndim)
-        self.layout = layout
         raws = [_raw(t) for t in data]
         _, _, spatial = layout.positions(len(raws[0].shape))
         if len(spatial) != ndim:
@@ -426,7 +475,8 @@ class IntensityAdjustment(Estimator):
         )
         o = self.options
         cap = o["max_pixels"]
-        reservoirs = {}
+        binned = any(f > 1 for f in factor)
+        full = math.prod(factor)
         itemsize = backend["dtype"].itemsize
         budget = max(1, get_config().memory // (8 * itemsize))
         for k, (i, j, si, sj) in enumerate(boxes):
@@ -448,27 +498,37 @@ class IntensityAdjustment(Estimator):
                 )
                 for v in views
             )
+            # reservoirs of this overlap only, per group: (pairs, weights)
+            reservoirs: dict[int, tuple[Reservoir, Reservoir | None]] = {}
             for a, b in zip(ca, cb, strict=True):
                 g = int(np.ravel_multi_index(a.group, gshape)) if gshape else 0
-                xa = bin_mean(a.data, factor)
+                xa, count = bin_mean(a.data, factor, count=True)
                 xb = bin_mean(b.data, factor)
+                # partial bins weigh by the fraction of a full bin they hold
+                w = count / full if binned else None
                 if cap is None:
-                    stats.add((g, k), xa, xb)
+                    stats.add((g, k), xa, xb, w)
                     continue
-                res = reservoirs.get((g, k))
-                if res is None:
-                    seed = None if o["seed"] is None else o["seed"] + k
-                    res = reservoirs[(g, k)] = Reservoir(int(cap), seed=seed)
-                res.update(
+                if g not in reservoirs:
+                    reservoirs[g] = _reservoirs(int(cap), o["seed"], g, k, w)
+                rv, rw = reservoirs[g]
+                rv.update(
                     torch.complex(
                         xa.reshape(-1).to(torch.float64),
                         xb.reshape(-1).to(torch.float64),
                     )
                 )
-        for (g, k), res in reservoirs.items():
-            if res.values is not None and res.values.numel():
-                v = res.values
-                stats.merge_at((g, k), *OverlapStats.of(v.real, v.imag))
+                if rw is not None:
+                    rw.update(w.reshape(-1).to(torch.float64))
+            # overlap k is complete: merge its samples and free them
+            for g, (rv, rw) in reservoirs.items():
+                if rv.values is not None and rv.values.numel():
+                    v = rv.values
+                    wv = None if rw is None else rw.values
+                    stats.merge_at(
+                        (g, k), *OverlapStats.of(v.real, v.imag, wv)
+                    )
+            del reservoirs
         scale = torch.ones(ngroups, ntiles, dtype=torch.float64)
         shift = torch.zeros(ngroups, ntiles, dtype=torch.float64)
         before, after = [], []
@@ -501,6 +561,7 @@ class IntensityAdjustment(Estimator):
                     "mse_before": before,
                     "mse_after": after,
                     "pairs": [list(p) for p in pairs],
+                    "ndim": ndim,
                 },
             )
         }
@@ -517,9 +578,13 @@ class IntensityAdjustment(Estimator):
         nlead = est.scale.ndim - 1
         results = []
         for i, tile in enumerate(data):
-            if self.layout is not None and not isinstance(tile, Labeled):
-                tile = labeled(tile, self.layout)
-            nsp = len(tile.layout.spatial) if isinstance(tile, Labeled) else 2
+            if not isinstance(tile, Labeled):
+                layout = self.layout
+                if layout is None:
+                    nd = len(tile.shape)
+                    layout = Layout.default(nd, est.meta.get("ndim", nd))
+                tile = labeled(tile, layout)
+            nsp = len(tile.layout.spatial)
 
             def fn(chunk: object, batch: Tensor, i: int = i) -> Tensor:
                 g = tuple(chunk.group[:nlead])

@@ -156,6 +156,27 @@ def test_noise_and_float32_vs_float64():
     torch.testing.assert_close(a64, want, rtol=2e-2, atol=0)
 
 
+def test_noise_bias_and_binning():
+    # signal std ≈ 50, noise σ = 5 (SNR ≈ 10): errors-in-variables bias
+    tiles, pos, truth = simulate_tiles(
+        field((240, 300)), (3, 3), overlap=0.2, noise=5.0, seed=3
+    )
+    s = truth.scale.double()
+    want = s / s[4]
+    kw = {"weights": (1, 0, 0), "dtype": torch.float64}
+    raw = IntensityAdjustment(**kw).fit(tiles, pos, fixed=[4])
+    rec = IntensityAdjustment(**kw, faithful=False)
+    assert rec.options["downsample"] == 4
+    rec.fit(tiles, pos, fixed=[4])
+    err_raw = raw.estimates["intensity"].scale / want - 1
+    err_rec = rec.estimates["intensity"].scale / want - 1
+    # without binning the slopes shrink by several percent ...
+    assert float(err_raw.mean()) < -0.03
+    # ... binning by 4 brings the bias under 1 % (max under 3 %)
+    assert abs(float(err_rec.mean())) < 0.01
+    assert float(err_rec.abs().max()) < 0.03
+
+
 def test_positions_with_unequal_tiles_and_rounding():
     x = field((90, 110))
     tiles = [x[0:50, 0:60], x[30:90, 40:110], x[0:45, 55:110]]
@@ -259,6 +280,103 @@ def test_group_and_sample_axes(mosaic):
     for c in range(2):
         want = e.scale[c, 3] * view[c].to(out[3].dtype) + e.shift[c, 3]
         torch.testing.assert_close(out[3].permute(2, 1, 0, 3)[c], want)
+
+
+def test_distinct_samples_are_pooled():
+    x1, x2 = field((100, 120), seed=1), field((100, 120), seed=7)
+    t1, pos, truth = simulate_tiles(x1, (2, 2), overlap=0.2, seed=3)
+    g = 1 / truth.scale.double()
+    o = -truth.shift.double() * g
+    t2, _, _ = simulate_tiles(
+        x2, (2, 2), overlap=0.2, tile_gain=g, tile_offset=o
+    )
+    stacks = [torch.stack([a, b]) for a, b in zip(t1, t2, strict=True)]
+    layout = Layout("tyx", spatial="yx", sample="t")
+    w = (0.8, 0.1, 0.1)
+    est = IntensityAdjustment(weights=w, dtype=torch.float64, layout=layout)
+    e = est.fit(stacks, pos).estimates["intensity"]
+    # reference: the pixel pairs of both samples pooled by hand
+    boxes = utils.overlaps(pos.tolist(), [t.shape for t in t1])
+    pairs = [(i, j) for i, j, _, _ in boxes]
+    st = utils.OverlapStats.zeros((len(pairs),))
+    for k, (i, j, si, sj) in enumerate(boxes):
+        a = torch.cat([t1[i][si].reshape(-1), t2[i][si].reshape(-1)])
+        b = torch.cat([t1[j][sj].reshape(-1), t2[j][sj].reshape(-1)])
+        st.add((k,), a, b)
+    a, c = utils.solve_intensity(pairs, st.n, st.mean, st.scatter, 4, w)
+    torch.testing.assert_close(e.scale, a, rtol=1e-12, atol=1e-12)
+    torch.testing.assert_close(e.shift, c, rtol=1e-12, atol=1e-10)
+    # different from either sample alone
+    one = IntensityAdjustment(weights=w, dtype=torch.float64).fit(t1, pos)
+    assert (one.estimates["intensity"].scale - e.scale).abs().max() > 1e-6
+
+
+def test_max_pixels_with_groups(mosaic):
+    tiles, pos, truth = mosaic
+    # channel 1 = 2 · channel 0 + 3: the same transforms up to the offset
+    stacks = [torch.stack([t, 2 * t + 3]) for t in tiles]
+    layout = Layout("cyx", spatial="yx", group="c")
+    kw = {"weights": (1, 0, 0), "layout": layout, "dtype": torch.float64}
+    full = IntensityAdjustment(**kw).fit(stacks, pos, fixed=[0])
+    small = IntensityAdjustment(**kw, max_pixels=50, seed=0)
+    small.fit(stacks, pos, fixed=[0])
+    s = truth.scale.double()
+    for est in (full, small):
+        e = est.estimates["intensity"]
+        assert e.scale.shape == (2, 9)
+        for g in range(2):
+            torch.testing.assert_close(e.scale[g], s / s[0], rtol=1e-6, atol=0)
+    # c¹ᵢ = 2 c⁰ᵢ + 3 (1 − aᵢ) maps channel 1 like channel 0
+    for est in (full, small):
+        e = est.estimates["intensity"]
+        want = 2 * e.shift[0] + 3 * (1 - e.scale[0])
+        torch.testing.assert_close(e.shift[1], want, rtol=0, atol=1e-6)
+
+
+def test_refit_infers_layout_again():
+    x = field((60, 70))
+    t2, p2, _ = simulate_tiles(x, (2, 2), overlap=0.3, seed=1)
+    x3 = x[None].repeat(20, 1, 1) + torch.arange(20.0)[:, None, None]
+    t3, p3, truth = simulate_tiles(x3.double(), (2, 2, 2), overlap=0.3, seed=1)
+    est = IntensityAdjustment(weights=(1, 0, 0))
+    est.fit(t2, p2, fixed=[0])
+    assert est.layout is None
+    est.fit(t3, p3, fixed=[0])
+    assert est.layout is None
+    e = est.estimates["intensity"]
+    assert e.scale.shape == (8,) and e.meta["ndim"] == 3
+    out = est.apply(t3)
+    want = e.correct(t3[5].to(out[5].dtype), 5)
+    torch.testing.assert_close(out[5], want)
+    est.fit(t2, p2, fixed=[0])
+    assert est.estimates["intensity"].scale.shape == (4,)
+
+
+def test_partial_bins_are_weighted():
+    x = torch.arange(10.0).reshape(2, 5)
+    mean, count = utils.bin_mean(x, (2, 2), count=True)
+    torch.testing.assert_close(count, torch.tensor([[4.0, 4.0, 2.0]]))
+    # integer weights are the same as repeated pairs
+    g = torch.Generator().manual_seed(0)
+    a = torch.randn(50, generator=g, dtype=torch.float64)
+    b = 3 * a + torch.randn(50, generator=g, dtype=torch.float64)
+    w = torch.randint(1, 4, (50,), generator=g).double()
+    rep = w.long()
+    one, ref = utils.OverlapStats.zeros((1,)), utils.OverlapStats.zeros((1,))
+    one.add((0,), a, b, w)
+    ref.add((0,), a.repeat_interleave(rep), b.repeat_interleave(rep))
+    torch.testing.assert_close(one.n, ref.n)
+    torch.testing.assert_close(one.mean, ref.mean)
+    torch.testing.assert_close(one.scatter, ref.scatter)
+    # a noiseless mosaic is still fitted exactly with partial bins
+    tiles, pos, truth = simulate_tiles(field(), (3, 3), overlap=0.2, seed=3)
+    for cap in (None, 40):
+        est = IntensityAdjustment(
+            weights=(1, 0, 0), downsample=7, max_pixels=cap, seed=1
+        )
+        e = est.fit(tiles, pos, fixed=[0]).estimates["intensity"]
+        want = truth.scale.double() / truth.scale.double()[0]
+        torch.testing.assert_close(e.scale.double(), want, rtol=1e-4, atol=0)
 
 
 def test_three_dimensional_tiles():

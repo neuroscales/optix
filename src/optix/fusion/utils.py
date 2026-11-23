@@ -67,26 +67,31 @@ def overlaps(
     return out
 
 
-def bin_mean(x: Tensor, factor: Sequence[int]) -> Tensor:
+def bin_mean(
+    x: Tensor, factor: Sequence[int], *, count: bool = False
+) -> Tensor | tuple[Tensor, Tensor]:
     """Mean over non-overlapping bins of `factor` pixels along each dim.
 
-    Trailing partial bins average the pixels they hold.
+    Trailing partial bins average the pixels they hold. With
+    `count=True`, also return the number of pixels of each bin (a tensor
+    of the shape of the means), e.g. to weight partial bins.
     """
     factor = tuple(int(f) for f in factor)
     if all(f == 1 for f in factor):
-        return x
+        return (x, torch.ones_like(x)) if count else x
     pad = []
     for n, f in zip(reversed(x.shape), reversed(factor), strict=True):
         pad += [0, (-n) % f]
     total = torch.nn.functional.pad(x, pad)
-    count = torch.nn.functional.pad(torch.ones_like(x), pad)
+    count_ = torch.nn.functional.pad(torch.ones_like(x), pad)
     shape = []
     for n, f in zip(total.shape, factor, strict=True):
         shape += [n // f, f]
     dims = tuple(range(1, 2 * x.ndim, 2))
     total = total.reshape(shape).sum(dims)
-    count = count.reshape(shape).sum(dims)
-    return total / count
+    count_ = count_.reshape(shape).sum(dims)
+    mean = total / count_
+    return (mean, count_) if count else mean
 
 
 @dataclass
@@ -94,15 +99,17 @@ class OverlapStats:
     """Bivariate sufficient statistics of corresponding pixel pairs.
 
     One entry per (group, pair) along the leading dims of the state.
-    Moments are kept centred (count, means and scatter / co-scatter about
-    the means) and merged with the pairwise formulas of
+    Pairs may be weighted (e.g. bins by the fraction of a full bin they
+    hold); `n` is then the sum of the weights. Moments are kept centred
+    (count, means and scatter / co-scatter about the means) and merged
+    with the pairwise formulas of
     [Chan et al. 1983](https://doi.org/10.1080/00031305.1983.10483115),
     so that the fit does not suffer from the cancellation of raw sums.
 
     Attributes
     ----------
     n : Tensor
-        (..., P) number of pixel pairs.
+        (..., P) number (or total weight) of pixel pairs.
     mean : Tensor
         (..., P, 2) means of the first and second tile of each pair.
     scatter : Tensor
@@ -132,23 +139,48 @@ class OverlapStats:
         )
 
     @staticmethod
-    def of(a: Tensor, b: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        """Count, means and scatters of the pairs `(a, b)` (flattened)."""
+    def of(
+        a: Tensor, b: Tensor, weight: Tensor | None = None
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Count, means and scatters of the pairs `(a, b)` (flattened).
+
+        With `weight` (one per pair), the count is the sum of the weights
+        and the means and scatters are weighted.
+        """
         a, b = a.reshape(-1), b.reshape(-1)
-        n = torch.as_tensor(float(a.numel()), dtype=a.dtype, device=a.device)
-        if a.numel() == 0:
+        if weight is None:
+            n = torch.as_tensor(
+                float(a.numel()), dtype=a.dtype, device=a.device
+            )
+        else:
+            weight = weight.reshape(-1).to(a)
+            n = weight.sum()
+        if a.numel() == 0 or float(n) == 0:
             return n, a.new_zeros(2), a.new_zeros(3)
-        ma, mb = a.mean(), b.mean()
-        da, db = a - ma, b - mb
+        if weight is None:
+            ma, mb = a.mean(), b.mean()
+            da, db = a - ma, b - mb
+            wa, wb = da, db
+        else:
+            ma, mb = (weight * a).sum() / n, (weight * b).sum() / n
+            da, db = a - ma, b - mb
+            wa, wb = weight * da, weight * db
         scatter = torch.stack(
-            [da.square().sum(), db.square().sum(), (da * db).sum()]
+            [(wa * da).sum(), (wb * db).sum(), (wa * db).sum()]
         )
         return n, torch.stack([ma, mb]), scatter
 
-    def add(self, index: tuple[int, ...], a: Tensor, b: Tensor) -> None:
-        """Merge the pixel pairs `(a, b)` into entry `index`."""
+    def add(
+        self,
+        index: tuple[int, ...],
+        a: Tensor,
+        b: Tensor,
+        weight: Tensor | None = None,
+    ) -> None:
+        """Merge the pixel pairs `(a, b)`, optionally weighted, at `index`."""
         dtype = self.n.dtype
-        n2, m2, s2 = self.of(a.to(dtype), b.to(dtype))
+        w = None if weight is None else weight.to(dtype)
+        n2, m2, s2 = self.of(a.to(dtype), b.to(dtype), w)
         self.merge_at(index, n2, m2, s2)
 
     def merge_at(
@@ -213,7 +245,35 @@ def solve_intensity(
     fixed point of this per-tile fit (the global optimisation of the
     paper's Supplementary Note 12 applied to one-dimensional points); as
     the fits are linear in the (aⱼ, cⱼ), the fixed point is found by one
-    linear solve of size 2T.
+    linear solve of size 2T. For λ = (1, 0, 0) the fixed point minimises
+    eq. 8 (read with both tiles transformed); for other weights it does
+    not minimise any sum of squares, it is where the regularised per-tile
+    fits agree.
+
+    !!! note "Existence, uniqueness and the paper's iteration"
+        Write the per-tile update as f ↦ J f + b on the transformed
+        intensities fᵢ = aᵢ yᵢ + cᵢ, and measure them in the norm
+        E(f) = Σᵢ ‖fᵢ‖²_{Ωᵢ}, with Ωᵢ the pixel pairs of tile i. Each
+        pixel pair is counted once from each side, so the values qᵢ that
+        tile i is fitted to satisfy Σᵢ ‖qᵢ‖²_{Ωᵢ} = E(f). The update of
+        tile i is, up to a constant term, λ₁ P + λ₂ E₀ applied to qᵢ,
+        with P the least-squares projection onto affine functions of yᵢ
+        and E₀ the projection onto constants (both over Ωᵢ): both are
+        orthogonal projections, so the update has norm at most
+        λ₁ + λ₂ = 1 − λ₃. For λ₃ > 0 the homogeneous map J is therefore a
+        contraction with factor 1 − λ₃ in this norm: I − J is invertible
+        (the system is non-singular and the solution unique), and the
+        paper's iterative optimiser (sweeps of per-tile fits) converges to
+        this same solution. The condition number
+        grows roughly like 1/λ₃. For λ₃ = 0 the null space holds a common
+        offset (and, with λ₂ = 0 too, a common affine map); one fixed
+        tile per connected set of tiles removes it.
+
+    !!! note "Scaling"
+        The system is dense, 2T × 2T, and assembled entry by entry: it
+        takes 32 T² bytes and O(T³) operations per group, which is fast
+        up to a few thousand tiles (T = 5000 needs 800 MB). The matrix
+        has one block per overlap, so a sparse solve would scale further.
 
     Parameters
     ----------
