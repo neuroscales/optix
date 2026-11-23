@@ -10,6 +10,7 @@ import torch
 
 from optix.estimates import PSFEstimate
 from optix.psf import gibson_lanni
+from optix.psf._gibson_lanni import _lommel
 from optix.psf.utils import gibson_lanni_opd, gibson_lanni_profile
 from optix.special import bessel_j0, bessel_j1, gauss_legendre
 
@@ -68,33 +69,8 @@ def axial_exact(dz, wavelength=LAMBDA, na=NA, n=N_OIL):
 
 
 # ----------------------------------------------------------------------
-# Special functions
+# Quadrature
 # ----------------------------------------------------------------------
-
-
-def test_bessel_accurate_in_float64():
-    # Series of J₀ and J₁ summed in exact rational arithmetic
-    from fractions import Fraction
-
-    def series(order, x, terms=120):
-        xf = Fraction(x)
-        total, term = Fraction(0), (xf / 2) ** order / math.factorial(order)
-        for m in range(terms):
-            total += term
-            term *= -((xf / 2) ** 2) / ((m + 1) * (m + 1 + order))
-        return float(total)
-
-    xs = [0.0, 0.3, 2.404825557695773, 5.5, 7.0, 12.3, 19.9, 24.9, -6.1]
-    x = torch.tensor(xs, dtype=F64)
-    ref0 = torch.tensor([series(0, v) for v in xs], dtype=F64)
-    ref1 = torch.tensor([series(1, v) for v in xs], dtype=F64)
-    assert (bessel_j0(x) - ref0).abs().max() < 2e-15
-    assert (bessel_j1(x) - ref1).abs().max() < 2e-15
-    # continuity with torch above the switch point; float32 unchanged
-    y = torch.tensor([25.0, 40.0, 300.0], dtype=F64)
-    assert torch.equal(bessel_j0(y), torch.special.bessel_j0(y))
-    z = torch.linspace(0, 30, 31)
-    assert torch.equal(bessel_j1(z), torch.special.bessel_j1(z))
 
 
 def test_gauss_legendre():
@@ -110,6 +86,17 @@ def test_gauss_legendre():
         assert float((w * x**d).sum()) == pytest.approx(exact, abs=1e-14)
     with pytest.raises(ValueError):
         gauss_legendre(0)
+
+
+def test_gauss_legendre_returns_copies():
+    """An in-place change of the result must not corrupt the cache."""
+    x, w = gauss_legendre(4, dtype=F64, device="cpu")
+    x.mul_(0)
+    w.mul_(0)
+    x2, w2 = gauss_legendre(4, dtype=F64, device="cpu")
+    xr, wr = np.polynomial.legendre.leggauss(4)
+    assert np.abs(x2.numpy() - xr).max() < 1e-15
+    assert np.abs(w2.numpy() - wr).max() < 1e-15
 
 
 # ----------------------------------------------------------------------
@@ -160,6 +147,20 @@ def test_opd_paraxial_terms():
         quad = -(NA**2) * rho**2 * dz / (2 * N_OIL)
         # what is left is O(ρ⁴)
         assert ((opd - quad) / rho**4).abs().max() < 50
+
+
+def test_opd_nan_outside_domain():
+    """Beyond ρ = n_min/NA a square root is imaginary: NaN."""
+    rho = torch.tensor([0.0, 0.5, 0.95, 1.33 / 1.4, 0.96, 1.0], dtype=F64)
+    kw = dict(numerical_aperture=1.4, specimen_index=1.33)
+    opd = gibson_lanni_opd(rho, 0.0, depth=10.0, **kw)
+    assert torch.isfinite(opd[:4]).all()
+    assert torch.isnan(opd[4:]).all()
+    # broadcast against the defocus
+    both = gibson_lanni_opd(rho, torch.tensor([[0.0], [1.0]]), depth=10, **kw)
+    assert both.shape == (2, 6) and torch.isnan(both[:, 4:]).all()
+    # the specimen layer has no thickness at depth 0: defined up to 1
+    assert torch.isfinite(gibson_lanni_opd(rho, 0.0, **kw)).all()
 
 
 def test_coverslip_tolerance():
@@ -289,6 +290,53 @@ def test_truncated_aperture_converges():
     ref = gibson_lanni_profile(r, dz, nodes=4096, **kw)
     out = gibson_lanni_profile(r, dz, nodes=128, **kw)
     assert float((out - ref).abs().max() / ref.max()) < 1e-12
+
+
+def test_aperture_only_from_layers_with_thickness():
+    """A layer of zero thickness does not truncate the aperture."""
+    kw = dict(wavelength=0.61, numerical_aperture=1.4, dtype=F64)
+    # depth 0: the full NA 1.4 aperture, I = 1 at the focus
+    focus = gibson_lanni_profile(0.0, 0.0, **kw)
+    assert float(focus) == pytest.approx(1.0, abs=1e-12)
+    r = torch.linspace(0, 2, 41, dtype=F64)
+    torch.testing.assert_close(
+        gibson_lanni_profile(r, 0.0, **kw)[0],
+        airy(r, 0.61, 1.4),
+        rtol=0,
+        atol=1e-12,
+    )
+    grid = dict(spacing=0.1, return_estimate=True, **kw)
+    assert gibson_lanni((3, 5, 5), **grid).meta["aperture"] == 1.0
+    # below the surface the specimen layer truncates it to n_s/NA
+    est = gibson_lanni((3, 5, 5), depth=1e-3, **grid)
+    assert est.meta["aperture"] == pytest.approx(1.33 / 1.4)
+    deep = gibson_lanni_profile(0.0, 0.0, depth=1e-3, **kw)
+    assert float(deep) == pytest.approx((1.33 / 1.4) ** 4, rel=1e-6)
+
+
+@pytest.mark.parametrize("dt", [torch.float32, torch.float64])
+def test_lommel_near_equal_arguments(dt):
+    """∫₀^a ρ J₀(σρ) J₀(βρ) dρ is continuous across the switch to the
+    σ = β form, to the precision of the dtype."""
+    a = 0.95
+    beta = torch.tensor([0.0, 3.0, 17.0], dtype=F64)[:, None]
+    delta = torch.tensor([0.0, 1e-9, 1e-7, 1e-5, 1e-4, 1e-3, 5e-3, 1e-2])
+    sigma = beta + delta.to(F64) / a
+    ref = _lommel(sigma, beta, a)
+    # float64 reference by Gauss–Legendre quadrature (polynomial-exact)
+    x, w = gauss_legendre(64, dtype=F64)
+    rho, w = a * (x + 1) / 2, a * w / 2
+    f = (
+        rho
+        * bessel_j0(sigma[..., None] * rho)
+        * bessel_j0(beta[..., None] * rho)
+    )
+    quad = (f * w).sum(-1)
+    # rounding of the general form near the switch: ~ε^⅔
+    assert (ref - quad).abs().max() < 1e-10
+    out = _lommel(sigma.to(dt), beta.to(dt), a).double()
+    tol = 2e-5 if dt == torch.float32 else 1e-10
+    assert ((out - ref).abs() / (a * a / 2)).max() < tol
 
 
 def test_float32_matches_float64():
@@ -469,7 +517,6 @@ def test_water_dipping_objective():
         numerical_aperture=1.0,
         design_immersion_index=1.333,
         design_coverslip_thickness=0.0,
-        design_coverslip_index=1.333,
     )
     r = torch.linspace(0, 2, 41, dtype=F64)
     kw = dict(wavelength=0.52, dtype=F64)

@@ -19,7 +19,8 @@ __all__ = [
     "gibson_lanni_profile",
 ]
 
-#: Reference wavelength λ₀ (µm) of the Bessel scaling factors of Li et al.
+#: Reference wavelength λ_ref (µm) of the Bessel scaling factors of Li et
+#: al., σₘ = NA (3m − 2) λ_ref/λ₀ (their λ₀; λ₀ is here the wavelength).
 LI2017_WAVELENGTH = 0.436
 
 _METHODS = ("quadrature", "li2017")
@@ -43,7 +44,16 @@ class _Optics:
 
     @property
     def n_min(self) -> float:
-        return min(self.ns, self.ng, self.ng0, self.ni, self.ni0)
+        """Smallest index of the layers of non-zero thickness.
+
+        The actual immersion layer always counts; the specimen, the
+        coverslips and the design immersion layer only if their
+        thickness is > 0 (a layer of zero thickness has no term in the
+        OPD).
+        """
+        layers = [(self.ni, 1.0), (self.ns, self.ts), (self.ng, self.tg)]
+        layers += [(self.ng0, self.tg0), (self.ni0, self.ti0)]
+        return min(n for n, t in layers if t > 0)
 
     @property
     def aperture(self) -> float:
@@ -163,6 +173,12 @@ def gibson_lanni_opd(
     √(n² − s²) − n = −s² / (√(n² − s²) + n), s = NA ρ, so that no large
     terms cancel.
 
+    The OPD is defined for |ρ| ≤ n_min/NA, with n_min the smallest
+    refractive index of the layers of non-zero thickness (see
+    [`gibson_lanni`][optix.psf.gibson_lanni]); beyond, a square root is
+    imaginary (the ray is evanescent in that layer) and NaN is returned.
+    The pupil itself is ρ ≤ a = min(1, n_min/NA).
+
     !!! references "References"
 
         1. Gibson SF, Lanni F. *Experimental test of an analytical model
@@ -191,7 +207,8 @@ def gibson_lanni_opd(
     Parameters
     ----------
     rho : float or Tensor
-        Normalised pupil radius ρ (1 at the edge of the aperture).
+        Normalised pupil radius ρ = n sin θ / NA (1 at the edge of the
+        aperture of the objective), |ρ| ≤ n_min/NA.
     defocus : float or Tensor
         Δz; broadcast against `rho`.
     **optics
@@ -202,7 +219,7 @@ def gibson_lanni_opd(
     -------
     Tensor
         OPD, in the units of the lengths (µm), in float64 (float32 on
-        MPS).
+        MPS); NaN where |ρ| > n_min/NA.
     """
     _check_optics_keys(optics)
     p = _optics(**optics)
@@ -210,7 +227,9 @@ def gibson_lanni_opd(
     hi = _hi(rho.device)
     rho = rho.to(hi)
     defocus = torch.as_tensor(defocus, dtype=hi, device=rho.device)
-    return _opd(rho, defocus, p)
+    out = _opd(rho, defocus, p)
+    outside = (rho.abs() * p.na > p.n_min).expand_as(out)
+    return out.masked_fill(outside, math.nan)
 
 
 # ----------------------------------------------------------------------
@@ -243,19 +262,19 @@ def _quadrature_amplitude(
     radius: Tensor,
     defocus: Tensor,
     p: _Optics,
-    k: float,
+    k0: float,
     n: int,
     dtype: torch.dtype,
     budget: int,
 ) -> tuple[Tensor, Tensor]:
-    """Re and Im (Z, R) of 2 ∫₀^a J₀(k NA r ρ) exp(i k OPD) ρ dρ."""
+    """Re and Im (Z, R) of 2 ∫₀^a J₀(k₀ NA r ρ) exp(i k₀ OPD) ρ dρ."""
     device = radius.device
     hi = _hi(device)
     rho, weight = _pupil_nodes(n, p, device)
-    phase = k * _opd(rho, defocus.to(hi).unsqueeze(-1), p)  # (Z, Q)
+    phase = k0 * _opd(rho, defocus.to(hi).unsqueeze(-1), p)  # (Z, Q)
     cos = (2 * weight * torch.cos(phase)).to(dtype)
     sin = (2 * weight * torch.sin(phase)).to(dtype)
-    scale = k * p.na * rho  # (Q,)
+    scale = k0 * p.na * rho  # (Q,)
     itemsize = torch.finfo(hi).bits // 8
     step = max(1, budget // (3 * itemsize * len(rho)))
     re, im = [], []
@@ -269,12 +288,13 @@ def _quadrature_amplitude(
 
 
 def _auto_nodes(
-    radius_max: float, defocus: Tensor, p: _Optics, k: float, rtol: float
+    radius_max: float, defocus: Tensor, p: _Optics, k0: float, rtol: float
 ) -> int:
     """Smallest power-of-two node count whose result changes by ≤ `rtol`.
 
     The amplitude is computed on a probe set (17 radii from 0 to the
-    largest radius, every defocus or 257 of them including both ends) with
+    largest radius; every defocus value, or 257 of them evenly spaced in
+    index, including both ends, when there are more) with
     n and 2n nodes, doubling n from 32 until the largest change, relative
     to the largest amplitude, is at most `rtol`.
     """
@@ -285,10 +305,10 @@ def _auto_nodes(
         z = z[torch.linspace(0, len(z) - 1, 257).round().long()]
     budget = 64 * 2**20
     n = 32
-    prev = _quadrature_amplitude(radius, z, p, k, n, torch.float64, budget)
+    prev = _quadrature_amplitude(radius, z, p, k0, n, torch.float64, budget)
     while 2 * n <= _MAX_NODES:
         cur = _quadrature_amplitude(
-            radius, z, p, k, 2 * n, torch.float64, budget
+            radius, z, p, k0, 2 * n, torch.float64, budget
         )
         peak = torch.hypot(*cur).max()
         err = torch.hypot(cur[0] - prev[0], cur[1] - prev[1]).max()
@@ -308,16 +328,21 @@ def _auto_nodes(
 def _lommel(sigma: Tensor, beta: Tensor, a: float) -> Tensor:
     """∫₀^a ρ J₀(σρ) J₀(βρ) dρ (Li et al. Eq. 3), broadcast.
 
-    For σ = β the integral is (a²/2) [J₀(σa)² + J₁(σa)²], used when
-    |σ − β| a < 10⁻⁶.
+    For σ = β the integral is (a²/2) [J₀(σa)² + J₁(σa)²]. The general
+    form loses ~ε/(|σ − β| a) to cancellation (ε of the dtype), and the
+    σ = β form taken at the midpoint (σ + β)/2 is off by
+    O((σ − β)² a²) relative (the integral is symmetric in σ and β), so
+    the switch is at |σ − β| a = ε^⅓, where both are ~ε^⅔.
     """
     j0, j1 = bessel_j0, bessel_j1
     sa, ba = sigma * a, beta * a
     num = sigma * j1(sa) * j0(ba) - beta * j0(sa) * j1(ba)
-    den = sigma * sigma - beta * beta
-    near = (sigma - beta).abs() * a < 1e-6
-    out = a * num / torch.where(near, torch.ones_like(den), den)
-    same = 0.5 * a * a * (j0(sa) ** 2 + j1(sa) ** 2)
+    diff = sigma - beta
+    near = diff.abs() * a < torch.finfo(diff.dtype).eps ** (1 / 3)
+    den = torch.where(near, torch.ones_like(diff), diff) * (sigma + beta)
+    out = a * num / den
+    mid = 0.5 * (sa + ba)
+    same = 0.5 * a * a * (j0(mid) ** 2 + j1(mid) ** 2)
     return torch.where(near, same, out)
 
 
@@ -325,27 +350,32 @@ def _li2017_amplitude(
     radius: Tensor,
     defocus: Tensor,
     p: _Optics,
-    k: float,
+    k0: float,
     wavelength: float,
     basis: int,
     samples: int,
     dtype: torch.dtype,
 ) -> tuple[Tensor, Tensor]:
-    """Bessel-series amplitude of Li et al. (2017), Eqs. (3)–(5)."""
+    """Bessel-series amplitude of Li et al. (2017), Eqs. (3)–(5).
+
+    The fit runs in float64 on the CPU; the closed-form integrals and
+    their product with the coefficients in float64 on the working
+    device, or on the CPU when the device has no float64 (MPS).
+    """
     device = radius.device
-    hi = _hi(device)
+    f64 = device if _hi(device) == torch.float64 else torch.device("cpu")
     a = p.aperture
     rho = torch.linspace(0, a, samples, dtype=torch.float64)
-    phase = k * _opd(rho, defocus.detach().cpu().double().unsqueeze(-1), p)
+    phase = k0 * _opd(rho, defocus.detach().cpu().double().unsqueeze(-1), p)
     target = torch.cat([torch.cos(phase), torch.sin(phase)], 0).T  # (K, 2Z)
     m = torch.arange(1, basis + 1, dtype=torch.float64)
     sigma = p.na * (3 * m - 2) * LI2017_WAVELENGTH / wavelength
     design = bessel_j0(rho.unsqueeze(-1) * sigma)  # (K, M)
     coef = torch.linalg.lstsq(design, target, driver="gelsd").solution
-    coef = coef.to(device, hi)  # (M, 2Z)
-    beta = k * p.na * radius.to(hi)
-    basis_r = _lommel(sigma.to(device, hi), beta.unsqueeze(-1), a)  # (R, M)
-    amp = 2 * (basis_r @ coef).T.to(dtype)  # (2Z, R)
+    coef = coef.to(f64)  # (M, 2Z)
+    beta = k0 * p.na * radius.to(f64, torch.float64)
+    basis_r = _lommel(sigma.to(f64), beta.unsqueeze(-1), a)  # (R, M)
+    amp = 2 * (basis_r @ coef).T.to(device, dtype)  # (2Z, R)
     nz = len(defocus)
     return amp[:nz], amp[nz:]
 
@@ -367,25 +397,25 @@ def _profile(
         raise ValueError(f"method must be one of {_METHODS}, got {method!r}")
     if not wavelength > 0:
         raise ValueError(f"wavelength must be > 0, got {wavelength}")
-    k = 2 * math.pi / wavelength
+    k0 = 2 * math.pi / wavelength
     info: dict[str, object] = {"method": method, "aperture": p.aperture}
     if method == "quadrature":
         if nodes is None:
             rmax = float(radius.max()) if radius.numel() else 0.0
-            nodes = _auto_nodes(rmax, defocus, p, k, rtol)
+            nodes = _auto_nodes(rmax, defocus, p, k0, rtol)
         if int(nodes) < 1:
             raise ValueError(f"nodes must be >= 1, got {nodes}")
         info["nodes"] = int(nodes)
         budget = get_config().memory
         re, im = _quadrature_amplitude(
-            radius, defocus, p, k, int(nodes), dtype, budget
+            radius, defocus, p, k0, int(nodes), dtype, budget
         )
     else:
         if int(basis) < 1 or int(samples) < int(basis):
             raise ValueError("Need 1 <= basis <= samples")
         info["basis"], info["samples"] = int(basis), int(samples)
         re, im = _li2017_amplitude(
-            radius, defocus, p, k, wavelength, int(basis), int(samples), dtype
+            radius, defocus, p, k0, wavelength, int(basis), int(samples), dtype
         )
     return re * re + im * im, info
 
@@ -406,11 +436,12 @@ def gibson_lanni_profile(
 ) -> Tensor:
     """Gibson–Lanni intensity at radii r and defocus values Δz.
 
-        I(r, Δz) = | 2 ∫₀^a J₀(k NA r ρ) exp(i k OPD(ρ; Δz)) ρ dρ |²,
+        I(r, Δz) = | 2 ∫₀^a J₀(k₀ NA r ρ) exp(i k₀ OPD(ρ; Δz)) ρ dρ |²,
 
     the Kirchhoff integral of Gibson & Lanni Eq. (5) with the
     [`gibson_lanni_opd`][optix.psf.utils.gibson_lanni_opd], in object
-    space. I = 1 at the focus of an aberration-free system with a = 1.
+    space, k₀ = 2π/λ₀. I = 1 at the focus of an aberration-free system
+    with a = 1.
     See [`gibson_lanni`][optix.psf.gibson_lanni] for the methods and
     the parameters.
 
@@ -461,7 +492,7 @@ def gibson_lanni_profile(
     defocus : float or Tensor
         (Z,) defocus values Δz, in µm.
     wavelength : float
-        Emission wavelength in vacuum, in µm.
+        Emission wavelength λ₀ in vacuum, in µm.
     method, nodes, rtol, basis, samples
         See [`gibson_lanni`][optix.psf.gibson_lanni].
     dtype, device : optional
@@ -557,10 +588,10 @@ def gibson_lanni(
     intensity at lateral distance r from the source and defocus Δz is the
     Kirchhoff integral (Eq. 5),
 
-        I(r, Δz) ∝ | ∫₀^a J₀(k NA r ρ) exp(i k OPD(ρ; Δz)) ρ dρ |²,
+        I(r, Δz) ∝ | ∫₀^a J₀(k₀ NA r ρ) exp(i k₀ OPD(ρ; Δz)) ρ dρ |²,
 
-    with k = 2π/λ and OPD the optical path difference between the
-    actual and the design rays (Eq. 4, see
+    with k₀ = 2π/λ₀ the wave number in vacuum and OPD the optical path
+    difference between the actual and the design rays (Eq. 4, see
     [`gibson_lanni_opd`][optix.psf.utils.gibson_lanni_opd]):
 
         OPD(ρ; Δz) = n_oil Δz C_oil(ρ)
@@ -576,15 +607,36 @@ def gibson_lanni(
     the objective.
 
     The detector is at its design distance (z_d = z_d*), so the
-    tube-length terms of Eq. (4) vanish, and the lateral coordinate is
-    in object space: Gibson & Lanni's J₀(k a ρ r_d / z_d) on the
-    detector equals J₀(k NA ρ r) with r = r_d / M up to a factor
-    [1 − (NA/M)²]^½, taken as 1 (as in Li et al.). The upper limit is
-    a = 1, or a = n_min / NA when the numerical aperture exceeds the
-    smallest refractive index n_min of the layers, where the model's
-    square roots stop being real (the truncation of Li et al.; not
-    specified in Gibson & Lanni). The constant amplitude C / z_d is
+    tube-length terms of Eq. (4) vanish. (As printed, the separate
+    detector term of Eq. (4) has n_oil in its denominator, which would
+    leave a ρ² term at Δz = 0, against the text of the paper; the term
+    that cancels it is a²ρ²(z_d* − z_d)/(2 z_d* z_d). With z_d = z_d*
+    both vanish, so the PSF computed here does not depend on this.) The
+    lateral coordinate is in object space: Gibson & Lanni's
+    J₀(k₀ a ρ r_d / z_d) on the detector equals J₀(k₀ NA ρ r) with
+    r = r_d / M up to a factor [1 − (NA/M)²]^−½, taken as 1 (as in Li et
+    al.). Since a/z_d is tan θ′ in image space and the sine condition
+    gives sin θ′ = NA/M, the factor 1 is the exact sine-condition form,
+    not a further approximation. The constant amplitude C / z_d is
     dropped: the PSF is normalised to unit sum.
+
+    **Aperture.** The upper limit is a = 1, or a = n_min / NA when the
+    numerical aperture exceeds n_min, the smallest refractive index of
+    the layers of non-zero thickness: the actual immersion layer, and
+    the specimen, the actual and design coverslips and the design
+    immersion layer when their thickness is > 0. Beyond ρ = n_min/NA the
+    ray is evanescent in that layer and the model's square roots stop
+    being real; Gibson & Lanni do not specify the truncation (their
+    design system has no specimen layer, and its PSF integrates over the
+    whole aperture). Li et al. truncate at the smallest index of all
+    layers, the specimen included at any depth; here a layer of zero
+    thickness, which has no term in the OPD, does not truncate, so that
+    with `depth=0` an NA 1.4 oil objective has its full aperture,
+    whatever `specimen_index`. For t_s > 0 the super-critical rays are
+    dropped (they would be attenuated as
+    exp(−k₀ t_s √((NA ρ)² − n_s²))), the large-depth limit; the
+    aperture therefore jumps from 1 to n_s/NA as the depth leaves 0. The
+    value of a is `meta["aperture"]` of the returned estimate.
 
     **Evaluation.** With `method="quadrature"` (default) the 1-D pupil
     integral is computed for each (r, Δz) by Gauss–Legendre quadrature
@@ -592,37 +644,72 @@ def gibson_lanni(
     index, ρ = (n_min/NA) sin θ, which keeps the integrand smooth up to
     the edge of the aperture. Without `nodes`, the number of nodes is
     doubled from 32 until the amplitude, evaluated with n and 2n nodes on
-    the largest radius of the grid and every defocus, changes by at most
-    `rtol` relative to its peak; oscillations at large r (Bessel
-    function) or large defocus or depth (phase) need more nodes. The
-    phase is computed in float64 and each square root as
-    √(n² − s²) − n = −s² / (√(n² − s²) + n), so large constant optical
-    paths never cancel. The integral is one matrix product per chunk of
-    radii, [cos(kOPD), sin(kOPD)] · J₀ᵀ, on the working device.
+    a probe set, changes by at most `rtol` relative to its peak. The
+    probe set is 17 radii evenly spaced from 0 to the largest radius of
+    the grid, and the defocus values of the grid, or 257 of them evenly
+    spaced in index (both ends included) when there are more.
+    Oscillations at large r (Bessel function) or large defocus or depth
+    (phase) need more nodes. The phase is computed in float64 and each
+    square root as √(n² − s²) − n = −s² / (√(n² − s²) + n), so large
+    constant optical paths never cancel. The integral is one matrix
+    product per chunk of radii, [cos(k₀ OPD), sin(k₀ OPD)] · J₀ᵀ, on the
+    working device.
 
     With `method="li2017"` the phase factor is expanded on M rescaled
-    Bessel functions (Li et al. Eq. 4), exp(i k OPD(ρ)) ≈ ∑ₘ cₘ J₀(σₘ ρ),
-    σₘ = NA (3m − 2) λ₀/λ with λ₀ = 0.436 µm, fitted by least squares on
-    K samples ρ_k uniform in [0, a], so that the integral is the closed
-    form
+    Bessel functions (Li et al. Eq. 4),
+    exp(i k₀ OPD(ρ)) ≈ ∑ₘ cₘ J₀(σₘ ρ), σₘ = NA (3m − 2) λ_ref/λ₀ with
+    the reference wavelength λ_ref = 0.436 µm of Li et al. (their λ₀),
+    fitted by least squares on K samples ρ_k uniform in [0, a], so that
+    the integral is the closed form
 
         ∫₀^a ρ J₀(σρ) J₀(βρ) dρ
             = a [σ J₁(σa) J₀(βa) − β J₀(σa) J₁(βa)] / (σ² − β²),
 
-    β = k NA r (Eqs. 3 and 5), and (a²/2)[J₀(σa)² + J₁(σa)²] for σ = β.
-    The coefficients are found once for all Δz with an SVD least-squares
-    solver, equal to (JᵀJ)⁻¹JᵀF in exact arithmetic. Li et al. report a
-    relative squared error RSE ≈ (M/45)^−6.5 (K/80)^−1.5 % against the
-    exact model for 30 ≤ M ≤ 100, 50 ≤ K ≤ 1000. Both methods evaluate
-    each voxel at its exact radius (Li et al. interpolate a 2×
-    oversampled radial profile).
+    β = k₀ NA r (Eqs. 3 and 5), and (a²/2)[J₀(σa)² + J₁(σa)²] for σ = β
+    (printed as (a²/2) J₁(σa)² under Eq. 3 of Li et al., which lacks the
+    J₀² term). The coefficients are found once for all Δz with an SVD
+    least-squares solver, equal to (JᵀJ)⁻¹JᵀF in exact arithmetic. Li et
+    al. report a relative squared error RSE ≈ (M/45)^−6.5 (K/80)^−1.5 %
+    against the exact model for 30 ≤ M ≤ 100, 50 ≤ K ≤ 1000. Both
+    methods evaluate each voxel at its exact radius (Li et al.
+    interpolate a 2× oversampled radial profile).
+
+    !!! warning "Depth error of `li2017`"
+        When NA ≥ n_s and the source is below the surface, the aperture
+        ends at ρ = a = n_s/NA, where the specimen term of the phase
+        varies as k₀ t_s n_s √(1 − (ρ/a)²): its slope is infinite at the
+        edge, and the uniform samples of Li et al. cannot follow it. The
+        fit is aliased there, whatever M, and the error grows with the
+        depth. It is inherent to the published method (MicroscPSF has
+        the same), and it is reduced by `samples` (K), not by `basis`
+        (M). For NA 1.4, λ₀ = 0.61 µm, a source in water at t_s = 10 µm
+        (r ≤ 3.2 µm, |Δz| ≤ 4 µm, M = 100), the largest error is about
+        7·10⁻³ of the peak with K = 1000, 10⁻³ with K = 3000 and 2·10⁻⁴
+        with K = 10000, and about 4·10⁻² at 50 µm with K = 1000; with
+        NA 1.2 it is 10⁻¹³ at 10 µm. Raise `samples` with the depth, or
+        use the quadrature.
 
     **Sampling.** Voxel (k, j, i) is at Δz = `defocus` + (k − K_z//2) d_z
     and lateral offset ((j − K_y//2) d_y, (i − K_x//2) d_x) from the
     source: the PSF is centred at index `K // 2`, the convention of
-    `optix.deconv`. Point sampling is the model; `oversample` > 1
-    instead averages s points per axis inside each voxel (integration
-    over the voxel; an extension, not in Gibson & Lanni).
+    `optix.deconv`. Slices are in order of increasing Δz along axis 0,
+    i.e. of the objective moving away from the specimen; flip axis 0 for
+    a stack acquired with the focus moving deeper. Point sampling is the
+    model; `oversample` > 1 instead averages s points per axis inside
+    each voxel (integration over the voxel; an extension, not in Gibson
+    & Lanni).
+
+    **Relation to the z of Li et al.** Li et al., MicroscPSF and PSF
+    Generator scan the actual immersion thickness t_oil = t_oil* + z, so
+    their z is the stage position from the design one (focus at the
+    coverslip), not the defocus from the paraxial focus of the source.
+    By Eq. (3),
+
+        Δz = z + t_oil* + n_oil (t_s/n_s + t_g/n_g − t_g*/n_g*
+                                 − t_oil*/n_oil*),
+
+    which is Δz = z + n_oil t_s/n_s when the coverslip and the immersion
+    medium match the design.
 
     !!! references "References"
 
@@ -672,7 +759,7 @@ def gibson_lanni(
         Voxel size (d_z, d_y, d_x) in object space, in µm; two values
         mean (d_z, d_xy).
     wavelength : float
-        Emission wavelength λ in vacuum, in µm.
+        Emission wavelength λ₀ in vacuum, in µm.
     numerical_aperture : float
         NA of the objective.
     depth : float
@@ -710,7 +797,10 @@ def gibson_lanni(
     return_estimate : bool
         Return a [`PSFEstimate`][optix.estimates.PSFEstimate] (with the
         FWHM, in voxels, and the model parameters in `meta`) instead of
-        the tensor.
+        the tensor. `meta` also holds `"method"`, `"aperture"` (the upper
+        limit a of ρ, 1 or n_min/NA; see above), and `"nodes"` (the
+        number of quadrature nodes, chosen or given) or `"basis"` and
+        `"samples"` (`li2017`).
     dtype, device : optional
         Working dtype and device. Default: configuration.
 

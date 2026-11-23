@@ -111,8 +111,8 @@ def gauss_legendre(
     evaluated by the three-term recurrence; the weights are
     wᵢ = 2 / ((1 − xᵢ²) Pₙ′(xᵢ)²). This costs O(n²) operations, against
     O(n³) for the eigenvalues of the Jacobi matrix. Everything runs in
-    float64 on the CPU (results are cached by `n`); they are then cast
-    and moved.
+    float64 on the CPU (results are cached by `n`); copies are then cast
+    and moved, so the caller may modify them in place.
 
     !!! note
         `sum(weights * f(nodes))` ≈ ∫₋₁¹ f(x) dx, exactly for polynomials
@@ -152,4 +152,5 @@ def gauss_legendre(
         raise ValueError(f"n must be >= 1, got {n}")
     backend = resolve_backend(dtype, device)
     x, w = _gauss_legendre(int(n))
-    return x.to(**backend), w.to(**backend)
+    # copies: the cached tensors must not reach the caller
+    return x.to(**backend, copy=True), w.to(**backend, copy=True)
