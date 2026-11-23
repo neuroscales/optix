@@ -58,25 +58,17 @@ def _combine(
 class Moments(Reducer):
     """Per-pixel count, mean and central moments up to `order` (1..4).
 
-    Attributes
-    ----------
-    count : Tensor
-        Sum of weights (0-d if every update was unweighted).
-    mean : Tensor
-        Weighted mean.
+    !!! note
+        Each update computes the chunk's own `(n, mean, M2..Mp)` by direct
+        sums about the chunk mean, **in the chunk's dtype** (no chunk-sized
+        float64 temporaries), then merges it into the running state with the
+        same pairwise formulas as [`merge`][optix.stats.Moments.merge]. Raw
+        power sums are never accumulated.
 
-    Notes
-    -----
-    Each update computes the chunk's own `(n, mean, M2..Mp)` by direct
-    sums about the chunk mean, **in the chunk's dtype** (no chunk-sized
-    float64 temporaries), then merges it into the running state with the
-    same pairwise formulas as [`merge`][optix.stats.Moments.merge]. Raw
-    power sums are never accumulated.
-
-    Weights are frequency weights (`count` is their sum), as needed for
-    masks and responsibilities; `var(ddof=1)` is only meaningful for
-    integer-like weights. Pixels with zero total weight keep zeros in the
-    state, and their accessors return NaN.
+        Weights are frequency weights (`count` is their sum), as needed for
+        masks and responsibilities; `var(ddof=1)` is only meaningful for
+        integer-like weights. Pixels with zero total weight keep zeros in the
+        state, and their accessors return NaN.
 
     !!! references "References"
         1. Pébay P. Formulas for robust, one-pass parallel computation of
@@ -97,6 +89,13 @@ class Moments(Reducer):
               doi = {10.2172/1028931}
             }
             ```
+
+    Attributes
+    ----------
+    count : Tensor
+        Sum of weights (0-d if every update was unweighted).
+    mean : Tensor
+        Weighted mean.
     """
 
     _state = ("count", "mean", "m2", "m3", "m4")

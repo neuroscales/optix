@@ -280,9 +280,9 @@ def test_global_alpha_stack_and_extensions():
     """Images of a stack are iterated separately, extensions apply."""
     psf = gaussian_psf(7, 1.2)
     imgs = [poisson_image((40, 36), psf, seed=s)[1] for s in range(3)]
-    stack = torch.stack(imgs, dim=-1) + 10.0  # (y, x, t)
+    stack = torch.stack(imgs, dim=-1)  # (y, x, t)
     layout = Layout("yxt", spatial="yx")
-    kw = {"n_iter": 12, "dtype": F64, "background": 10.0, "damping": 0.8}
+    kw = {"n_iter": 12, "dtype": F64, "damping": 0.8}
     est = BiggsAndrews(psf, block=(16, 12), layout=layout, **kw)
     out = est.fit(stack).apply(stack)
     assert est.history.extras["alpha_scope"] == ["global"] * 3
@@ -496,15 +496,16 @@ def test_faithful_flags_and_extensions():
     assert "effective_iterations" not in (
         RichardsonLucy(psf, n_iter=2).fit(torch.ones(16, 16)).history.extras
     )
-    # extensions compose with the acceleration
+    # background and read noise are Snyder et al. (1993), not in the paper
+    for kw in ({"background": 1.0}, {"poisson_gaussian": True}):
+        with pytest.raises(TypeError):
+            BiggsAndrews(psf, **kw)
+    # damping (Lucy 1974) composes with the acceleration
     psf = gaussian_psf(9, 1.5)
-    truth, _ = poisson_image((64, 64), psf, seed=8)
-    data = torch.poisson(
-        blur(truth, psf) + 30.0, generator=torch.Generator().manual_seed(8)
-    )
-    plain = biggs_andrews(data, psf, n_iter=20)
-    with_b = biggs_andrews(data, psf, n_iter=20, background=30.0)
-    assert error(with_b, truth) < error(plain, truth)
+    truth, data = poisson_image((64, 64), psf, seed=8)
+    damped = biggs_andrews(data, psf, n_iter=20, damping=0.8)
+    slow = richardson_lucy(data, psf, n_iter=20, damping=0.8)
+    assert error(damped, truth) < error(slow, truth)
 
 
 def test_save_load(tmp_path):
@@ -518,3 +519,36 @@ def test_save_load(tmp_path):
     assert isinstance(new, BiggsAndrews)
     assert new.options["alpha_scope"] == "global"
     torch.testing.assert_close(new.apply(data), est.apply(data))
+
+
+def test_acceleration_composes_with_snyder_hooks():
+    """Unit flat, zero read noise and an identity E-step change nothing."""
+    psf = gaussian_psf(7, 1.2)
+    _, data = poisson_image((40, 36), psf, seed=3)
+    data = data.double()
+    op = PaddedConvolution(psf.double(), tuple(data.shape))
+    start = float(data.mean())
+    calls = []
+
+    def expect(mu):
+        calls.append(mu)
+        return data
+
+    for n_iter in (15, None):
+        trace = {}
+        ref, n_ref = rl_block(data, op, start, n_iter=n_iter, accelerate=True)
+        out, n = rl_block(
+            data,
+            op,
+            start,
+            n_iter=n_iter,
+            accelerate=True,
+            flat=torch.ones_like(data),
+            variance=0.0,
+            expect=expect,
+            trace=trace,
+        )
+        assert n == n_ref
+        assert any(a > 0 for a in trace["alpha"])
+        torch.testing.assert_close(out, ref, rtol=1e-12, atol=1e-12)
+    assert len(calls) > 0
