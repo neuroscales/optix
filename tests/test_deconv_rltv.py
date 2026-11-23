@@ -230,7 +230,10 @@ def test_float32_matches_float64():
     b = richardson_lucy_tv(
         data.float(), psf.float(), n_iter=30, dtype="float32"
     )
-    assert float((a - b).abs().max() / a.max()) < 1e-3
+    # the TV term div(∇f/|∇f|) with ε at round-off is non-smooth, so float32
+    # rounding flips unit-gradient directions in flat regions: ~6e-4 on
+    # recent torch, 1.1e-3 on torch 2.3 (plain RL: ~1e-5)
+    assert float((a - b).abs().max() / a.max()) < 3e-3
 
 
 # -- options ----------------------------------------------------------------
