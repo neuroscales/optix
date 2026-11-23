@@ -53,6 +53,24 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     This is the maximum-likelihood equation of the Gamma shape, with
     c = log(mean(x)) − mean(log x) > 0 (the Jensen gap).
 
+    !!! note
+        Uses Minka's initialisation
+        ν = (3 − c + √((c − 3)² + 24c)) / (12c) and Newton's method on 1/ν.
+        For ν > 10 the residual and its derivative use asymptotic series,
+        which avoids the cancellation in log ν − ψ(ν).
+
+    !!! references "References"
+        1. Minka T. *Estimating a Gamma distribution.* 2002.
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @misc{minka2002gamma,
+              author = {Minka, T.},
+              title = {Estimating a Gamma distribution},
+              year = {2002}
+            }
+            ```
+
     Parameters
     ----------
     c : Tensor
@@ -68,25 +86,6 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     -------
     Tensor
         Shape parameter ν, same shape and dtype as `c`.
-
-    Notes
-    -----
-    Uses Minka's initialisation
-    ν = (3 − c + √((c − 3)² + 24c)) / (12c) and Newton's method on 1/ν.
-    For ν > 10 the residual and its derivative use asymptotic series,
-    which avoids the cancellation in log ν − ψ(ν).
-
-    !!! references "References"
-        1. Minka T. *Estimating a Gamma distribution.* 2002.
-
-        ??? quote "BibTeX"
-            ```bibtex
-            @misc{minka2002gamma,
-              author = {Minka, T.},
-              title = {Estimating a Gamma distribution},
-              year = {2002}
-            }
-            ```
     """
     c = torch.as_tensor(c)
     if not c.is_floating_point():
@@ -106,6 +105,11 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
 def inv_digamma(y: Tensor, niter: int = 5) -> Tensor:
     """Inverse of the digamma function, elementwise.
 
+    !!! note
+        Minka's initialisation: exp(y) + ½ for y ≥ −2.22, else
+        −1 / (y + γ) with γ the Euler-Mascheroni constant; then Newton's
+        method.
+
     Parameters
     ----------
     y : Tensor
@@ -117,12 +121,6 @@ def inv_digamma(y: Tensor, niter: int = 5) -> Tensor:
     -------
     Tensor
         x > 0 such that ψ(x) = `y`.
-
-    Notes
-    -----
-    Minka's initialisation: exp(y) + ½ for y ≥ −2.22, else
-    −1 / (y + γ) with γ the Euler-Mascheroni constant; then Newton's
-    method.
     """
     y = torch.as_tensor(y)
     if not y.is_floating_point():
@@ -170,6 +168,29 @@ def fit_dirichlet(
     with Newton's method, using the diagonal-plus-rank-one structure of
     the Hessian.
 
+    !!! note
+        Whenever a Newton step would make any component of a vector
+        non-positive, that vector takes the fixed-point update
+        a = ψ⁻¹(ψ(∑ₖ aₖ) + `elogpi`) instead, which always stays positive
+        (and is also taken when the Newton step is not finite).
+
+        Convergence is only local: Newton's method needs a warm start (for
+        example the previous estimate) to converge in a few iterations, and
+        from a poor initial guess it may need many iterations or settle on
+        the slower fixed-point steps.
+
+    !!! references "References"
+        1. Minka T. *Estimating a Dirichlet distribution.* 2000.
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @misc{minka2000dirichlet,
+              author = {Minka, T.},
+              title = {Estimating a Dirichlet distribution},
+              year = {2000}
+            }
+            ```
+
     Parameters
     ----------
     elogpi : (..., K) Tensor
@@ -190,30 +211,6 @@ def fit_dirichlet(
     -------
     (..., K) Tensor
         Fitted concentration parameters (strictly positive).
-
-    Notes
-    -----
-    Whenever a Newton step would make any component of a vector
-    non-positive, that vector takes the fixed-point update
-    a = ψ⁻¹(ψ(∑ₖ aₖ) + `elogpi`) instead, which always stays positive
-    (and is also taken when the Newton step is not finite).
-
-    Convergence is only local: Newton's method needs a warm start (for
-    example the previous estimate) to converge in a few iterations, and
-    from a poor initial guess it may need many iterations or settle on
-    the slower fixed-point steps.
-
-    !!! references "References"
-        1. Minka T. *Estimating a Dirichlet distribution.* 2000.
-
-        ??? quote "BibTeX"
-            ```bibtex
-            @misc{minka2000dirichlet,
-              author = {Minka, T.},
-              title = {Estimating a Dirichlet distribution},
-              year = {2000}
-            }
-            ```
     """
     elogpi, alpha = torch.broadcast_tensors(elogpi, alpha)
     alpha = alpha.to(elogpi.dtype)

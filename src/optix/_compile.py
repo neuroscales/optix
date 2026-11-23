@@ -92,6 +92,15 @@ def maybe_compile(
 
     Usable as `@maybe_compile` or `@maybe_compile(mode=...)`.
 
+    !!! note
+        Decorated kernels must be **pure functions of tensors**: no in-place
+        mutation of their arguments and no Python side effects. Otherwise the
+        eager re-run after a failure would give wrong results.
+
+        Shape changes (last short batch, clipped edge blocks) trigger
+        recompilations; `dynamic` is left to torch's default, which marks
+        dims as dynamic after the first recompilation.
+
     Parameters
     ----------
     fn : callable, optional
@@ -109,16 +118,6 @@ def maybe_compile(
         `RuntimeWarning` is emitted and the wrapper stays eager from then
         on. Compilation is skipped silently where it is not supported
         (Windows, Python/torch combinations without `torch.compile`).
-
-    Notes
-    -----
-    Decorated kernels must be **pure functions of tensors**: no in-place
-    mutation of their arguments and no Python side effects. Otherwise the
-    eager re-run after a failure would give wrong results.
-
-    Shape changes (last short batch, clipped edge blocks) trigger
-    recompilations; `dynamic` is left to torch's default, which marks
-    dims as dynamic after the first recompilation.
     """
     if fn is None:
         return functools.partial(maybe_compile, **compile_kwargs)

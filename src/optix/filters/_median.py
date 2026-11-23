@@ -77,29 +77,6 @@ def median_filter(
 
     Leading dims are batch dims, filtered independently.
 
-    Parameters
-    ----------
-    data : (..., H, W) Tensor
-        Image(s) to filter.
-    size : int or (int, int)
-        Window side sₕ = s_w, or (sₕ, s_w). An even side puts one more pixel
-        before the centre than after it. A side larger than 2·n − 1 along a
-        dim of length n is equivalent to 2·n − 1 there (every window then
-        spans the whole dim).
-    method : {"auto", "histogram", "sort"}
-        `"histogram"`: rank histograms, whose cost per pixel does not
-        depend on the window size;
-        `"sort"`: sorts every window, costing O(sₕ·s_w·log(sₕ·s_w)) per
-        pixel. `"auto"` sorts small windows (at most 225 pixels) and uses
-        histograms otherwise. Both give the same result.
-    budget : int
-        `"sort"` only: number of window values held in memory at once.
-
-    Returns
-    -------
-    (..., H, W) Tensor
-        The filtered image, with the dtype and device of `data`.
-
     !!! note "Method"
         The image is first replaced by the ranks of its pixels (a stable
         sort, NaN last), so that ties are broken by position and every
@@ -137,6 +114,29 @@ def median_filter(
               year    = {2007}, doi = {10.1109/TIP.2007.902329}
             }
             ```
+
+    Parameters
+    ----------
+    data : (..., H, W) Tensor
+        Image(s) to filter.
+    size : int or (int, int)
+        Window side sₕ = s_w, or (sₕ, s_w). An even side puts one more pixel
+        before the centre than after it. A side larger than 2·n − 1 along a
+        dim of length n is equivalent to 2·n − 1 there (every window then
+        spans the whole dim).
+    method : {"auto", "histogram", "sort"}
+        `"histogram"`: rank histograms, whose cost per pixel does not
+        depend on the window size;
+        `"sort"`: sorts every window, costing O(sₕ·s_w·log(sₕ·s_w)) per
+        pixel. `"auto"` sorts small windows (at most 225 pixels) and uses
+        histograms otherwise. Both give the same result.
+    budget : int
+        `"sort"` only: number of window values held in memory at once.
+
+    Returns
+    -------
+    (..., H, W) Tensor
+        The filtered image, with the dtype and device of `data`.
     """
     sh, sw = _pair(size)
     if method == "auto":

@@ -374,21 +374,6 @@ class PhotonTransferCurve(CalibrationEstimator):
           sign in β₃′, the exact derivative is used.
         - The dark values are taken at a single exposure time.
 
-    Attributes
-    ----------
-    curve : dict of str to Tensor
-        `"mean"` and `"variance"` (`(levels, *group)`) of the
-        photon-transfer curve, dark subtracted, and `"used"` (bool), the
-        levels of the gain fit.
-
-    Estimates: `"sensor"`: `offset` (per-pixel dark mean, DN), `variance`
-    (read-noise variance σ²_y.dark − σ²_q, DN²) and `gain` (K, per group,
-    or per pixel with `per_pixel`). `meta` holds `gain_stderr`,
-    `gain_offset`, `read_noise_e`, `read_noise_upper_limit`, `dsnu_e`,
-    `prnu`, `saturation` (DN above dark), `linearity_slope_dev` and
-    `linear` (Eq. (51)), and with `exposure`: `responsivity`,
-    `quantum_efficiency`, `linearity_error` (percent).
-
     !!! references "References"
         1. European Machine Vision Association. *EMVA Standard 1288:
            Standard for Characterization of Image Sensors and Cameras,
@@ -418,6 +403,21 @@ class PhotonTransferCurve(CalibrationEstimator):
               url = {https://www.emva.org/wp-content/uploads/EMVA1288General_4.0Release.pdf}
             }
             ```
+
+    Attributes
+    ----------
+    curve : dict of str to Tensor
+        `"mean"` and `"variance"` (`(levels, *group)`) of the
+        photon-transfer curve, dark subtracted, and `"used"` (bool), the
+        levels of the gain fit.
+
+    Estimates: `"sensor"`: `offset` (per-pixel dark mean, DN), `variance`
+    (read-noise variance σ²_y.dark − σ²_q, DN²) and `gain` (K, per group,
+    or per pixel with `per_pixel`). `meta` holds `gain_stderr`,
+    `gain_offset`, `read_noise_e`, `read_noise_upper_limit`, `dsnu_e`,
+    `prnu`, `saturation` (DN above dark), `linearity_slope_dev` and
+    `linear` (Eq. (51)), and with `exposure`: `responsivity`,
+    `quantum_efficiency`, `linearity_error` (percent).
     """
 
     tags = Tags(

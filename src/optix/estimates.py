@@ -19,6 +19,9 @@ Conventions
   `"geomean"`) and
   [`ShadingEstimate.normalize`][optix.estimates.ShadingEstimate.normalize]
   converts.
+- `PSFEstimate.psf` is normalised to unit sum and centred at index
+  `K // 2` along each spatial axis, as the PSFs taken by
+  `optix.deconv`.
 - Data-sized outputs (class probabilities, corrected stacks) are never
   stored in an estimate: they come from `Estimator.apply(data, out=)`.
 """
@@ -38,6 +41,7 @@ from ._version import __version__
 __all__ = [
     "Classification",
     "Estimate",
+    "PSFEstimate",
     "SensorEstimate",
     "ShadingEstimate",
 ]
@@ -419,3 +423,31 @@ class Classification(Estimate):
     weights: Tensor | None = None
     parameters: Tensor | None = None
     concentration: Tensor | None = None
+
+
+@dataclass(eq=False)
+class PSFEstimate(Estimate):
+    """Empirical point spread function, with what it was measured from.
+
+    Attributes
+    ----------
+    psf : Tensor, optional
+        (*group, *K) PSF, spatial axes in layout order, centred at index
+        `K // 2` and normalised to unit sum.
+    fwhm : Tensor, optional
+        (*group, D) full width at half maximum along each spatial axis,
+        in voxels.
+    count : Tensor, optional
+        (*group,) number of beads averaged.
+    centers : Tensor, optional
+        (N, ndim) sub-voxel positions of the averaged beads in the data,
+        one coordinate per storage axis (group and sample axes hold
+        integer indices).
+    """
+
+    _per_sample: ClassVar[tuple[str, ...]] = ("centers",)
+
+    psf: Tensor | None = None
+    fwhm: Tensor | None = None
+    count: Tensor | None = None
+    centers: Tensor | None = None

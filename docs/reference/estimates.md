@@ -14,3 +14,4 @@ the conventions they follow (which are also explained in
         - SensorEstimate
         - ShadingEstimate
         - Classification
+        - PSFEstimate
