@@ -184,6 +184,7 @@ def rl_block(
     back: Callable[[Tensor], Tensor] | None = None,
     accelerate: bool = False,
     trace: dict | None = None,
+    step: Callable[..., Tensor] | None = None,
 ) -> tuple[Tensor, int]:
     """Richardson–Lucy iterations on one block, optionally accelerated.
 
@@ -237,6 +238,12 @@ def rl_block(
         plain updates), `"clipped"` (number of predictions with negative
         pixels set to 0) and `"effective"` (estimated number of
         unaccelerated iterations, ∑ₖ ηₖ, Biggs and Andrews 1997, Eq. 12).
+    step : callable, optional
+        Update used in place of [`rl_step`][optix.deconv.utils.rl_step],
+        with its signature: e.g. the update over several views,
+        [`Multiview.step`][optix.deconv.utils.Multiview.step], with `op`
+        a [`Multiview`][optix.deconv.utils.Multiview] and `data` the
+        views stacked. Default: `rl_step`.
 
     Returns
     -------
@@ -289,7 +296,7 @@ def rl_block(
             y = f
         if expect is not None and mu is None:
             mu = _expected(y, op, background, flat)
-        new = rl_step(
+        new = (rl_step if step is None else step)(
             y,
             data if expect is None else expect(mu),
             op,
