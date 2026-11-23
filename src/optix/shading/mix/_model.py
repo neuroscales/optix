@@ -11,7 +11,7 @@ Per-pixel statistics accumulated by the local step (all posterior
 expectations, summed over frames), with
 
     r  = y − c − m·u                 (residual)
-    σ² = v + γ·m·ũ                   (variance; ũ = u, or 0)
+    σ² = v + g·m·ũ                   (variance; ũ = u, or 0)
     q  = (r² + δ − σ²) / (2σ⁴)       (score with respect to the variance,
                                       δ = quantisation² / 12)
 
@@ -135,7 +135,7 @@ class Component(Protocol):
 
 @dataclass
 class Prior:
-    """Prior over the class model, and the regularisers of c, v, θ, γ."""
+    """Prior over the class model, and the regularisers of c, v, θ, g."""
 
     alpha: Tensor  # (K+1,) Dirichlet concentrations, background last
     params: Tensor  # (K, P) parameters of the tissue classes
@@ -155,7 +155,7 @@ class Posterior:
 
 @dataclass
 class Params:
-    """Point estimates: offset c, variance v, log-modulation θ, gain γ."""
+    """Point estimates: offset c, variance v, log-modulation θ, gain g."""
 
     C: Tensor  # (H, W)
     V: Tensor  # (H, W)
@@ -250,7 +250,7 @@ class MixtureFit:
 
     # -- helpers -----------------------------------------------------------
     def modulation(self) -> Tensor:
-        """M = exp(B·θ) on the pixel grid."""
+        """m = exp(Φ·θ) on the pixel grid."""
         return reconstruct(self.param.theta, [self.by, self.bx]).exp()
 
     def frames(
@@ -473,8 +473,8 @@ class MixtureFit:
 
         The bound is
 
-            ∑ᵢₖ log ∑_z exp(E[log πₖ_z]) · p(yᵢₖ | z)
-            − ∑ₖ KL(q(πₖ) ‖ p(πₖ)) + log p(θ) + log p(v) + log p(γ)
+            ∑ᵢₖ log ∑_z exp(E[log π_{kz}]) · p(yᵢₖ | z)
+            − ∑ₖ KL(q(πₖ) ‖ p(πₖ)) + log p(θ) + log p(v) + log p(g)
         """
         prm, prior, post = self.param, self.prior, self.post
         height, width = self.spatial_shape
@@ -601,7 +601,7 @@ class MixtureFit:
             full=self.full,
         )
 
-    # -- parameter step: c, v, θ, γ ----------------------------------------
+    # -- parameter step: c, v, θ, g ----------------------------------------
     def update_parameters(
         self,
         c: bool = True,
@@ -614,10 +614,10 @@ class MixtureFit:
         """One joint Fisher-scoring step, from the last local step.
 
         The complete-data Fisher information is block-diagonal across
-        pixels in (c, v), and couples them to (θ, log γ) only through
+        pixels in (c, v), and couples them to (θ, log g) only through
         per-pixel terms. c and v are eliminated (Schur complement), which
         leaves a dense system of the size of the basis for θ and a scalar
-        equation for log γ; they are then back-substituted.
+        equation for log g; they are then back-substituted.
         """
         if self._stats is None:
             raise RuntimeError("Run update_latent() first")
@@ -634,11 +634,11 @@ class MixtureFit:
 
         gM = gam * M
         Fcm = M * Hcm  # Fisher(c, log m)
-        Fvm = gM * Hvm  # Fisher(v, log m) = Fisher(v, log γ)
+        Fvm = gM * Hvm  # Fisher(v, log m) = Fisher(v, log g)
         Fmm = M.square().mul_(Hmm)  # Fisher(log m, log m), mean part
         Vmm = gM.square().mul_(Hmg)  # Fisher(log m, log m), variance part
         Sm = M.mul(Gm).addcmul(gM, Gmg)  # score of log m
-        Sg = gM * Gmg  # score of log γ (per pixel)
+        Sg = gM * Gmg  # score of log g (per pixel)
         tiny = torch.finfo(M.dtype).tiny
         iHcc = Hcc.clamp_min(tiny).reciprocal_()
         iHvv = Hvv.clamp_min(tiny).reciprocal_()
@@ -680,7 +680,7 @@ class MixtureFit:
             dtheta *= shrink
             dlogm *= shrink
 
-        # Gain: scalar step on log γ, with v eliminated
+        # Gain: scalar step on log g, with v eliminated
         dloggain = 0.0
         if gain:
             deviation = (gam / self.gain0).log().item()
@@ -909,7 +909,7 @@ def fit_modulation(
     tissue signal of pixel i is mᵢ·E[u]. Its log is fitted by weighted,
     penalised least squares in the DCT basis,
 
-        min ½ ∑ᵢ wᵢ (log m̂ᵢ − (B·θ)ᵢ)² + ½ θᵀ·diag(penalty)·θ,
+        min ½ ∑ᵢ wᵢ (log m̂ᵢ − (Φ·θ)ᵢ)² + ½ θᵀ·diag(penalty)·θ,
 
     where m̂ᵢ = totalᵢ / countᵢ and wᵢ = info · countᵢ is the information
     about log mᵢ (info ≈ mean² / variance of one tissue value). Pixels
