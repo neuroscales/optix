@@ -30,7 +30,7 @@ def cubic_mode(
 ) -> Tensor:
     """Mode û of the integrand over u (in t = log u), "full" noise model.
 
-    With c = γm, r = r₀ − m·u and σ² = v + c·u, multiplying
+    With c = gm, r = r₀ − m·u and σ² = v + c·u, multiplying
 
         l′(t) = ν − β·u + u·[m·r/σ² + ½c·(r² + δ − σ²)/σ⁴]
 
@@ -49,11 +49,11 @@ def cubic_mode(
     """
     # Every in-place operation below acts on a temporary of this function.
     # In float32, the mode loses accuracy when shot noise is negligible
-    # (γ·m·û / v ≲ 5·10⁻³, e.g. γ ≈ 0.02 with v ≈ 10⁵): the cubic then
+    # (g·m·û / v ≲ 5·10⁻³, e.g. g ≈ 0.02 with v ≈ 10⁵): the cubic then
     # degenerates and x − a/3 cancels. Such settings are not realistic for
     # this model, and the prototype's mode is kept as is.
     tiny = torch.finfo(R0.dtype).tiny
-    c = M * gain  # γm
+    c = M * gain  # gm
     M2 = M.square()
     Vc = V * c
     c3 = (beta * c).add_(M2, alpha=0.5).mul_(c).neg_()  # −(βc + ½m²)·c
@@ -179,7 +179,7 @@ def quadrature(
     C, V, M : (H, W) Tensor
         Offset c, variance v and modulation m.
     gain : () Tensor
-        Gain γ.
+        Gain g.
     mu, nu : () Tensor
         Mean μ and shape ν of the Gamma class.
     dq : float
@@ -187,7 +187,7 @@ def quadrature(
     nodes, logws : tuple of float
         Gauss-Hermite nodes xⱼ and log(wⱼ) + xⱼ².
     full : bool
-        Noise model: σ² = v + γ·m·u if True, σ² = v otherwise.
+        Noise model: σ² = v + g·m·u if True, σ² = v otherwise.
 
     Returns
     -------
@@ -233,10 +233,10 @@ def quadrature(
         if not full:
             return G, F, F
         # Terms that come from the dependence of σ² on u
-        tmp1 = (M * iS2).mul_(gain)  # γm/σ²
+        tmp1 = (M * iS2).mul_(gain)  # gm/σ²
         G.addcmul_(R.square().add_(dq).sub_(S2), tmp1 * iS2, value=0.5)
-        F.addcmul_(tmp1, tmp1, value=0.5)  # + ½γ²m²/σ⁴
-        tmp2 = R * tmp1  # γmr/σ²
+        F.addcmul_(tmp1, tmp1, value=0.5)  # + ½g²m²/σ⁴
+        tmp2 = R * tmp1  # gmr/σ²
         H = (  # −∂²/∂u² log N
             tmp1.square()
             .mul_(-0.5)

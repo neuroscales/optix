@@ -115,13 +115,13 @@ class GammaMixture(Estimator):
 
     Image formation. A pixel i of picture k records
 
-        yᵢₖ ~ N(cᵢ + mᵢ·uᵢₖ, vᵢ + γ·mᵢ·uᵢₖ)
+        yᵢₖ ~ N(cᵢ + mᵢ·uᵢₖ, vᵢ + g·mᵢ·uᵢₖ)
 
     with the offset c (camera offset plus background, in ADU), the
-    variance v of an empty pixel, the gain γ (ADU per electron), the
+    variance v of an empty pixel, the gain g (ADU per electron), the
     smooth modulation m (flat field) and the signal u ≥ 0 in ADU. It is
-    the Gaussian limit of yᵢₖ = oᵢ + γ·Poisson(mᵢ·(sᵢₖ + bᵢ) + dᵢ) + read
-    noise, with u = γ·s, c = o + γ·(m·b + d) and v = σ² + γ²·(m·b + d).
+    the Gaussian limit of yᵢₖ = oᵢ + g·Poisson(mᵢ·(sᵢₖ + bᵢ) + dᵢ) + read
+    noise, with u = g·s, c = o + g·(m·b + d) and v = σ² + g²·(m·b + d).
 
     Probabilistic model. The signal is a mixture of K tissue classes
     and a background class, with proportions drawn per picture:
@@ -129,9 +129,9 @@ class GammaMixture(Estimator):
         πₖ ~ Dirichlet(α),  zᵢₖ ~ Categorical(πₖ)
         uᵢₖ | zᵢₖ = background ~ δ(0)
         uᵢₖ | zᵢₖ = c ~ Gamma(ν_c, rate ν_c / μ_c)
-        m = exp(B·θ),  θ ~ N(0, (λ·diag(bending energy))⁻¹)
+        m = exp(Φ·θ),  θ ~ N(0, (λ·diag(bending energy))⁻¹)
 
-    with B the separable DCT-II basis without its DC term (geometric mean
+    with Φ the separable DCT-II basis without its DC term (geometric mean
     of m = 1) and an inverse-gamma-like prior on v,
     log p(v) = −½·v_dof·(log v + v₀/v).
 
@@ -156,7 +156,7 @@ class GammaMixture(Estimator):
     ADU) by default; `quantization="auto"` detects it from a sample of
     the data.
 
-    The gain γ is held at its nominal value (`gain`, or the gain of an
+    The gain g is held at its nominal value (`gain`, or the gain of an
     initial [`SensorEstimate`][optix.estimates.SensorEstimate]): in this
     model it is identified only through the shape of the signal
     distribution.
@@ -263,13 +263,13 @@ class GammaMixture(Estimator):
             Number K of tissue classes (besides the background).
             Default 1.
         noise : {"full", "constant"}
-            Variance of the data given the signal: v + γ·m·u (`"full"`,
-            the default) or v (`"constant"`, no shot noise; γ is unused).
+            Variance of the data given the signal: v + g·m·u (`"full"`,
+            the default) or v (`"constant"`, no shot noise; g is unused).
         order : int or (int, int)
             Number of DCT basis functions of log m along each spatial
             axis. Default (8, 8).
         gain : float, optional
-            Nominal gain γ in ADU per electron. Default: the (mean) gain
+            Nominal gain g in ADU per electron. Default: the (mean) gain
             of an initial `SensorEstimate`, else 1.
         nodes : int
             Number of Gauss-Hermite nodes of the integral over u (per
@@ -796,7 +796,7 @@ class GammaMixture(Estimator):
     ) -> tuple[WritableArrayLike, WritableArrayLike | None, Tensor]:
         """Classify pictures with the fitted model.
 
-        c, v, m, γ, μ, ν and α are kept fixed; only the proportions q(π)
+        c, v, m, g, μ, ν and α are kept fixed; only the proportions q(π)
         of each picture are inferred, by alternating q(z) and q(π) for
         each batch of pictures. The class likelihoods do not depend on π,
         so they are computed once per batch: the cost is that of one

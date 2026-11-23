@@ -39,7 +39,7 @@ shading = random_shading((H, W), strength=0.3, seed=1)
 
 `sensor` and `shading` are *estimates*: small dataclasses of tensors that hold
 a camera model (offset, read-noise variance, gain) and a shading model (flat
-field and dark image). Here they are the truth we will try to recover. The
+field and dark field). Here they are the truth we will try to recover. The
 flat field `shading.flat` is a smooth map with a mean of 1 and a spread of
 about 30 % across the field of view.
 
@@ -70,7 +70,7 @@ $y = g\,\mathrm{Poisson}(n) + o + \varepsilon$ described in
 optix will ship its algorithms as estimators. Until the first ones land, here
 is a small one written with the same building blocks, so that the tour has
 something to run. It estimates a flat field as the mean image of many frames,
-after subtracting a dark image that it is given.
+after subtracting a dark field that it is given.
 
 ```{.python title="meanflat.py"}
 --8<-- "snippets/meanflat.py"
@@ -87,7 +87,7 @@ each of them.
 
 ## Fit and apply
 
-The dark image is not something `MeanFlat` can estimate, so we pass it
+The dark field is not something `MeanFlat` can estimate, so we pass it
 through `init`. In practice it would come from a stack of frames recorded
 without light. To keep the tour short we use the true camera offset instead.
 

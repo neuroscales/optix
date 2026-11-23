@@ -1,4 +1,7 @@
-"""`PoissonGaussian`: the noise-model fit of Foi et al. (2008)."""
+"""`PoissonGaussian`: the Poisson-Gaussian noise-model fit.
+
+After [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399).
+"""
 
 import math
 import warnings
@@ -77,11 +80,11 @@ def bit_depth_range(maximum: float | Tensor) -> int:
 class PoissonGaussian(Estimator):
     """Poisson–Gaussian noise model σ²(y) = a·y + b fitted from data.
 
-    The variance of an observation z with expectation y (both in ADU) is
-    σ²(y) = a·y + b, possibly clipped to the data range. The fit follows
-    Foi et al. (2008): wavelet-domain local estimates of
-    (expectation, standard deviation) on level sets of a smoothed image,
-    then a maximum-likelihood fit of (a, b) to these pairs that accounts
+    The variance of an observation z with expectation y (both in ADU) is σ²(y)
+    = a·y + b, possibly clipped to the data range. The fit follows [Foi et al.
+    (2008)](https://doi.org/10.1109/TIP.2008.2001399): wavelet-domain local
+    estimates of (expectation, standard deviation) on level sets of a smoothed
+    image, then a maximum-likelihood fit of (a, b) to these pairs that accounts
     for clipping.
 
     The result is `estimates["sensor"]`, a
@@ -119,6 +122,23 @@ class PoissonGaussian(Estimator):
                  pages   = {1737--1754},
                  year    = {2008},
                  doi     = {10.1109/TIP.2008.2001399}
+               }
+               ```
+        2. Nelder JA, Mead R. *A simplex method for function
+           minimization.* Comput J **7**(4):308–313, 1965.
+           [doi:10.1093/comjnl/7.4.308](https://doi.org/10.1093/comjnl/7.4.308)
+
+           ??? quote "BibTeX"
+               ```bibtex
+               @article{nelder1965simplex,
+                 author  = {Nelder, J. A. and Mead, R.},
+                 title   = {A simplex method for function minimization},
+                 journal = {The Computer Journal},
+                 volume  = {7},
+                 number  = {4},
+                 pages   = {308--313},
+                 year    = {1965},
+                 doi     = {10.1093/comjnl/7.4.308}
                }
                ```
 
@@ -340,7 +360,9 @@ class PoissonGaussian(Estimator):
         }
 
     def _ml(self, pairs: Pairs, callback: Callable | None) -> tuple:
-        """LS initialisation, then ML by Nelder–Mead (Section III-D.1).
+        """LS initialisation, then ML by
+        [Nelder–Mead](https://doi.org/10.1093/comjnl/7.4.308) (Section
+        III-D.1).
 
         Returns (a, b, covariance, covariance_ok) in normalised units.
         """
