@@ -1,3 +1,7 @@
+---
+icon: fontawesome/solid/house
+---
+
 # optix
 
 Processing algorithms for microscopy, in [PyTorch](https://pytorch.org).
