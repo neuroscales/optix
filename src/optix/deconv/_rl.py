@@ -45,6 +45,7 @@ def rl_step(
     mu: Tensor | None = None,
     flat: Tensor | None = None,
     back: Callable[[Tensor], Tensor] | None = None,
+    penalty: Callable[[Tensor], Tensor] | None = None,
 ) -> Tensor:
     """One Richardson–Lucy update on a block.
 
@@ -78,6 +79,10 @@ def rl_step(
         Back projector B, block `(..., *L)` to object `(..., *N)`, used in
         place of Hᵀ (an unmatched back projector); `inv_norm` is then
         1 / B1. Not combined with `flat`. Default: Hᵀ.
+    penalty : callable, optional
+        Denominator d(f) > 0 of a one-step-late regularised update
+        (Green 1990), evaluated at the current estimate: c ← c / d(f)
+        before damping. Default: none (d = 1).
 
     Returns
     -------
@@ -93,6 +98,8 @@ def rl_step(
             raise ValueError("back and flat cannot be combined")
         ratio = ratio * flat
     c = (op.adjoint if back is None else back)(ratio) * inv_norm
+    if penalty is not None:
+        c = c / penalty(f)
     if damping != 1.0:
         c = 1.0 - damping + damping * c
     return (f * c).clamp_(min=0)
@@ -184,6 +191,8 @@ def rl_block(
     back: Callable[[Tensor], Tensor] | None = None,
     accelerate: bool = False,
     trace: dict | None = None,
+    penalty: Callable[[Tensor], Tensor] | None = None,
+    tol: float | None = None,
 ) -> tuple[Tensor, int]:
     """Richardson–Lucy iterations on one block, optionally accelerated.
 
@@ -237,6 +246,13 @@ def rl_block(
         plain updates), `"clipped"` (number of predictions with negative
         pixels set to 0) and `"effective"` (estimated number of
         unaccelerated iterations, ∑ₖ ηₖ, Biggs and Andrews 1997, Eq. 12).
+    penalty : callable, optional
+        Denominator of a one-step-late regularised update (see
+        [`rl_step`][optix.deconv.utils.rl_step]).
+    tol : float, optional
+        With `n_iter=None`: stop once the relative change of the
+        estimate on the block, ‖f⁽ʳ⁺¹⁾ − f⁽ʳ⁾‖₂ / ‖f⁽ʳ⁾‖₂, is below `tol`
+        (or at `max_iter`), in place of the χ² test.
 
     Returns
     -------
@@ -275,7 +291,7 @@ def rl_block(
                 num = float((g1 * g2).sum(dtype=torch.float64))
                 gamma = (a * num / den) ** 2 if den > 0 else 0.0
         mu = None
-        if n_iter is None:
+        if n_iter is None and tol is None:
             mu = _expected(f, op, background, flat)
             if chi2_probability(data + variance, mu + variance) >= alpha:
                 break
@@ -299,7 +315,13 @@ def rl_block(
             mu=mu,
             flat=flat,
             back=back,
+            penalty=penalty,
         )
+        stop = False
+        if n_iter is None and tol is not None:
+            old = op.crop(f).double()
+            change = (op.crop(new).double() - old).norm()
+            stop = bool(change <= tol * old.norm())
         if accelerate:
             if n > 0:  # the first update only sets the starting image
                 g1, g2 = new - y, g1
@@ -310,6 +332,8 @@ def rl_block(
         eta = 1.0 + gamma * eta
         effective += eta
         n += 1
+        if stop:
+            break
     if trace is not None:
         trace["alpha"] = alphas
         trace["clipped"] = clipped
@@ -446,6 +470,7 @@ class RichardsonLucy(Estimator):
     }
     recommended = dict(paper)
     _accelerate = False
+    _extra_overhead = 0.0  # working buffers of a subclass's update
 
     def __init__(
         self,
@@ -684,7 +709,8 @@ class RichardsonLucy(Estimator):
             data,
             self.options["block"],
             halo,
-            overhead=_OVERHEAD_ACCEL if self._accelerate else _OVERHEAD,
+            overhead=(_OVERHEAD_ACCEL if self._accelerate else _OVERHEAD)
+            + self._extra_overhead,
             contiguous=True,
             align=chunks_of(out),
             **backend,
