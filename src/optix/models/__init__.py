@@ -3,14 +3,17 @@
 Samples depend on the seed **and** on how the caller chunks the calls.
 """
 
+from .blur import gaussian_psf, simulate_blur
 from .mixture import GammaMixtureSample, simulate_gamma_mixture
 from .sensor import random_sensor, simulate_sensor
 from .shading import random_shading, simulate_shading
 
 __all__ = [
     "GammaMixtureSample",
+    "gaussian_psf",
     "random_sensor",
     "random_shading",
+    "simulate_blur",
     "simulate_gamma_mixture",
     "simulate_sensor",
     "simulate_shading",
