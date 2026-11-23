@@ -117,8 +117,8 @@ implementation by a bound on it (below).
 ### Discretisation
 
 The paper does not give a discretisation of $\nabla$ and $\operatorname{div}$. Here,
-on a periodic grid with unit voxel spacing along every axis, with $\mathbf{e}_k$ the unit vector of
-axis $k$ and $d$ the number of spatial dims:
+on a periodic grid with unit voxel spacing along every axis, with $\mathbf{e}_k$ the
+unit vector of axis $k$ and $d$ the number of spatial dims:
 
 $$
 (\nabla\mathbf{x})_k(\mathbf{r}) = x(\mathbf{r} + \mathbf{e}_k) - x(\mathbf{r}),
@@ -131,13 +131,17 @@ $$
 forward differences for the gradient and backward differences for the
 divergence, which is minus the adjoint of the gradient. Then
 $\operatorname{div}\mathbf{n}$ is exactly minus the gradient of the discrete TV.
-The floor $\varepsilon$ of $\lVert\nabla\mathbf{x}\rVert$ is also not in the paper. By
-default it is the single-precision round-off level of the estimate,
-$\varepsilon = 2^{-23}\max\lvert\mathbf{x}\rvert$, in whatever dtype the
-computation runs, so that it does not depend on the scale of the image. Where the
-gradient is below it, the normal vanishes with the gradient.
+The floor $\varepsilon$ of $\lVert\nabla\mathbf{x}\rVert$ is not in the paper
+either. It only avoids a division of 0 by 0. By default it is the round-off level
+of the working dtype, $\varepsilon = \mathrm{eps}\cdot\max\lvert\mathbf{x}\rvert$, with
+$\mathrm{eps}$ the machine epsilon of the dtype, so that it does not depend on the
+scale of the image. Where the gradient is below it, the normal vanishes with the
+gradient.
 
-Since $\lvert n_k \rvert \le 1$, $\lvert\operatorname{div}\mathbf{n}\rvert \le d + \sqrt{d}$, and the
+Since $\lVert\mathbf{n}\rVert \le 1$, $\sum_k n_k(\mathbf{r}) \le \sqrt{d}$, and each
+$-n_k(\mathbf{r} - \mathbf{e}_k) \le 1$ adds at most 1, so
+$\lvert\operatorname{div}\mathbf{n}\rvert \le d + \sqrt{d}$ (the componentwise bound
+$\lvert n_k \rvert \le 1$ alone would only give $2d$). The
 denominator stays positive when $\lambda_{\mathrm{TV}} < 1/(d + \sqrt{d})$, that is
 0.29 in 2-D and 0.21 in 3-D. Larger values are refused with an error.
 
@@ -161,10 +165,12 @@ two images is less than a threshold", $10^{-5}$ in its experiments. The norm of
 the relative difference is not specified, and neither is a cap on the iterations;
 optix uses the $\ell_2$ norm on the observed region of each block, and 1000
 iterations at most. The number of iterations per block is recorded in
-`history.extras["iterations"]`. With the paper's settings the relative change can
-stay above the threshold up to the cap: TV slows the divergence of
-Richardson–Lucy but does not stop it, and `n_iter` then selects the number of
-iterations directly.
+`history.extras["iterations"]`. With the default $\varepsilon$ the threshold is
+usually not reached: the one-step-late iteration keeps oscillating in flat noisy
+regions, where the normals keep changing direction, and the relative change
+plateaus near $1.5 \cdot 10^{-3}$, so `max_iter` is the effective stop. Use `n_iter`
+to select the number of iterations directly, or a larger `epsilon` (an extension),
+which smooths the TV term and gives a stop that does trigger.
 
 ### Starting estimate
 
@@ -184,8 +190,8 @@ The two give different iterates and different results at a given iteration count
 ## Faithful mode and extensions
 
 `faithful=True` (the default) reproduces the paper: $\lambda_{\mathrm{TV}} = 0.002$
-(the value of its experiments on synthetic data; it uses 0.005 for one real data
-set), a start from the data, and the relative-change stopping rule with threshold
+(the value of its experiments on synthetic data and on the real shell image of
+its Fig. 4; it uses 0.005 for the real bead image of its Fig. 5), a start from the data, and the relative-change stopping rule with threshold
 $10^{-5}$. The choices that the paper leaves open (discretisation, $\varepsilon$,
 the norm and the cap of the stopping rule, the halo) are fixed as described above and
 are the same in both modes. The defaults of `faithful=False` are the same. Any
@@ -208,16 +214,22 @@ Fitting with a camera model, `fit(data, init=sensor)` with a
 $(\mathbf{y} - o)/g$, as in [Richardson–Lucy](richardson-lucy.md#faithful-mode-and-extensions),
 and makes the estimator non-faithful. The background, shifted-Poisson and damping
 options of Richardson–Lucy do not exist here. Anisotropic voxel spacing in the TV
-term and a Hessian-based regulariser are not implemented.
+term and a Hessian-based regulariser are not implemented: $\lambda_{\mathrm{TV}}$
+acts per voxel, along every axis alike. The data of the paper are anisotropic
+($30 \times 30 \times 50$ nm voxels for the synthetic images,
+$89 \times 89 \times 230$ nm for the real ones), and the paper does not say whether
+the differences along the axial axis were weighted.
 
 ### Float32 and float64
 
-The TV term is non-smooth: the unit normal $\nabla\mathbf{x}/\lVert\nabla\mathbf{x}\rVert$
-jumps between directions where the gradient is close to zero, and $\varepsilon$ is
-at round-off level, so in nearly flat regions the direction is decided by
-round-off. A float32 and a float64 run therefore differ more than they do for
+The normals $\nabla\mathbf{x}/\lVert\nabla\mathbf{x}\rVert$ are very sensitive to
+round-off where the gradient is small against the noise, since they scale as
+$1/\lVert\nabla\mathbf{x}\rVert$. The TV term, which is non-smooth at a vanishing
+gradient and has $\varepsilon$ at round-off level, amplifies round-off by about
+$10^3$ to $10^4$. A float32 and a float64 run therefore differ more than they do for
 plain Richardson–Lucy: of the order of $10^{-3}$ of the peak, against about
-$10^{-5}$. Both solve the same problem, since $\varepsilon$ is the same in both.
+$10^{-5}$. With a larger floor, `epsilon=1` for instance (an extension), the
+difference drops to about $4 \cdot 10^{-6}$, the level of plain Richardson–Lucy.
 
 ## Memory and streaming
 
