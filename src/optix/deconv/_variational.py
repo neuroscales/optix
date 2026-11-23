@@ -23,6 +23,13 @@ _LOADED_BUFFERS = 4.0
 _MIN_CORE_FRACTION = 0.25
 
 
+def _hashable(index: tuple) -> tuple:
+    """A dict key for an index of ints and slices."""
+    return tuple(
+        (s.start, s.stop, s.step) if isinstance(s, slice) else s for s in index
+    )
+
+
 @dataclass
 class _Problem:
     """Per-block inputs: data in electrons and read-noise variance."""
@@ -231,7 +238,8 @@ class _Variational(_BlockDeconvolution):
         count = torch.zeros(group + sample, dtype=f64)
         peak = torch.full(group + sample, -torch.inf, dtype=f64)
         noise = torch.zeros(group + sample, dtype=f64)
-        upper: dict[tuple[int, ...], _UpperQuantile] = {}
+        # keyed by (start, stop) pairs: slices are unhashable before 3.12
+        upper: dict[tuple, tuple[tuple, _UpperQuantile]] = {}
         n = math.prod(spatial)
         maps = self._maps(data, backend)
         for chunk in blocks(data, None, 0, **backend):
@@ -241,15 +249,16 @@ class _Variational(_BlockDeconvolution):
             peak[index] = torch.maximum(
                 peak[index], torch.tensor(float(blk.data.max()), dtype=f64)
             )
-            if index not in upper:
-                upper[index] = _UpperQuantile(n, _PEAK_QUANTILE)
-            upper[index].update(blk.data)
+            key = _hashable(index)
+            if key not in upper:
+                upper[key] = (index, _UpperQuantile(n, _PEAK_QUANTILE))
+            upper[key][1].update(blk.data)
             var = torch.as_tensor(blk.variance)
             noise[index] += float(var.sum(dtype=f64)) * (
                 blk.data.numel() / max(var.numel(), 1)
             )
         robust = torch.full(group + sample, -torch.inf, dtype=f64)
-        for index, q in upper.items():
+        for index, q in upper.values():
             robust[index] = q.value()
         tiny = torch.finfo(f64).tiny
         self.peak = peak
