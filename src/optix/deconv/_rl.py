@@ -621,6 +621,14 @@ class RichardsonLucy(Estimator):
             trace=trace,
         )
 
+    def _start(self, chunk: Chunk) -> object:
+        """Per-image input of `_solve`: the start level of the image."""
+        return float(self.level[chunk.group + chunk.samples].squeeze())
+
+    def _overhead(self) -> float:
+        """Working buffers per loaded voxel, for the block size."""
+        return _OVERHEAD_ACCEL if self._accelerate else _OVERHEAD
+
     # -- estimator protocol ----------------------------------------------
     def _fit(
         self,
@@ -692,7 +700,7 @@ class RichardsonLucy(Estimator):
             data,
             self.options["block"],
             halo,
-            overhead=_OVERHEAD_ACCEL if self._accelerate else _OVERHEAD,
+            overhead=self._overhead(),
             contiguous=True,
             align=chunks_of(out),
             **backend,
@@ -703,7 +711,7 @@ class RichardsonLucy(Estimator):
             if key not in ops:
                 ops[key] = PaddedConvolution(psf, key)
             op = ops[key]
-            start = float(self.level[chunk.group + chunk.samples].squeeze())
+            start = self._start(chunk)
             f, n = self._solve(blk, op, start, trace)
             iterations.append(float(n))
             if self._accelerate:
