@@ -18,6 +18,7 @@ example. The sections follow the modules of the
 | | [CIDRE](shading/cidre.md) (`CIDRE`) | flat field and dark field |
 | | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
+| [`optix.attenuation`](../reference/attenuation.md) | [Depth-resolved attenuation](attenuation/depth-resolved.md) (`DepthResolved`) | attenuation coefficient along the propagation axis, and the compensated data |
 | [`optix.background`](../reference/background.md) | [Rolling ball](background/rolling-ball.md) (`RollingBall`, `TopHat`) | background, by grey-scale opening |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |

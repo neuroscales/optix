@@ -29,6 +29,9 @@ nav = [
       "algorithms/shading/illumination-function.md",
       "algorithms/shading/gamma-mixture.md",
     ]},
+    {"Attenuation" = [
+      "algorithms/attenuation/depth-resolved.md",
+    ]},
     {"Background" = [
       "algorithms/background/rolling-ball.md",
     ]},

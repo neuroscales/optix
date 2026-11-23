@@ -144,6 +144,24 @@ stray light. This is the reason why corrections never subtract both
 | $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
 | $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
 
+## Attenuation
+
+Along the propagation axis $z$ of the illumination, with the index $j$ of the
+pixels of a profile (here, and only here, $j$ counts depth pixels).
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $y(z)$, $y_j$ | signal at depth $z$; value of pixel $j$ of a profile | the data of `DepthResolved` |
+| $\mu(z)$, $\mu_j$ | attenuation coefficient, in the inverse of the length unit of $z$ | `DepthResolved.attenuation`, `depth_resolved` |
+| $s$ | number of times the light crosses the medium (2 for OCT, 1 for a light sheet) | `passes` |
+| $\Delta$ | pixel size along $z$ (also the quantisation step above) | `pixel_size` |
+| $\xi$ | constant of the model: recorded fraction, conversion factor and incident irradiance | |
+| $T_j$ | sum of the intensities from pixel $j$ to the end of the profile | `tail_sums` |
+| $\gamma_j$ | compensation gain of pixel $j$ | `compensate` |
+| $q$, $Q$ | lateral position and number of positions of the total-variation term | `tv_axis` |
+| $\eta$, $\epsilon$ | weight of the total variation, and floor of its weights (also natural parameters, and read noise) | `eta`, `epsilon` |
+| $\sigma^2$ | average noise power of the restoration filter (also the read-noise variance) | `noise_power` |
+
 ## Distributions
 
 These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).
