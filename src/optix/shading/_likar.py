@@ -2,6 +2,7 @@
 
 import itertools
 import math
+import warnings
 from collections.abc import Callable, Sequence
 
 import numpy as np
@@ -9,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from .._config import get_config
 from .._estimator import Estimator, Tags
 from ..estimates import ShadingEstimate
 from ..io import ArrayLike, Labeled, Layout, WritableArrayLike, frame_batches
@@ -264,16 +266,60 @@ def _powell(
 
 # -- estimator ---------------------------------------------------------------
 class _GreyCounts:
-    """Counts of (pixel, grey level) pairs: a mergeable sparse histogram."""
+    """Counts of (pixel, grey level) pairs: a mergeable histogram.
 
-    def __init__(self, levels: int) -> None:
+    With `pixels` given and a dense `(pixels, G)` int32 table within
+    `memory` bytes, counts are accumulated in that table. Otherwise keys
+    pixel · G + (grey − 1) are buffered and merged (sorted and
+    de-duplicated) only when the buffer outgrows the merged keys, so each
+    key is sorted O(log batches) times.
+    """
+
+    def __init__(
+        self,
+        levels: int,
+        pixels: int | None = None,
+        memory: int | None = None,
+    ) -> None:
         self.levels = levels
+        self.pixels = pixels
+        self.dense = (
+            pixels is not None
+            and memory is not None
+            and 4 * pixels * levels <= memory
+        )
+        self.table: Tensor | None = None
         self.keys: Tensor | None = None
         self.counts: Tensor | None = None
+        self._pending: list[Tensor] = []
+        self._pending_size = 0
 
     def update(self, pixel: Tensor, grey: Tensor) -> None:
-        keys = pixel.reshape(-1) * self.levels + (grey.reshape(-1) - 1)
+        keys = pixel.reshape(-1).long() * self.levels + (
+            grey.reshape(-1).long() - 1
+        )
+        if self.dense:
+            if self.table is None:
+                self.table = torch.zeros(
+                    self.pixels * self.levels,
+                    dtype=torch.int32,
+                    device=keys.device,
+                )
+            ones = torch.ones(1, dtype=torch.int32, device=keys.device)
+            self.table.scatter_add_(0, keys, ones.expand_as(keys))
+            return
+        self._pending.append(keys)
+        self._pending_size += keys.numel()
+        merged = 0 if self.keys is None else self.keys.numel()
+        if self._pending_size >= max(merged, 1 << 20):
+            self._merge()
+
+    def _merge(self) -> None:
+        if not self._pending:
+            return
+        keys = torch.cat(self._pending)
         counts = torch.ones_like(keys)
+        self._pending, self._pending_size = [], 0
         if self.keys is not None:
             keys = torch.cat([self.keys, keys])
             counts = torch.cat([self.counts, counts])
@@ -284,11 +330,73 @@ class _GreyCounts:
 
     def pairs(self) -> tuple[Tensor, Tensor, Tensor]:
         """Pixel index, grey level (1 … G) and count of each pair."""
+        if self.dense:
+            if self.table is None:
+                keys = torch.zeros(0, dtype=torch.long)
+                counts = keys
+            else:
+                keys = self.table.nonzero().view(-1)
+                counts = self.table[keys].long()
+        else:
+            self._merge()
+            if self.keys is None:
+                keys = counts = torch.zeros(0, dtype=torch.long)
+            else:
+                keys, counts = self.keys, self.counts
+        return keys // self.levels, keys % self.levels + 1, counts
+
+
+def _integer_range(dtype: object, levels: int) -> tuple[float, float] | None:
+    """Range of an integer `dtype` with at most `levels` values, else None."""
+    if isinstance(dtype, torch.dtype):
+        if dtype.is_floating_point or dtype.is_complex or dtype == torch.bool:
+            return None
+        info = torch.iinfo(dtype)
+    else:
+        try:
+            dtype = np.dtype(dtype)
+        except TypeError:
+            return None
+        if dtype.kind not in "iu":
+            return None
+        info = np.iinfo(dtype)
+    if int(info.max) - int(info.min) + 1 > levels:
+        return None
+    return float(info.min), float(info.max)
+
+
+def _quadratic_min(m: Sequence[float], xr: float, yr: float) -> float:
+    """Exact minimum of 1 + m·(x̃, ỹ, x̃ỹ, x̃² − 1/3, ỹ² − 1/3).
+
+    Over the rectangle |x̃| ≤ xr, |ỹ| ≤ yr: the minimum of a quadratic
+    is at a corner, at a critical point of an edge or at the interior
+    critical point.
+    """
+    m1, m2, m3, m4, m5 = (float(v) for v in m)
+
+    def s(x: float, y: float) -> float:
         return (
-            self.keys // self.levels,
-            self.keys % self.levels + 1,
-            self.counts,
+            1
+            + m1 * x
+            + m2 * y
+            + m3 * x * y
+            + m4 * (x * x - 1 / 3)
+            + m5 * (y * y - 1 / 3)
         )
+
+    points = [(x, y) for x in (-xr, xr) for y in (-yr, yr)]
+    for x in (-xr, xr):  # ∂s/∂ỹ = m₂ + m₃x̃ + 2m₅ỹ = 0
+        if m5 != 0:
+            points.append((x, -(m2 + m3 * x) / (2 * m5)))
+    for y in (-yr, yr):  # ∂s/∂x̃ = m₁ + m₃ỹ + 2m₄x̃ = 0
+        if m4 != 0:
+            points.append((-(m1 + m3 * y) / (2 * m4), y))
+    det = 4 * m4 * m5 - m3 * m3
+    if det != 0:
+        points.append(
+            ((m3 * m2 - 2 * m5 * m1) / det, (m3 * m1 - 2 * m4 * m2) / det)
+        )
+    return min(s(x, y) for x, y in points if abs(x) <= xr and abs(y) <= yr)
 
 
 class Likar(Estimator):
@@ -325,22 +433,34 @@ class Likar(Estimator):
     Pixels at the marginal grey values 1 and G of the input image are
     ignored (they may be saturated).
 
-    Grey levels are defined on the data range [lo, hi] (by default the
-    observed minimum and maximum of each group): a value v has grey level
-    g = round((v − lo)/δ) + 1 with δ = (hi − lo)/(G − 1), so that 8-bit
-    data with `data_range=(0, 255)` and `levels=256` use its integer
-    values. The model and the correction are in data units.
+    Grey levels are defined on the data range [lo, hi]: a value v has
+    grey level g = round((v − lo)/δ) + 1 with δ = (hi − lo)/(G − 1). By
+    default, integer data whose dtype has at most G values (e.g. `uint8`
+    with `levels=256`, the paper's setting) use the dtype range, so the
+    grey levels are the integer values and the marginal ones are the
+    saturation values 0 and 255; wider integers and floats use the
+    observed minimum and maximum of each group. The model and the
+    correction are in data units.
 
     !!! note "Several images"
         The paper corrects one image at a time. Given several frames
         (the sample axes of the layout), one shading per group is fitted
         to minimise the entropy of the histogram of all corrected frames
-        together; fit each frame separately for per-image shading.
+        together. Pooling assumes that the shading is the same in every
+        frame: this holds for acquisition shading (illumination, optics,
+        camera), but not for object-dependent shading (e.g. slice
+        thickness or staining), which varies from one image to the next;
+        fit each frame separately for per-image shading.
 
-    !!! note "Streaming"
-        The fit reads the data once (twice without `data_range`): the
-        statistic is the count of each (pixel, grey level) pair, which
-        holds at most min(frames, G) entries per pixel. The objective is
+    !!! note "Streaming and memory"
+        The fit reads the data once (twice when the range is the observed
+        minimum and maximum): the statistic is the count of each
+        (pixel, grey level) pair, which holds at most min(frames, G)
+        entries per pixel. When a dense table of H·W·G int32 counts fits
+        in the memory budget (`optix.config(memory=...)`), counts are
+        accumulated in it; otherwise they are kept sparse (int64 key and
+        count per pair), and a warning is issued if their worst-case size
+        exceeds the budget: `sampling > 1` reduces it. The objective is
         then evaluated on these counts. `apply` streams frame batches.
 
     Estimates: `"shading"`, a
@@ -425,7 +545,9 @@ class Likar(Estimator):
             not the model; pixel coordinates are pixel centres; corrected
             values outside [−G, 2G] are clamped to the end bins; parameters
             that make Ŝ_M ≤ 0 at a pixel are rejected (their objective
-            exceeds the maximum entropy).
+            exceeds the maximum entropy; the minimum of the quadratic Ŝ_M
+            is checked exactly over the full image, also with
+            `sampling > 1`).
 
         Parameters
         ----------
@@ -434,9 +556,12 @@ class Likar(Estimator):
             images).
         data_range : (float, float), optional
             Data values [lo, hi] of grey levels 1 and G. Default: the
-            observed minimum and maximum of each group. Not specified in
-            the paper, whose images are 8-bit integers. It describes the
-            data and does not affect `is_faithful`.
+            dtype range for integer data with at most G distinct values
+            (e.g. (0, 255) for `uint8` with `levels=256`, as in the
+            paper), otherwise the observed minimum and maximum of each
+            group. The latter is not specified in the paper, whose images
+            are 8-bit integers. It describes the data and does not affect
+            `is_faithful`.
         window : int
             Half-width t of the triangular histogram blur (Eq. 20).
             Default 2 (window of 2t + 1 = 5 bins); 0 disables it.
@@ -492,8 +617,21 @@ class Likar(Estimator):
         )
 
     # -- data reduction ------------------------------------------------------
+    def _default_range(self, data: ArrayLike) -> tuple[float, float] | None:
+        """Given data range, or that of an integer dtype with <= G values."""
+        rng = self.options["data_range"]
+        if rng is not None:
+            return float(rng[0]), float(rng[1])
+        raw = data.array if isinstance(data, Labeled) else data
+        return _integer_range(
+            getattr(raw, "dtype", None), int(self.options["levels"])
+        )
+
     def _counts(
-        self, data: ArrayLike, spatial: tuple[int, int]
+        self,
+        data: ArrayLike,
+        spatial: tuple[int, int],
+        frames: int | None = None,
     ) -> tuple[dict, dict]:
         """Per-group (pixel, grey) counts and data ranges."""
         opt = self.options
@@ -503,8 +641,23 @@ class Likar(Estimator):
         kw = {"ndim": ndim, "dtype": torch.float64, "overhead": 3.0}
         if self.device is not None:
             kw["device"] = self.device
+        h = len(range(0, spatial[0], s))
+        w = len(range(0, spatial[1], s))
+        memory = get_config().memory
+        if 4 * h * w * G > memory:
+            # sparse worst case: int64 key and count per (pixel, grey) pair
+            pairs = h * w * (G if frames is None else min(frames, G))
+            if 16 * pairs > memory:
+                warnings.warn(
+                    f"Likar: the (pixel, grey level) counts may need up to "
+                    f"{16 * pairs / 2**20:.0f} MiB, above the memory budget "
+                    f"of {memory / 2**20:.0f} MiB (optix.config(memory=...)); "
+                    f"use sampling > 1 to fit on fewer pixels",
+                    stacklevel=4,
+                )
+        fixed = self._default_range(data)
         ranges: dict[tuple[int, ...], tuple[float, float]] = {}
-        if opt["data_range"] is None:
+        if fixed is None:
             extrema: dict[tuple[int, ...], MinMax] = {}
             for chunk in frame_batches(data, **kw):
                 sub = chunk.data[:, ::s, ::s]
@@ -515,13 +668,11 @@ class Likar(Estimator):
                     raise ValueError(f"Group {group} is constant: no shading")
                 ranges[group] = (lo, hi)
         counts: dict[tuple[int, ...], _GreyCounts] = {}
-        h = len(range(0, spatial[0], s))
-        w = len(range(0, spatial[1], s))
         for chunk in frame_batches(data, **kw):
-            if opt["data_range"] is None:
+            if fixed is None:
                 lo, hi = ranges[chunk.group]
             else:
-                lo, hi = (float(v) for v in opt["data_range"])
+                lo, hi = fixed
                 ranges[chunk.group] = (lo, hi)
             sub = chunk.data[:, ::s, ::s]
             delta = (hi - lo) / (G - 1)
@@ -529,9 +680,9 @@ class Likar(Estimator):
             pixel = torch.arange(h * w, device=sub.device).view(1, h, w)
             pixel = pixel.expand_as(grey)
             keep = (grey > 1) & (grey < G)  # marginal grey values ignored
-            counts.setdefault(chunk.group, _GreyCounts(G)).update(
-                pixel[keep], grey[keep]
-            )
+            if chunk.group not in counts:
+                counts[chunk.group] = _GreyCounts(G, h * w, memory)
+            counts[chunk.group].update(pixel[keep], grey[keep])
         return counts, ranges
 
     # -- objective -----------------------------------------------------------
@@ -541,27 +692,34 @@ class Likar(Estimator):
         lo: float,
         hi: float,
         basis: Tensor,
+        shape: Sequence[int],
     ) -> Callable[[np.ndarray], float]:
-        """f(θ) = H of the corrected grey levels; θ = (ã₁…ã₅, m̃₁…m̃₅)."""
+        """f(θ) = H of the corrected grey levels; θ = (ã₁…ã₅, m̃₁…m̃₅).
+
+        `basis` is sampled on the fitted pixels; `shape` is the full
+        `(H, W)`, over which Ŝ_M must be positive.
+        """
         opt = self.options
         G = int(opt["levels"])
         t = int(opt["window"])
         delta = (hi - lo) / (G - 1)
-        if counts.keys is None or counts.keys.numel() == 0:
-            raise ValueError("No pixel inside the grey range to fit")
         pixel, grey, count = counts.pairs()
+        if count.numel() == 0:
+            raise ValueError("No pixel inside the grey range to fit")
         device = pixel.device
         value = lo + (grey.to(torch.float64) - 1) * delta
         weight = count.to(torch.float64)
         B = basis.reshape(_NBASIS, -1).to(device)
         bad = math.log(3 * G + 1) + 1.0
+        # x̃, ỹ of the outermost full-resolution pixel centres
+        xr, yr = (1 - 1 / shape[1], 1 - 1 / shape[0])
 
         def f(theta: np.ndarray) -> float:
-            th = torch.as_tensor(theta, dtype=torch.float64, device=device)
-            sm = 1 + th[_NBASIS:] @ B
-            smin = float(sm.min())
+            smin = _quadratic_min(theta[_NBASIS:], xr, yr)
             if smin <= 0:
                 return bad - smin
+            th = torch.as_tensor(theta, dtype=torch.float64, device=device)
+            sm = 1 + th[_NBASIS:] @ B
             sa = (hi - lo) * (th[:_NBASIS] @ B)
             u = (value - sa[pixel]) / sm[pixel]
             position = (u - lo) / delta + 1
@@ -591,7 +749,9 @@ class Likar(Estimator):
         spatial = (int(spatial[0]), int(spatial[1]))
         opt = self.options
         backend = self._backend(data)
-        counts, ranges = self._counts(data, spatial)
+        counts, ranges = self._counts(
+            data, spatial, int(math.prod(sample_shape))
+        )
         components = opt["components"]
         free = np.zeros(2 * _NBASIS, dtype=bool)
         if components in ("both", "additive"):
@@ -603,7 +763,7 @@ class Likar(Estimator):
         flats, darks, coefs, entropies, converged = [], [], [], [], []
         for group in itertools.product(*(range(g) for g in group_shape)):
             lo, hi = ranges[group]
-            f_all = self._objective(counts[group], lo, hi, coarse)
+            f_all = self._objective(counts[group], lo, hi, coarse, spatial)
             theta = np.zeros(2 * _NBASIS)
 
             def f(sub: np.ndarray, f_all: Callable = f_all) -> float:

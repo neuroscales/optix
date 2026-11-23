@@ -13,8 +13,10 @@ from optix.shading._likar import (
     _basis,
     _blurred_entropy,
     _GreyCounts,
+    _integer_range,
     _paper_coefficients,
     _powell,
+    _quadratic_min,
 )
 
 
@@ -65,7 +67,7 @@ def fitted():
 def objective(est, data, shape):
     counts, ranges = est._counts(data, shape)
     lo, hi = ranges[()]
-    return est._objective(counts[()], lo, hi, _basis(shape))
+    return est._objective(counts[()], lo, hi, _basis(shape), shape)
 
 
 # -- building blocks ---------------------------------------------------------
@@ -132,20 +134,89 @@ def test_grey_counts_merge_exactly():
     two.update(pix[150:], grey[150:])
     for a, b in zip(one.pairs(), two.pairs(), strict=True):
         assert torch.equal(a, b)
-    assert int(one.counts.sum()) == 400
+    assert int(one.pairs()[2].sum()) == 400
+    # dense table and buffered sparse keys give the same pairs
+    dense = _GreyCounts(8, 50, memory=50 * 8 * 4)
+    assert dense.dense and not _GreyCounts(8, 50, memory=100).dense
+    dense.update(pix[:150], grey[:150])
+    dense.update(pix[150:], grey[150:])
+    for a, b in zip(one.pairs(), dense.pairs(), strict=True):
+        assert torch.equal(a, b)
+
+
+def test_counts_memory_budget():
+    data = torch.rand(2, 64, 64) * 255
+    with optix.config(memory=2**16):
+        est = Likar(data_range=(0, 255))
+        with pytest.warns(UserWarning, match="sampling"):
+            sparse, _ = est._counts(data, (64, 64), 2)
+        assert not sparse[()].dense
+    dense, _ = Likar(data_range=(0, 255))._counts(data, (64, 64), 2)
+    assert dense[()].dense
+    for a, b in zip(sparse[()].pairs(), dense[()].pairs(), strict=True):
+        assert torch.equal(a, b)
 
 
 def test_marginal_grey_values_ignored():
-    data = torch.full((1, 8, 8), 100.0)
-    data[0, 0, :4] = 0.0  # grey level 1
-    data[0, 1, :3] = 255.0  # grey level G
-    est = Likar(data_range=(0, 255))
+    data = torch.full((1, 8, 8), 100, dtype=torch.uint8)
+    data[0, 0, :4] = 0  # grey level 1
+    data[0, 1, :3] = 255  # grey level G
+    est = Likar()  # uint8: the dtype range (0, 255)
     counts, _ = est._counts(data, (8, 8))
     pixel, grey, count = counts[()].pairs()
     assert int(count.sum()) == 64 - 7
     assert grey.min() > 1 and grey.max() < 256
-    # 8-bit data with data_range=(0, 255) use its integer values
+    # 8-bit data use its integer values
     assert torch.equal(grey.unique(), torch.tensor([101]))
+
+
+def test_integer_default_range():
+    assert _integer_range(np.uint8, 256) == (0.0, 255.0)
+    assert _integer_range(torch.uint8, 256) == (0.0, 255.0)
+    assert _integer_range(np.int8, 256) == (-128.0, 127.0)
+    assert _integer_range(np.uint8, 128) is None
+    assert _integer_range(np.uint16, 256) is None
+    assert _integer_range(np.float32, 256) is None
+    assert _integer_range(torch.float64, 256) is None
+    data = torch.full((1, 8, 8), 100.0)
+    data[0, 0, 0], data[0, 0, 1] = 50.0, 200.0
+    # uint8: the dtype range (the paper's setting), grey = value + 1
+    _, ranges = Likar()._counts(data.to(torch.uint8), (8, 8))
+    assert ranges[()] == (0.0, 255.0)
+    _, ranges = Likar()._counts(data.numpy().astype(np.uint8), (8, 8))
+    assert ranges[()] == (0.0, 255.0)
+    # wider integers and floats: the observed range
+    for d in (data.to(torch.int16), data, data.numpy().astype(np.uint16)):
+        _, ranges = Likar()._counts(d, (8, 8))
+        assert ranges[()] == (50.0, 200.0)
+
+
+def test_quadratic_min_is_exact():
+    g = np.random.default_rng(0)
+    x = np.linspace(-0.9, 0.9, 181)
+    X, Y = np.meshgrid(x, np.linspace(-0.8, 0.8, 161))
+    for _ in range(50):
+        m = g.normal(size=5)
+        B = np.stack([X, Y, X * Y, X * X - 1 / 3, Y * Y - 1 / 3])
+        grid = (1 + np.einsum("k,kij->ij", m, B)).min()
+        exact = _quadratic_min(m, 0.9, 0.8)
+        assert exact <= grid + 1e-12
+        assert exact == pytest.approx(grid, abs=1e-3)
+
+
+def test_rejects_nonpositive_flat_between_samples():
+    shape = (35, 35)
+    data = shaded(scene(shape, discs=10)[None], polynomial_shading(shape)[0])
+    s = 4  # sampled columns 0, 4, …, 32: columns 33 and 34 are skipped
+    est = Likar(data_range=(0, 255), sampling=s)
+    counts, ranges = est._counts(data, shape)
+    lo, hi = ranges[()]
+    f = est._objective(counts[()], lo, hi, _basis(shape, s), shape)
+    theta = np.zeros(10)
+    theta[5] = -1 / 0.92  # S_M = 1 − x̃/0.92 ≤ 0 for x̃ ≥ 0.92 only
+    sm = 1 + theta[5] * _basis(shape)[0]
+    assert float(sm[::s, ::s].min()) > 0 and float(sm.min()) < 0
+    assert f(theta) > math.log(3 * 256 + 1)
 
 
 # -- fit ---------------------------------------------------------------------
@@ -304,3 +375,13 @@ def test_options_and_errors():
         Likar().fit(
             torch.rand(2, 8, 8, 8), layout=Layout("tzyx", spatial="zyx")
         )
+
+
+def test_uint8_default_is_paper_range(fitted):
+    """uint8 data default to data_range=(0, 255), the paper's setting."""
+    est, data, *_ = fitted
+    s = est.estimates["shading"]
+    u8 = Likar().fit(data.to(torch.uint8)).estimates["shading"]
+    assert u8.meta["data_range"] == [[0.0, 255.0]]
+    torch.testing.assert_close(u8.flat, s.flat)
+    torch.testing.assert_close(u8.dark, s.dark)
