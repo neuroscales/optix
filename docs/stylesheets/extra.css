@@ -6,18 +6,12 @@
 .md-typeset .admonition.references,
 .md-typeset details.references {
   border-color: rgb(0, 150, 136);
-  background-color: var(--md-admonition-bg-color);
-  box-shadow: var(--md-shadow-z1), 0 0 0 0.05rem rgba(0, 150, 136, 0.1);
-}
-
-.md-typeset .admonition.references:focus-within,
-.md-typeset details.references:focus-within {
-  box-shadow: 0 0 0 0.2rem rgba(0, 150, 136, 0.1);
-}
-
-.md-typeset .references > .admonition-title,
-.md-typeset .references > summary {
   background-color: rgba(0, 150, 136, 0.1);
+}
+
+.md-typeset .references > .admonition-title::after,
+.md-typeset .references > summary::after {
+  color: rgb(0, 150, 136);
 }
 
 .md-typeset .references > .admonition-title::before,
