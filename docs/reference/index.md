@@ -17,6 +17,7 @@ the reference to look up a signature.
 | [`optix.sensor`](sensor.md) | sensor calibration estimators and variance-stabilising transforms |
 | [`optix.shading`](shading.md) | shading estimators and `correct` |
 | [`optix.deconv`](deconv.md) | Richardson–Lucy deconvolution and `richardson_lucy` |
+| [`optix.background`](background.md) | `RollingBall`, `TopHat`, `rolling_ball` and `top_hat`: background subtraction by grey-scale opening |
 | [`optix.psf`](psf.md) | point spread functions: `BeadPSF`, `bead_psf` and `lightsheet_psf` |
 | [`optix.fusion`](fusion.md) | tiled acquisitions: `IntensityAdjustment` |
 | [`optix.models`](models.md) | simulators of the camera, shading and tiling models |
