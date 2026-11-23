@@ -438,9 +438,9 @@ def test_shading_estimate_baseline_units(units):
     )
 
 
-def test_shading_estimate_raw_is_default():
+def test_shading_estimate_signal_is_default():
     est = ShadingEstimate(flat=torch.ones(2, 2), baseline=torch.ones(1))
-    assert est.baseline_units == "raw"
+    assert est.baseline_units == "signal"
     with pytest.raises(ValueError, match="baseline units"):
         _ = est.replace(meta={"baseline_units": "adu"}).baseline_units
 

@@ -46,7 +46,7 @@ class MeanFlat(optix.Estimator):
         shape = self._map_shape(Y)  # (*group, *spatial)
         nspatial = len(self._layout_of(Y).spatial)
         backend = self._backend(Y)
-        # The dark image is not estimated here: take it from `init`.
+        # The dark field is not estimated here: take it from `init`.
         start = self._pick(init, ShadingEstimate, shape=shape, like=Y)
         dark = torch.zeros(shape, **backend)
         if start is not None and start.dark is not None:
