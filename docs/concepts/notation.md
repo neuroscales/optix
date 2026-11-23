@@ -134,6 +134,15 @@ stray light. This is the reason why corrections never subtract both
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
 
+## Intensity histograms
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $G$ | number of grey levels | `levels` |
+| $h(n)$, $p(n)$ | histogram of the grey levels $n = 1 \ldots G$, and its normalisation | |
+| $\mathcal{H}$ | Shannon entropy of the histogram, in nats | `meta["entropy"]` |
+| $\mathbf{a}$, $\mathbf{m}$ | coefficients of the polynomial dark and flat fields, in the paper's notation | `meta["coefficients"]` |
+
 ## Distributions
 
 These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).

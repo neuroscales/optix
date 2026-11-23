@@ -1,10 +1,35 @@
 # Algorithms
 
-This section will hold one page for every algorithm in optix. There are none
-yet: the library has so far been built from the bottom up, and the
-[Concepts](../concepts/index.md) pages describe what the algorithm pages will
-stand on. This page explains how the section will be organised and what an
-algorithm page contains, so that contributors and readers know what to expect.
+One page for every estimator in optix. Each page states the model in the common
+[notation](../concepts/notation.md), shows it next to the notation of the paper
+it comes from, and goes from the model to the algorithm, its options and an
+example. The sections follow the modules of the
+[API reference](../reference/index.md).
+
+| Module | Algorithm | Estimates |
+|---|---|---|
+| [`optix.sensor`](../reference/sensor.md) | [Poisson-Gaussian fit](sensor/poisson-gaussian.md) (`PoissonGaussian`) | gain, offset and read noise from one image |
+| | [Generalized Anscombe](sensor/generalized-anscombe.md) (`GeneralizedAnscombe`) | variance-stabilising transform and its inverses |
+| | [Photon-transfer curve](sensor/photon-transfer-curve.md) (`PhotonTransferCurve`) | gain and read noise from a series of exposures (EMVA 1288) |
+| | [sCMOS calibration](sensor/scmos-calibration.md) (`SCMOSCalibration`) | per-pixel offset, gain and read noise |
+| | [Dark and flat calibration](sensor/dark-flat-calibration.md) (`DarkFlatCalibration`) | dark field and flat field from calibration stacks |
+| | [Defective pixels](sensor/defective-pixels.md) (`DefectivePixels`) | hot, dead and noisy pixels |
+| [`optix.shading`](../reference/shading.md) | [BaSiC](shading/basic.md) (`BaSiC`) | flat field, dark field and baseline |
+| | [CIDRE](shading/cidre.md) (`CIDRE`) | flat field and dark field |
+| | [Likar](shading/likar-entropy.md) (`Likar`) | flat field and dark field, from one image |
+| | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
+| | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
+| [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
+| | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
+| | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
+| | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
+| | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
+| | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
+| [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
+| [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
+
+The rest of this page explains how the section is organised and what an
+algorithm page contains.
 
 ## Organised by what is estimated
 
@@ -27,7 +52,7 @@ estimate**, such as:
 Each target has a *result type*, a small dataclass from
 [`optix.estimates`](../reference/estimates.md), that every algorithm for that
 target returns. `ShadingEstimate`, for instance, holds the flat field, the dark
-image and the baseline, whichever algorithm estimated them. Algorithms that
+field and the baseline, whichever algorithm estimated them. Algorithms that
 estimate several things at once, such as a joint model of sensor, shading and
 tissue, are filed under their main target and return the result type of every
 target they estimate. These shared types are how algorithms are compared, and
