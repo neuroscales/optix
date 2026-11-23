@@ -41,9 +41,13 @@ extensions below.
     \qquad \mathbf{x} \ge 0,
     $$
 
-    with $\mathbf{A}$ the blur ($\mathbf{h} \circledast$, cropped to the
-    observed region), $\mathbf{y}$ in counts (photons or electrons) and
-    $\mathbf{b}$ an optional background ($\mathbf{0}$ in the paper).
+    with $\mathbf{y} \in \mathbb{R}^P$ one recorded image of $P$ pixels, in
+    counts (photons or electrons); $\mathbf{x} \in \mathbb{R}^Q$ the latent
+    image on the extended domain of $Q \ge P$ pixels; $\mathbf{h}$ the PSF of
+    $K$ voxels; $\mathbf{A} \in \mathbb{R}^{P \times Q}$ the blur
+    ($\mathbf{h} \circledast$, cropped to the observed region); and
+    $\mathbf{b} \in \mathbb{R}^P$ an optional background ($\mathbf{0}$ in
+    the papers).
 
 === "Richardson 1972"
 
@@ -63,20 +67,29 @@ extensions below.
     the observed distribution $\tilde\psi$ is a finite sample of $\psi$, the
     blur of the sought distribution $\phi$ by the kernel $P(x \mid \xi)$.
 
-| optix | [Richardson 1972](https://doi.org/10.1364/JOSA.62.000055) | [Lucy 1974](https://doi.org/10.1086/111605) |
-|---|---|---|
-| $\mathbf{y}$ | $H$ (recorded) | $\tilde\psi$ |
-| $\mathbf{A}\mathbf{x}$ | $H$ (model) | $\psi$ |
-| $\mathbf{x}$ | $W$ | $\phi$ |
-| $\mathbf{h}$, $\mathbf{A}$ | $S$ | $P(x \mid \xi)$ |
-| $p$, $q$ | $k$, $i$ | $x$, $\xi$ |
-| $t$ (iteration) | $r$ | $r$ |
+| optix | [Richardson 1972](https://doi.org/10.1364/JOSA.62.000055) | [Lucy 1974](https://doi.org/10.1086/111605) | Meaning | Shape |
+|---|---|---|---|---|
+| $\mathbf{y}$ | $H$ (recorded) | $\tilde\psi$ | recorded image, in counts | $P$, one per image |
+| $\mathbf{A}\mathbf{x}$ | $H$ (model) | $\psi$ | blurred latent image, the noise-free prediction | $P$, one per image |
+| $\mathbf{x}$ | $W$ | $\phi$ | latent (deconvolved) image | $Q$, one per image |
+| $\mathbf{h}$, $\mathbf{A}$ | $S$ | $P(x \mid \xi)$ | PSF and the blur operator it defines | $K$ and $P \times Q$, one for the whole stack |
+| $\mathbf{b}$ | none | none | optional background | $P$ or scalar, one for the whole stack |
+| $p$, $q$ | $k$, $i$ | $x$, $\xi$ | image and object pixel indices | scalars |
+| $t$ (iteration) | $r$ | $r$ | iteration counter | scalar |
 
 ## Inference / derivation
 
 The estimate maximises the Poisson likelihood of $\mathbf{y}$ over
-$\mathbf{x} \ge 0$ by a fixed-point (EM-type) iteration: each step multiplies the
-current estimate by the back-projected ratio of data to prediction. This keeps
+$\mathbf{x} \ge 0$ by a fixed-point iteration: each step multiplies the
+current estimate by the back-projected ratio of data to prediction. This
+iteration is exactly the expectation-maximisation (EM) algorithm for the
+maximum-likelihood estimate
+([Shepp and Vardi 1982](https://doi.org/10.1109/TMI.1982.4307558)): the
+complete data are the unobserved photon counts $z_{pq}$ emitted at object
+pixel $q$ and detected at pixel $p$, each $\mathrm{Poisson}(A_{pq} x_q)$; the
+E-step splits each $y_p$ among the $q$ in proportion to $A_{pq} x_q$, and the
+M-step sets $x_q$ to the expected counts it emitted divided by
+$\sum_p A_{pq}$. This keeps
 $\mathbf{x}$ non-negative, increases the likelihood at every step and conserves
 the flux. Because the unregularised maximum fits the noise, the iteration is
 stopped early, by
@@ -109,15 +122,23 @@ near its edges, where the extended domain receives less data.
 
 ## Algorithm
 
-```text
-Input: data Y (counts), PSF h, alpha = 0.05, max_iter = 100
-Initialise x(0): uniform, with the mean intensity of y − b (one level per image)
-Repeat:
-    if n_iter is None and P(χ² > χ²_obs) ≥ alpha: stop
-    multiplicative Richardson–Lucy update (above)
-until n_iter (if given) or max_iter iterations
-Return x, cropped to the observed region
-```
+**Input:** an image $\mathbf{y} \in \mathbb{R}^P$ in counts, the PSF
+$\mathbf{h}$; hyper-parameters `alpha` $= 0.05$, `max_iter` $= 100$, `n_iter`
+$=$ `None`. \
+**Output:** the deconvolved image $\hat{\mathbf{x}}$, cropped to the observed
+region.
+
+1. **Initialise** $\mathbf{x}^{(0)}$ uniform, at the mean intensity of
+   $\mathbf{y} - \mathbf{b}$ (one level per image).
+2. **Repeat** for $t = 0, 1, \ldots$ until `n_iter` iterations (if given) or
+   `max_iter` iterations:
+    1. **Test** (only when `n_iter` is `None`): compute
+       $\chi^2 = \sum_p (y_p - \mu_p)^2 / \mu_p$ with
+       $\boldsymbol{\mu} = \mathbf{A}\mathbf{x}^{(t)} + \mathbf{b}$; stop if
+       $\Pr(\chi^2_{P-1} > \chi^2) \ge$ `alpha`;
+    2. **Update** $\mathbf{x}^{(t+1)}$ by the multiplicative Richardson–Lucy
+       step above.
+3. **Crop** $\mathbf{x}$ to the observed region and return it.
 
 The number of iterations per block is recorded in
 `history.extras["iterations"]`.
@@ -198,6 +219,9 @@ array as input and `out`, processed block by block. The function
     2. Lucy LB. *An iterative technique for the rectification of observed
        distributions.* Astron J **79**(6):745-754, 1974.
        [doi:10.1086/111605](https://doi.org/10.1086/111605)
+    3. Shepp LA, Vardi Y. *Maximum likelihood reconstruction for emission
+       tomography.* IEEE Trans Med Imaging **1**(2):113-122, 1982.
+       [doi:10.1109/TMI.1982.4307558](https://doi.org/10.1109/TMI.1982.4307558)
 
     ??? quote "BibTeX"
 
@@ -221,5 +245,15 @@ array as input and `out`, processed block by block. The function
           pages   = {745--754},
           year    = {1974},
           doi     = {10.1086/111605},
+        }
+        @article{shepp1982maximum,
+          author  = {Shepp, L. A. and Vardi, Y.},
+          title   = {Maximum Likelihood Reconstruction for Emission Tomography},
+          journal = {IEEE Transactions on Medical Imaging},
+          volume  = {1},
+          number  = {2},
+          pages   = {113--122},
+          year    = {1982},
+          doi     = {10.1109/TMI.1982.4307558},
         }
         ```
