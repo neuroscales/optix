@@ -114,10 +114,14 @@ def test_stripe_offset():
 def test_removes_stripes_and_keeps_content():
     content = make_frames(2)
     stripes = make_stripes(2, content.shape[-2:])
-    out = general_stripe_remover(content + stripes, max_iter=1500)
+    # the default μ₁ = 1/3 also smooths the shading of these frames a
+    # little; the printed μ₁ = 1/30 suits their weak, ideal stripes
+    default = general_stripe_remover(content + stripes, max_iter=1500)
+    assert rmse(default, content) < 0.4 * rmse(content + stripes, content)
+    out = general_stripe_remover(content + stripes, mu1=1 / 30, max_iter=1500)
     assert rmse(out, content) < 0.25 * rmse(content + stripes, content)
     # no stripes: the content passes nearly unchanged
-    same = general_stripe_remover(content, max_iter=1500)
+    same = general_stripe_remover(content, mu1=1 / 30, max_iter=1500)
     assert rmse(same, content) < 0.1 * float(content.std())
     # the discs keep their contrast
     disc = content > 0.45
@@ -219,22 +223,89 @@ def test_oblique_and_multidirectional():
     }
     assert err[45] < 0.3 * err[0] and err[45] < 0.3 * err[-45]
     assert err[45] < 0.3 * rmse(content + diag, content)
-    # several directions: Eq. (1) with ∑ᵢ ‖∇_θᵢ s‖₁ on the same s, which
-    # the solver minimises (lower than the single-direction solutions)
+    # several directions: Eq. (1) with ∑ᵢ ‖∇_θᵢ s‖₁ on the same s. With
+    # μ₁ large enough (of order 1), 0° + 45° removes both families of
+    # stripes better than either direction alone, and the solver
+    # minimises the joint objective
     both = content + diag + vert
-    kw = dict(mu1=1 / 30, mu2=1 / 300)
+    kw = dict(mu1=0.7, mu2=1 / 300, max_iter=3000)
     offsets = [(1, 0), (1, 1)]
-    multi = general_stripe_remover(both, angle=[0, 45], max_iter=3000, **kw)
-    best = objective(multi, both, offsets=offsets, **kw)
+    multi = general_stripe_remover(both, angle=[0, 45], **kw)
+    best = objective(multi, both, offsets=offsets, mu1=0.7, mu2=1 / 300)
+    assert rmse(multi, content) < 0.75 * rmse(both, content)
     for a in (0, 45):
-        single = general_stripe_remover(both, angle=a, max_iter=3000, **kw)
-        assert (best < objective(single, both, offsets=offsets, **kw)).all()
-    # with μ₁ < 1, the cross-direction terms make keeping crossing stripes
-    # in u cheaper than removing them: the minimiser is the input
-    assert (
-        best <= (1 + 1e-4) * objective(both, both, offsets=offsets, **kw)
-    ).all()
-    assert rmse(multi, both) < 1e-4
+        single = general_stripe_remover(both, angle=a, **kw)
+        assert rmse(multi, content) < 0.8 * rmse(single, content)
+        e = objective(single, both, offsets=offsets, mu1=0.7, mu2=1 / 300)
+        assert (best < e).all()
+
+
+def test_orthogonal_directions_keep_input():
+    """0° + 90° with μ₁ ≤ 1: u = u₀ is the unique minimiser (and warns)."""
+    data = make_frames(1, (32, 32)) + make_stripes(1, (32, 32))
+    with pytest.warns(UserWarning, match="is the input itself"):
+        out = general_stripe_remover(
+            data, angle=[0, 90], mu1=0.9, max_iter=3000
+        )
+    # the iterates converge to u₀, which no iterate improves on
+    assert rmse(out, data) < 1e-3 * rmse(data, data.mean())
+    kw = dict(offsets=[(1, 0), (0, 1)], mu1=0.9, mu2=1 / 300)
+    assert (objective(out, data, **kw) >= objective(data, data, **kw)).all()
+
+
+def test_several_directions_warning():
+    import warnings
+
+    data = make_frames(1, (16, 16))
+    with pytest.warns(UserWarning, match="little or no stripes"):
+        general_stripe_remover(data, angle=[0, 45], max_iter=2)
+    with pytest.warns(UserWarning, match="several stripe directions"):
+        GeneralStripeRemover(angle=[0, 90], mu1=1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        general_stripe_remover(data, angle=[0, 45], mu1=0.7, max_iter=2)
+        general_stripe_remover(data, angle=[0, 90], mu1=1.1, max_iter=2)
+        general_stripe_remover(data, angle=[0, 180], max_iter=2)
+        GeneralStripeRemover(angle=[0, 45], mu1=0.7).apply(data)
+
+
+@pytest.mark.parametrize("volume", [False, True])
+@pytest.mark.parametrize("m", [1, 2, 3])
+def test_step_bound(volume, m):
+    """τσ‖K‖² < 1, with ‖K‖² from power iteration on KᵀK."""
+    from optix.destripe._rottmayer import (
+        _grad,
+        _grad_offsets,
+        _step,
+    )
+
+    offsets = [(1, 0), (1, 1), (2, -1)][:m]
+    rho_z = 0.7 if volume else 0.0
+    shape = (1, 5, 12, 11) if volume else (1, 12, 11)
+
+    def ktk(u, s):
+        g = _grad(u, rho_z, volume)
+        a = torch.zeros_like(u)
+        for (v, w), p in zip(_grad_offsets(rho_z, volume), g, strict=True):
+            a += w * utils.lattice_diff_adjoint(p, v)
+        c = s.clone()
+        for v in offsets:
+            c += utils.lattice_diff_adjoint(utils.lattice_diff(s, v), v)
+        return a, c
+
+    g = torch.Generator().manual_seed(0)
+    u = torch.randn(shape, generator=g, dtype=F64)
+    s = torch.randn(shape, generator=g, dtype=F64)
+    for _ in range(300):
+        u, s = ktk(u, s)
+        n = float((u.square().sum() + s.square().sum()).sqrt())
+        u, s = u / n, s / n
+    a, c = ktk(u, s)
+    norm = float((a * u).sum() + (c * s).sum())
+    # the bound ‖K‖² ≤ max(4(2 + ρ_z²), 1 + 4m) used for the steps
+    assert norm <= max(4 * (2 + rho_z**2), 1 + 4 * m) + 1e-9
+    step = _step(volume, rho_z, offsets)
+    assert step**2 * norm < 1
 
 
 def test_volumes_rho_z():
@@ -270,16 +341,27 @@ def test_volumes_rho_z():
 
 
 def test_tol_extension():
+    """`tol` bounds the relative duality gap, hence the excess objective."""
     data = make_frames(3) + make_stripes(3, (48, 40))
-    full = general_stripe_remover(data, max_iter=3000)
-    early = general_stripe_remover(data, max_iter=3000, tol=1e-6)
-    assert rmse(early, full) < 1e-3
+    kw = dict(mu1=1 / 3, mu2=1 / 300)
+    full = general_stripe_remover(data, max_iter=6000, **kw)
+    early = general_stripe_remover(data, max_iter=6000, tol=1e-2, **kw)
+    assert rmse(early, full) > 0  # stopped before max_iter
+    # E(uₖ) − E* ≤ Δ(uₖ, pₖ) ≤ tol · Δ(u₀, p₀) = tol · μ₁‖∇u₀‖₂,₁
+    gap0 = objective(data, data, **kw)
+    excess = objective(early, data, **kw) - objective(full, data, **kw)
+    assert (excess <= 1e-2 * gap0).all()
+    assert rmse(early, full) < 0.2 * rmse(data, full)
     # frames stop one by one: the batch equals the frames alone
     for i in range(3):
         torch.testing.assert_close(
             early[i : i + 1],
-            general_stripe_remover(data[i : i + 1], max_iter=3000, tol=1e-6),
+            general_stripe_remover(
+                data[i : i + 1], max_iter=6000, tol=1e-2, **kw
+            ),
         )
+    with pytest.raises(ValueError, match="box=True"):
+        general_stripe_remover(data, tol=1e-3, box=False)
 
 
 def test_float32_matches_float64():
@@ -428,18 +510,20 @@ def test_stream_zarr():
 def test_defaults_and_faithful():
     est = GeneralStripeRemover()
     o = est.options
-    assert o["mu1"] == pytest.approx(1 / 30) and o["mu2"] == pytest.approx(
+    assert o["mu1"] == pytest.approx(1 / 3) and o["mu2"] == pytest.approx(
         1 / 300
     )
     assert o["max_iter"] == 25000 and o["tol"] is None and o["box"] is True
     assert o["rho_z"] == 0 and o["angle"] == 0 and o["axis"] == -2
-    assert (
-        est.is_faithful
-        and GeneralStripeRemover.paper == GeneralStripeRemover.recommended
+    assert est.is_faithful
+    assert GeneralStripeRemover.recommended == dict(
+        GeneralStripeRemover.paper, max_iter=1000
     )
+    rec = GeneralStripeRemover(faithful=False)
+    assert rec.options["max_iter"] == 1000 and rec.is_faithful
     # tuned parameters stay faithful, extensions do not
     assert GeneralStripeRemover(
-        mu1=1 / 3, mu2=1 / 150, angle=[0, 45], max_iter=10
+        mu1=0.7, mu2=1 / 150, angle=[0, 45], max_iter=10
     ).is_faithful
     assert not GeneralStripeRemover(tol=1e-5).is_faithful
     assert not GeneralStripeRemover(box=False).is_faithful
@@ -455,7 +539,7 @@ def test_defaults_and_faithful():
 
 
 def test_save_load(tmp_path):
-    est = GeneralStripeRemover(mu1=0.2, angle=[0, 45], max_iter=40, axis=-1)
+    est = GeneralStripeRemover(mu1=0.7, angle=[0, 45], max_iter=40, axis=-1)
     est.save(tmp_path / "g.pt")
     back = optix.load(tmp_path / "g.pt")
     assert (
