@@ -11,6 +11,14 @@ Cite publications in a `references` admonition, in one citation style:
 Author A, Author B. *Title.* Journal **vol**(issue):pages, year. [doi:…](https://doi.org/…)
 ```
 
+In the text, every citation links straight to the original work, through its
+DOI, or through a stable official URL when it has none (a standard, a book):
+`[Peng et al. 2017](https://doi.org/10.1038/ncomms14836)`, with any section or
+equation number inside the link text, as in
+`[Lucy (1974, §IV)](https://doi.org/10.1086/111605)`. Do not link to the
+references block instead: its anchors do not survive in `help()`. Every work
+cited in a page or a docstring also appears in its references block.
+
 Give every reference its DOI, checked against the publisher's page. End the block
 with a BibTeX entry in a collapsed `??? quote "BibTeX"` admonition. The source
 looks like this (indented four spaces under the admonition):
@@ -61,7 +69,7 @@ The icon and colour of the admonition are defined in `docs/stylesheets/extra.css
 ## Docs pages
 
 - Maths is LaTeX, between `$...$` or `$$...$$`. Symbols follow the
-  [notation table](../concepts/index.md#notation); add a symbol there when a page
+  [notation table](../concepts/notation.md); add a symbol there when a page
   introduces one.
 - Examples are `pycon` blocks that run as written, and their output is checked.
 - Use admonitions (`!!! note`, `!!! warning`, `??? tip` for collapsed ones) for
@@ -74,6 +82,9 @@ Docstrings use the numpy format and are rendered by mkdocstrings.
 - **Maths in UTF-8, not LaTeX.** Write `σ² = g²λ + …` in a docstring, since it is
   read in editors and in `help()` as often as on the web. LaTeX is for docs pages
   only.
+  Use Unicode subscripts and superscripts where they exist (`xᵢ`, `σ²`, `Φᵀ`,
+  `rₙₖ`), `_{…}` otherwise, and the symbols of the
+  [notation page](../concepts/notation.md#in-docstrings).
 - **Cross-references use mkdocstrings syntax**, never Sphinx roles: `` [`name`][] ``
   for a name in scope, or `` [`name`][optix.x.Name] `` with the full path. Do not
   write `` :class:`Name` `` or `` :func:`name` ``.

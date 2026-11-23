@@ -54,20 +54,25 @@ def fit_gamma_shape(c: Tensor, niter: int = 16) -> Tensor:
     c = log(mean(x)) − mean(log x) > 0 (the Jensen gap).
 
     !!! note
-        Uses Minka's initialisation
+        Uses [Minka's initialisation](https://www.microsoft.com/en-us/research/publication/estimating-gamma-distribution/)
         ν = (3 − c + √((c − 3)² + 24c)) / (12c) and Newton's method on 1/ν.
         For ν > 10 the residual and its derivative use asymptotic series,
         which avoids the cancellation in log ν − ψ(ν).
 
     !!! references "References"
-        1. Minka T. *Estimating a Gamma distribution.* 2002.
+        1. Minka TP. *Estimating a Gamma distribution.* Technical report,
+           Microsoft Research, 2002.
+           [microsoft.com/en-us/research](
+           https://www.microsoft.com/en-us/research/publication/estimating-gamma-distribution/)
 
         ??? quote "BibTeX"
             ```bibtex
-            @misc{minka2002gamma,
+            @techreport{minka2002gamma,
               author = {Minka, T.},
               title = {Estimating a Gamma distribution},
-              year = {2002}
+              institution = {Microsoft Research},
+              year = {2002},
+              url = {https://www.microsoft.com/en-us/research/publication/estimating-gamma-distribution/}
             }
             ```
 
@@ -180,14 +185,19 @@ def fit_dirichlet(
         the slower fixed-point steps.
 
     !!! references "References"
-        1. Minka T. *Estimating a Dirichlet distribution.* 2000.
+        1. Minka TP. *Estimating a Dirichlet distribution.* Technical report,
+           Microsoft Research, 2000.
+           [microsoft.com/en-us/research](
+           https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/)
 
         ??? quote "BibTeX"
             ```bibtex
-            @misc{minka2000dirichlet,
+            @techreport{minka2000dirichlet,
               author = {Minka, T.},
               title = {Estimating a Dirichlet distribution},
-              year = {2000}
+              institution = {Microsoft Research},
+              year = {2000},
+              url = {https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/}
             }
             ```
 
