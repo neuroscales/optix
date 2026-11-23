@@ -183,7 +183,7 @@ def test_asymmetric_psfs_recover_point_position(kernel):
     kw = {"kernel": kernel, "dtype": F64}
     out = multiview_rl(views, psfs, n_iter=30, **kw)
     assert divmod(int(out.argmax()), 48) == (20, 27)
-    # early iterates already centred (kernels without the mirroring: off by ≥ 0.09)
+    # early iterates already centred (without the mirroring: off by >= 0.09)
     out = multiview_rl(views, psfs, n_iter=3, **kw)
     assert centroid(out) == pytest.approx((20.0, 27.0), abs=0.05)
 

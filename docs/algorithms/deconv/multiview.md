@@ -82,10 +82,14 @@ the efficient variant: given an observation in view $v$, the PSF of view $w$
 assigns a probability to where the same fluorophore appears in view $w$, which
 defines a *virtual view* of $w$ computed from $v$ alone.
 
-No noise model is part of the derivation. The method is nevertheless the
-maximum-likelihood (EM) iteration for $\mathbf{y}_v \sim
-\mathrm{Poisson}(\mathbf{A}_v \mathbf{x})$ in its plain Bayesian-based form, and the
-paper reports it to be robust to Poisson noise, the dominant noise of
+No noise model is part of the derivation. With one view it is the
+maximum-likelihood EM iteration for Poisson counts,
+$\mathbf{y} \sim \mathrm{Poisson}(\mathbf{A}\mathbf{x})$. With several, the plain
+Bayesian-based multiplicative update converges to the same maximum-likelihood
+solution on noise-free data (Suppl. Note 2), and the sequential update, the
+default, is ordered-subset EM, without such a guarantee on noisy data; only
+`update="additive"` is the EM iteration of the stacked Poisson model. The
+paper reports the method to be robust to Poisson noise, the dominant noise of
 light-sheet microscopy. As for
 [Richardson–Lucy](richardson-lucy.md), the number of iterations is the only
 regulariser.
@@ -96,17 +100,18 @@ The strategy is a multiplicative fixed-point iteration, built in four steps.
 
 **1. Plain Bayesian-based iteration.** The correction of view $v$ is the
 single-view Richardson–Lucy correction,
-$\mathbf{c}_v = \mathbf{A}_v^\top[\mathbf{y}_v / \mathbf{A}_v\mathbf{x}^{(t)}]$, and
-the views are combined by *multiplying* their corrections. The paper proves
-convergence to the maximum-likelihood solution for noise-free data, for the
-geometric mean of the corrections (the $\lvert V \rvert$-th root), whereas the
+$\mathbf{c}_v = \mathbf{A}_v^\top[\mathbf{y}_v / \mathbf{A}_v\mathbf{x}^{(t)}] /
+\mathbf{A}_v^\top\mathbf{1}$, and the views are combined by *multiplying* their
+corrections. The paper proves convergence to the maximum-likelihood solution for
+noise-free data for the geometric mean of the corrections (the
+$\lvert V \rvert$-th root, Eqs. 46–47), whereas the
 EM derivation of [Shepp and Vardi (1982)](https://doi.org/10.1109/TMI.1982.4307558)
 averages them arithmetically.
 
 === "optix"
 
     $$
-    \mathbf{x}^{(t+1)} = \mathbf{x}^{(t)} \odot \prod_{v=1}^{V} \mathbf{c}_v ,
+    \mathbf{x}^{(t+1)} = \mathbf{x}^{(t)} \odot \Bigl(\prod_{v=1}^{V} \mathbf{c}_v\Bigr)^{1/V} ,
     \qquad
     \mathbf{c}_v = \frac{\mathbf{A}_v^\top\!\left[\mathbf{y}_v / (\mathbf{A}_v \mathbf{x}^{(t)})\right]}{\mathbf{A}_v^\top \mathbf{1}} .
     $$
@@ -118,7 +123,8 @@ averages them arithmetically.
     \quad \text{(Eqs. 36–37)}.
     $$
 
-The normaliser $\mathbf{A}_v^\top\mathbf{1}$ is 1 inside the field and falls below
+The exponent $1/V$ is not optional: with the product as printed in Eq. 36 the
+iteration diverges from about four views on. The normaliser $\mathbf{A}_v^\top\mathbf{1}$ is 1 inside the field and falls below
 1 near its edges, as for Richardson–Lucy; the paper's kernels have unit mass and
 do not write it.
 
@@ -145,7 +151,9 @@ view:
     \bigl(\check{\mathbf{h}}_v * \mathbf{h}_w * \check{\mathbf{h}}_w\bigr) ,
     $$
 
-    with $\mathbf{B}_v$ the convolution with $\mathbf{h}_{b,v}$.
+    with $\mathbf{B}_v$ the convolution with $\mathbf{h}_{b,v}$ inside the
+    field of view, and $\mathbf{B}_v = \mathbf{A}_v^\top$ on the margin of the
+    padded domain (see the note on edge damping below).
 
 === "Preibisch et al. 2014"
 
@@ -195,7 +203,8 @@ $\mathbf{h}_w$ constant, which leaves the pixel-wise power of the mirrored PSF
     \quad \text{(Eq. 115)}.
     $$
 
-The paper reports, for four to twelve views of a simulated ground truth, that
+The paper reports, for a simulated ground truth and depending on the number of
+views (up to twelve in Suppl. Fig. 4), that
 the efficient kernels converge 1.5–2.5 times faster than the plain ones,
 optimisation I 2–4 times and optimisation II 3–8 times, and that sequential
 updates add a further factor of about $V$ (Suppl. Note 7.1). Optimisation II
@@ -261,7 +270,13 @@ the image but gives no ordered-subset speed-up. Summing them to $k > 1$ recovers
 the speed-up where $k$ views overlap, at the cost of an uneven deconvolution where
 fewer do (Suppl. Fig. 10); the paper suggests the smallest number of overlapping
 views. Every individual weight stays at most 1, otherwise the iteration becomes
-unstable.
+unstable. The weights only gate the update: within a PSF half-width of the
+border of a view, its missing pixels still enter the correction as observed
+zeros, so the fall-off of the weights should be at least as wide as the PSF.
+Weights are carried into the margin of the padded domain as
+$\rho_v \cdot \mathrm{clamp}(\mathbf{B}_v[\mathbf{w}_v] / \mathbf{B}_v\mathbf{1}, 0, 1)$
+(see the note on edge damping), so that a view without data beyond a border does
+not erase the margin there.
 
 ## Faithful mode and extensions
 
@@ -293,17 +308,24 @@ $\boldsymbol{\mu}_v = \mathbf{A}_v \mathbf{x}$ and $V P - 1$ degrees of freedom
 !!! note "Choices the paper leaves open"
     These are fixed by the implementation and have no keyword:
 
-    - **Edge damping.** The latent image extends beyond the field of view, over
-      the margin of the padded domain, where no view is observed directly. There,
-      the update of view $v$ is applied with the weight
-      $\rho_v = \mathbf{B}_v\mathbf{1} / \max_u \mathbf{B}_u\mathbf{1}$, the reach of
-      the view relative to the view that sees the pixel best (also in the
-      multiplicative update, as $\tilde{\mathbf{c}}_v = \mathbf{1} - \boldsymbol{\rho}_v +
-      \boldsymbol{\rho}_v \odot \mathbf{c}_v$). A pixel that one view reaches only
-      through the tail of its PSF, where $\mathbf{c}_v$ is a ratio of two round-off
-      sized numbers, is then left to the views that see it; without it the results in
-      single and double precision differ visibly. Inside the field of view and with one
-      view, $\rho_v = 1$ and nothing changes.
+    - **Back projection on the margin.** The compound kernels are used inside the
+      block only. On the margin of the padded domain, where no view is observed
+      directly, the back projection of every `kernel` is the adjoint
+      $\mathbf{A}_v^\top$, since the narrower compound kernels would leave part of
+      the margin without an update.
+    - **Edge damping.** On that margin the update of view $v$ is applied with the
+      weight $\rho_v = \mathbf{A}_v^\top\mathbf{1} / \max_u \mathbf{A}_u^\top\mathbf{1}$,
+      the reach of the view relative to the view that sees the pixel best (also in
+      the multiplicative update, as $\tilde{\mathbf{c}}_v = \mathbf{1} - \boldsymbol{\rho}_v +
+      \boldsymbol{\rho}_v \odot \mathbf{c}_v$). The ordered-subset iteration assumes
+      subsets of equal sensitivity, which fails on the margin, where the reach of the
+      views differs by orders of magnitude; the damping restores that balance. Fixed
+      points and positivity are unchanged. Without it, the noise-free data misfit is
+      not monotone and stalls about ten times higher, in double precision too, and
+      single and double precision results differ visibly. Inside the field of view
+      the update rule is unchanged, and with one view $\rho_v = 1$; but the margin
+      feeds the border pixels, so next to the image border the result differs from
+      the undamped one, by up to about 12% of the maximum.
     - **Unit-sum kernels.** Each compound kernel is normalised to unit sum, and
       has the shape of the PSFs, since the product with $\check{\mathbf{h}}_v$
       restricts it to their support. The paper does not state how the compound
@@ -312,6 +334,9 @@ $\boldsymbol{\mu}_v = \mathbf{A}_v \mathbf{x}$ and $V P - 1$ degrees of freedom
     - **The $\lvert V \rvert$-th root of the multiplicative update.** Eq. 36 is
       printed as a plain product; the convergence proof (Eqs. 46–47) uses its
       geometric mean, which is what `update="multiplicative"` computes.
+    - **Weights on the margin.** The weights of the margin are $\rho_v \cdot
+      \mathrm{clamp}(\mathbf{B}_v[\mathbf{w}_v] / \mathbf{B}_v\mathbf{1}, 0, 1)$, the
+      normalised block weights spread by the back projection; the paper has no margin.
     - **Reading of the weights.** Eq. 3 of the Online Methods multiplies the
       estimate by $w_v f^v_{\mathrm{RL}}$; the text says that $w_v$ is the fraction
       of the update that is applied, which is the form above ($1 - w_v + w_v c_v$).
@@ -395,7 +420,8 @@ optimization-2 13.2
 ```
 
 Common variations: `update="multiplicative"` or `"additive"` for the
-combined updates; `weights=[w1, w2]` with one weight image per view, and
+combined updates; `weights=[w1, w2]` with one weight image per view (lazy weights are not
+stored by `save` and must be set again after `load`), and
 `weight_sum=2.0` for the ordered-subset speed-up where two views overlap;
 `chi2_stop=True` to stop by the χ² rule; views as `zarr` arrays, or with a layout
 (time-lapse and group axes are iterated over, the views sharing one layout),
