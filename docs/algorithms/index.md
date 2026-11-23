@@ -20,7 +20,10 @@ example. The sections follow the modules of the
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
+| | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
+| | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
+| [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
 
 The rest of this page explains how the section is organised and what an
 algorithm page contains.

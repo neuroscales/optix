@@ -32,9 +32,14 @@ nav = [
     {"Deconvolution" = [
       "algorithms/deconv/richardson-lucy.md",
       "algorithms/deconv/biggs-andrews.md",
+      "algorithms/deconv/snyder.md",
+      "algorithms/deconv/wiener-butterworth.md",
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
+    ]},
+    {"Point-spread function" = [
+      "algorithms/psf/bead-psf.md",
     ]},
     "algorithms/_template.md",
   ]},
