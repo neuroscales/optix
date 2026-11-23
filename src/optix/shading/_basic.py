@@ -106,33 +106,14 @@ class BaSiC(Estimator):
     unsorted frame (at the working size) with f and d fixed:
     min_b ‖W ⊙ (yᵢ − bᵢ f − d)‖₁, reweighted as above.
 
-    Attributes
-    ----------
-    estimates : dict
-        `{"shading": ShadingEstimate}`: `flat` and `dark` (None without
-        `darkfield`) shaped `(*group, *spatial)`; `baseline` shaped
-        `(*group, *sample)` (None without `timelapse`), in units of the
-        flat-corrected signal. `meta["flat_norm"] == "mean"` (normalised
-        at the working size, before resizing) and
-        `meta["baseline_units"] == "signal"`.
-        [`apply`][optix.Estimator.apply] also handles a baseline in
-        raw units (see
-        [`ShadingEstimate`][optix.estimates.ShadingEstimate]).
-    fit_frames_ : (k,) Tensor
-        Flat sample indices (storage order) of the fitting frames.
-    fit_baseline_ : (*group, k) Tensor or None
-        Without `sort_intensity`: the baselines of the fitting frames from
-        the decomposition itself. None after sorting.
-
-    Notes
-    -----
-    The fit reads the `max_frames` fitting frames of each group (a
-    representative subset, as suggested by the authors for long
-    sequences), plus one pass over the stack with `timelapse=True`.
-    [`apply`][optix.Estimator.apply] works on frame batches. Sorting needs
-    all the fitting frames of a strip of rows at once: the strips are
-    sized to the memory budget, and each fitting frame is read once per
-    strip.
+    !!! note
+        The fit reads the `max_frames` fitting frames of each group (a
+        representative subset, as suggested by the authors for long
+        sequences), plus one pass over the stack with `timelapse=True`.
+        [`apply`][optix.Estimator.apply] works on frame batches. Sorting needs
+        all the fitting frames of a strip of rows at once: the strips are
+        sized to the memory budget, and each fitting frame is read once per
+        strip.
 
     !!! note "Implementation choices"
         The inner LADM loop stops when ‖Y − L − E‖_F / ‖Y‖_F < `tol`
@@ -155,26 +136,6 @@ class BaSiC(Estimator):
         - The frames are sorted at full resolution and then resized to
           the working size.
 
-    **Extensions** (off by default):
-
-    - `sort_intensity=False`: fit the unsorted frames; `fit_baseline_`
-      then holds the fitted baselines.
-    - `variant="basicpy"`: the solver of
-      [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0
-      (`fitting_mode="approximate"`): weights divided by the frame mean
-      of L and normalised to mean 1, bᵢ clipped at 0, f started at 1,
-      the dark field fitted on the frames with bᵢ < 1 with a 10× smaller
-      threshold, and λ_d = λ_f / 10 by default. With
-      `sort_intensity=False` and `reweight_tol=1e-2` it reproduces
-      [BaSiCPy](https://github.com/peng-lab/BaSiCPy).
-    - `baseline_method="basicpy"`:
-      [BaSiCPy](https://github.com/peng-lab/BaSiCPy)'s `fit_only_baseline`,
-      a reweighted-L1 ALM trusting only the pixels below each frame's 10 %
-      quantile, run per batch. It is biased low where the flat field
-      varies (about −11 % with a flat of ±25 %).
-    - `sampling="reservoir"`: random fitting frames.
-    - `normalize_weights=False`: the weights of Eq. (9) without scaling.
-
     !!! references "References"
         1. Peng T, Thorn K, Schroeder T, Wang L, Theis FJ, Marr C, Navab N.
            *A BaSiC tool for background and shading correction of optical
@@ -196,6 +157,43 @@ class BaSiC(Estimator):
               doi     = {10.1038/ncomms14836},
             }
             ```
+
+    !!! note "Extensions (off by default)"
+        - `sort_intensity=False`: fit the unsorted frames; `fit_baseline_`
+          then holds the fitted baselines.
+        - `variant="basicpy"`: the solver of
+          [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0
+          (`fitting_mode="approximate"`): weights divided by the frame mean
+          of L and normalised to mean 1, bᵢ clipped at 0, f started at 1,
+          the dark field fitted on the frames with bᵢ < 1 with a 10× smaller
+          threshold, and λ_d = λ_f / 10 by default. With
+          `sort_intensity=False` and `reweight_tol=1e-2` it reproduces
+          [BaSiCPy](https://github.com/peng-lab/BaSiCPy).
+        - `baseline_method="basicpy"`:
+          [BaSiCPy](https://github.com/peng-lab/BaSiCPy)'s `fit_only_baseline`,
+          a reweighted-L1 ALM trusting only the pixels below each frame's 10 %
+          quantile, run per batch. It is biased low where the flat field
+          varies (about −11 % with a flat of ±25 %).
+        - `sampling="reservoir"`: random fitting frames.
+        - `normalize_weights=False`: the weights of Eq. (9) without scaling.
+
+    Attributes
+    ----------
+    estimates : dict
+        `{"shading": ShadingEstimate}`: `flat` and `dark` (None without
+        `darkfield`) shaped `(*group, *spatial)`; `baseline` shaped
+        `(*group, *sample)` (None without `timelapse`), in units of the
+        flat-corrected signal. `meta["flat_norm"] == "mean"` (normalised
+        at the working size, before resizing) and
+        `meta["baseline_units"] == "signal"`.
+        [`apply`][optix.Estimator.apply] also handles a baseline in
+        raw units (see
+        [`ShadingEstimate`][optix.estimates.ShadingEstimate]).
+    fit_frames_ : (k,) Tensor
+        Flat sample indices (storage order) of the fitting frames.
+    fit_baseline_ : (*group, k) Tensor or None
+        Without `sort_intensity`: the baselines of the fitting frames from
+        the decomposition itself. None after sorting.
 
     Examples
     --------

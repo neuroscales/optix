@@ -226,7 +226,7 @@ class _Image:
                 y = f
             mu = None
             if self.chi2:
-                mu = _expected(f, op, blk.background)
+                mu = _expected(f, op, 0.0)
                 d, m = blk.data[chunk.inner], mu[chunk.inner]
                 chi2 = ((d - m).square() / m).sum(dtype=torch.float64)
                 sums.chi2 += float(chi2)
@@ -237,7 +237,6 @@ class _Image:
                 blk.data,
                 op,
                 inv_norm=inv,
-                background=blk.background,
                 damping=self.damping,
                 mu=mu,
             )
@@ -282,7 +281,7 @@ def lockstep(
     out : writable array-like
         Output, shaped like the source.
     prepare : callable
-        `prepare(chunk)` returns the block's counts and background.
+        `prepare(chunk)` returns the block's counts (its `data`).
     psf : Tensor
         Normalised PSF.
     level : Tensor

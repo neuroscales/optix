@@ -201,6 +201,12 @@ class Estimator:
     `_apply`; the public [`fit`][optix.Estimator.fit] /
     [`apply`][optix.Estimator.apply] run them under `torch.no_grad()`.
 
+    !!! note
+        Subclasses receive a [`Labeled`][optix.io.Labeled] array in `_fit` /
+        `_apply` whenever a layout is set, so that the io and stats helpers
+        pick it up; `_layout_of` and `_map_shape` give the layout (default
+        included) and the shape of the parameter maps.
+
     Attributes
     ----------
     options : dict
@@ -216,13 +222,6 @@ class Estimator:
         construction); [`apply`][optix.Estimator.apply] uses it for plain
         arrays.
     history : History
-
-    Notes
-    -----
-    Subclasses receive a [`Labeled`][optix.io.Labeled] array in `_fit` /
-    `_apply` whenever a layout is set, so that the io and stats helpers
-    pick it up; `_layout_of` and `_map_shape` give the layout (default
-    included) and the shape of the parameter maps.
     """
 
     tags: ClassVar[Tags]

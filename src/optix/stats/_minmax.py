@@ -15,15 +15,14 @@ __all__ = ["MinMax"]
 class MinMax(Reducer):
     """Per-pixel minimum and maximum.
 
+    !!! note
+        NaNs propagate: mask them out with `weight` instead. `weight` is a
+        boolean mask (nonzero = keep).
+
     Attributes
     ----------
     min, max : Tensor
         Running extrema (`+inf` / `-inf` where nothing was seen).
-
-    Notes
-    -----
-    NaNs propagate: mask them out with `weight` instead. `weight` is a
-    boolean mask (nonzero = keep).
     """
 
     _state = ("min", "max")
