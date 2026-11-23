@@ -13,6 +13,10 @@ from ._ops import (
     local_maxima,
     tukey_window,
 )
+from ._richards_wolf import (
+    richards_wolf_field,
+    richards_wolf_integrals,
+)
 
 __all__ = [
     "beam_radius",
@@ -23,6 +27,8 @@ __all__ = [
     "linear_shift",
     "local_maxima",
     "rayleigh_range",
+    "richards_wolf_field",
+    "richards_wolf_integrals",
     "sheet_intensity",
     "threshold_centroid",
     "tukey_window",
