@@ -205,6 +205,15 @@ precision of a Normal; the context tells which is meant.
 | $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
 | $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
 
+## Intensity histograms
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $G$ | number of grey levels | `levels` |
+| $h(n)$, $p(n)$ | histogram of the grey levels $n = 1 \ldots G$, and its normalisation; $h$ is local to this section (it is the grid spacing elsewhere) | |
+| $H(\cdot)$ | Shannon entropy of a histogram, in nats; an operator name in upright type, not a set | `meta["entropy"]` |
+| $\mathbf{a}$, $\mathbf{m}$ | coefficients of the polynomial dark and flat fields: the paper's notation, not to be confused with the mean $m$ of a Normal | `meta["coefficients"]` |
+
 ## Distributions
 
 These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).
