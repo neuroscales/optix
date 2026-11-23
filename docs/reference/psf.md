@@ -19,6 +19,8 @@
       show_root_toc_entry: false
       members:
         - bead_psf
+        - lightsheet_psf
+        - gaussian_sheet
 
 ## Utilities
 
@@ -39,3 +41,6 @@
         - linear_shift
         - tukey_window
         - fwhm
+        - rayleigh_range
+        - beam_radius
+        - sheet_intensity
