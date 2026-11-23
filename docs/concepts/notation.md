@@ -122,6 +122,45 @@ And the dark field is not the camera offset: it is offset + dark current +
 stray light. This is the reason why corrections never subtract both
 `ShadingEstimate.dark` and `SensorEstimate.offset`.
 
+## Optics
+
+The symbols of the models of the optics (`optix.psf`), such as the
+[Gibson–Lanni](../algorithms/psf/gibson-lanni.md) and Richards–Wolf PSFs.
+Lengths share one unit; the Gibson–Lanni defaults are in µm.
+
+| Symbol | Meaning | Unit | In code | Used by |
+|---|---|---|---|---|
+| $\mathrm{NA}$ | numerical aperture of the objective, $n \sin\alpha$ | | `numerical_aperture` | both |
+| $\lambda_0$ | wavelength of the light in vacuum | length | `wavelength` | both |
+| $k_0$ | wave number in vacuum, $2\pi/\lambda_0$ | 1 / length | | Gibson–Lanni |
+| $k$ | wave number in a medium of index $n$, $n k_0$ | 1 / length | | Richards–Wolf |
+| $n$ | refractive index of the medium in which the focus is formed | | `refractive_index` | Richards–Wolf |
+| $n_s$, $n_g$, $n_i$ | refractive index of the specimen, the coverslip, the immersion medium | | `specimen_index`, `coverslip_index`, `immersion_index` | Gibson–Lanni |
+| $n_g^*$, $n_i^*$ | the same, under the design conditions of the objective | | `design_coverslip_index`, `design_immersion_index` | Gibson–Lanni |
+| $t_s$ | depth of the source below the coverslip | length | `depth` | Gibson–Lanni |
+| $t_g$, $t_i$ | thickness of the coverslip, of the immersion layer | length | `coverslip_thickness` | Gibson–Lanni |
+| $t_g^*$, $t_i^*$ | the same, under the design conditions | length | `design_coverslip_thickness`, `design_immersion_thickness` | Gibson–Lanni |
+| $\alpha$ | angular semi-aperture of the objective, $\arcsin(\mathrm{NA}/n)$ | rad | | Richards–Wolf |
+| $\theta$, $\varphi$ | angle of a ray to the optical axis; azimuth around the axis | rad | | both |
+| $\rho$ | radius in the pupil (back focal plane), normalised to 1 at the edge of the aperture: $\rho = n \sin\theta / \mathrm{NA}$ | | `rho` | Gibson–Lanni |
+| $r$ | lateral distance from the optical axis, in object space | length | `radius`; `radial` is $k r$ | both |
+| $z$ | position along the optical axis, from the Gaussian focus, positive away from the lens | length | `axial` is $k z$ | Richards–Wolf |
+| $\Delta z$ | defocus: displacement of the stage from the paraxial focus of the source, positive for a thicker immersion layer | length | `defocus` | Gibson–Lanni |
+| $\mathrm{OPD}$ | optical path difference between the actual and the design ray | length | `gibson_lanni_opd` | Gibson–Lanni |
+| $\psi$ | phase aberration of the pupil; $\psi = k_0\,\mathrm{OPD}$ | rad | `pupil_phase` | both |
+| $\mathbf{e}$ | electric field near the focus | | `richards_wolf_field` | Richards–Wolf |
+| $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
+| $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
+| $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
+
+Some letters have another meaning elsewhere on this page: here $n$ is a
+refractive index, not a number of photoelectrons; $\lambda_0$ is a wavelength,
+where $\lambda$ alone is the expected number of photoelectrons; $\theta$,
+$\rho$ and $\psi$ are not the basis coefficients, the Stirling residual and the
+digamma function. A paper that writes the wavelength $\lambda$ and the vacuum
+wave number $k$ is mapped to $\lambda_0$ and $k_0$ on its page. Docstrings
+write `λ₀`, `k₀`.
+
 ## Bases and regularisation
 
 | Symbol | Meaning | In code |
@@ -133,6 +172,16 @@ stray light. This is the reason why corrections never subtract both
 | $h$, $\ell$ | grid spacing; order of the energy $\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$ | `dct_bending(order=)` |
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
+
+## Morphology
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\boldsymbol{\beta}$ | background of an image, the opening of $\mathbf{y}$ | `output="background"` |
+| $\mathbf{u}$ | offset (integer displacement) within a structuring element | |
+| $B(\mathbf{u})$ | structuring element: its grey level at offset $\mathbf{u}$, $-\infty$ outside its support | `ball`, `footprint` |
+| $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
+| $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
 
 ## Distributions
 
@@ -156,23 +205,22 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 
 ## Pupil function
 
-Used by the [phase retrieval](../algorithms/psf/phase-retrieval.md) page, together
-with the optics symbols $\lambda_0$, $n$, $\mathrm{NA}$, $\theta$, $\varphi$, $z$
-and the pupil phase $\psi$ (wavelength, immersion index, numerical aperture, polar
-angle and azimuth of a ray, position along the optical axis, phase of the pupil).
+Used by the [phase retrieval](../algorithms/psf/phase-retrieval.md) page, with the
+[optics symbols](#optics) above: the normalised pupil radius $\rho$, the pupil phase
+$\psi$, the PSF $h$, the angles $\theta$, $\varphi$, the voxel size $d_z, d_y, d_x$ and the
+indices $n$, $n_s$, $n_i$. The symbols below are specific to it.
 
 | Symbol | Meaning | Unit | In code |
 |---|---|---|---|
-| $\boldsymbol{\nu}$, $\nu_z$ | lateral spatial frequency $(\nu_x, \nu_y)$ and axial frequency $\sqrt{(n/\lambda_0)^2 - \lvert\boldsymbol{\nu}\rvert^2}$, in cycles (not the wave number $k$) | 1 / length | |
-| $\mathbf{h}_{\mathrm A}$, $\mathbf{h}$ | amplitude PSF (complex) and intensity PSF, $\lvert h_{\mathrm A}\rvert^2$ | | `pupil_psf` |
-| $p(\boldsymbol{\nu})$, $\mathbf{p}$ | pupil function, non-zero for $\lvert\boldsymbol{\nu}\rvert \le \mathrm{NA}/\lambda_0$; its samples | | `PupilEstimate.pupil` |
+| $\boldsymbol{\nu}$, $\nu_z$ | lateral spatial frequency $(\nu_x, \nu_y)$, and axial frequency $\sqrt{(n/\lambda_0)^2 - \lvert\boldsymbol{\nu}\rvert^2}$, in cycles (not the wave number $k$) | 1 / length | |
+| $h_{\mathrm A}$ | amplitude PSF (complex), $h = \lvert h_{\mathrm A}\rvert^2$ | | `pupil_psf` |
+| $p(\boldsymbol{\nu})$, $\mathbf{p}$ | complex pupil function, $p = A\,e^{i\psi}$, non-zero for $\lvert\boldsymbol{\nu}\rvert \le \mathrm{NA}/\lambda_0$; its samples | | `PupilEstimate.pupil` |
+| $A$ | magnitude of the pupil | | |
 | $\mathbf{u}_j$ | defocus phase function $e^{2\pi i \nu_z z_j}$ of the section $z_j$ | | |
-| $r$ | pupil radius normalised to 1 at the edge, $\lvert\boldsymbol{\nu}\rvert\lambda_0/\mathrm{NA}$ (not the distance $\rho$ of the optics symbols) | | `rho` |
-| $m$, $\psi$ | magnitude and phase of the pupil, $p = m\,e^{i\psi}$ | rad (phase) | |
-| $Z_j$ | Zernike polynomial of Noll index $j$ | | `zernike` |
-| $a_j$, $b_j$ | Zernike coefficients of $m$ and of $\psi$ | rad (for $b_j$) | `zernike_magnitude`, `zernike_phase` |
-| $D$, $d$ | bead diameter; depth of the source below the cover slip | length | `bead_diameter`, `depth` |
-| $n_1$, $n_2$ | refractive index of the design immersion medium ($= n$) and of the sample medium | | `n1`, `n2` |
+| $Z_j$ | Zernike polynomial of Noll index $j$, with radial order $q$ and azimuthal frequency $l$ | | `zernike` |
+| $a_j$, $b_j$ | Zernike coefficients of $A$ and of $\psi$ | rad (for $b_j$) | `zernike_magnitude`, `zernike_phase` |
+| $\delta$ | phase of the index-mismatch aberration, $k_0\,\mathrm{OPD}$ | rad | `index_mismatch_aberration` |
+| $D$ | bead diameter | length | `bead_diameter` |
 
 ## Indices and layouts
 

@@ -3,7 +3,7 @@
 !!! info "At a glance"
     **Estimates:** `PupilEstimate` (`pupil`, `zernike_magnitude`, `zernike_phase`) \
     **Noise model:** none (a noise-free forward model; noise is reduced by the 2D pupil constraint) \
-    **Streaming:** whole-stack (the sections used and the pupil of each group are in memory) \
+    **Streaming:** whole-stack (the selected sections of a group are used together; the stack is read in z-slabs, see [Memory and streaming](#memory-and-streaming)) \
     **Needs many frames:** no (a z-stack of one bead, or of an averaged bead; at least two sections) \
     **Reference:** Hanser, Gustafsson, Agard and Sedat, J Microsc, 2004, [doi:10.1111/j.0022-2720.2004.01393.x](https://doi.org/10.1111/j.0022-2720.2004.01393.x)
 
@@ -47,8 +47,8 @@ medium and $\lambda_0$ the vacuum wavelength. The cap is described by its projec
 on the lateral frequency plane, the pupil, of radius $\mathrm{NA}/\lambda_0$, and the
 shape of the cap is carried by the axial frequency
 $\nu_z(\boldsymbol{\nu}) = \sqrt{(n/\lambda_0)^2 - |\boldsymbol{\nu}|^2}$. The symbols
-of this page are in the [pupil function table](../../concepts/notation.md#pupil-function)
-of the notation page.
+of this page are in the [optics table](../../concepts/notation.md#optics) and the
+[pupil function table](../../concepts/notation.md#pupil-function) of the notation page.
 
 ### Imaging model
 
@@ -92,11 +92,12 @@ states that the OTF lies on a sphere. Three consequences are used by the algorit
 - **Sections.** One lateral section at depth $z_j$ is a 2D Fourier transform
   of $p$ times the defocus phase function.
 - **Discretisation.** The pupil is sampled on the discrete Fourier grid of the
-  lateral image grid, $\nu = (i - K/2)/(K \Delta)$ for $K$ pixels of size $\Delta$ along
+  lateral image grid, $\nu = (i - \lfloor K/2 \rfloor)/(K d)$ for $K$ pixels of size $d$ along
   an axis, with $\nu = 0$ at index `K // 2`. The radius of the pupil is
-  $\mathrm{NA}\, K \Delta / \lambda_0$ pixels, so the field of view sets the
+  $\mathrm{NA}\, K d / \lambda_0$ pixels, so the field of view sets the
   sampling of the pupil. The transform is unitary.
-- **Piston.** The term $n z/\lambda_0$ of $\nu_z$ is a global phase per section that
+- **Piston.** The term $n/\lambda_0$ of $\nu_z$ contributes the global phase
+  $2\pi n z/\lambda_0$ to a section; it
   cancels between the forward and the backward defocus, so it is dropped, and
   $\nu_z - n/\lambda_0 = -|\boldsymbol{\nu}|^2/(n/\lambda_0 + \nu_z)$ is computed in
   this form, which has no cancellation.
@@ -164,8 +165,8 @@ azimuth $\varphi$ of $\boldsymbol{\nu}$ (`vectorial=True`):
     $$
 
 The factor $1/\sqrt{\cos\theta}$ of the wavefront compression is absorbed in the
-pupil function, and the six squared factors add up to 2 everywhere, so the
-overall scale is unchanged. The factors are the same as in the classical calculation of
+pupil function, and the six squared factors add up to 2 everywhere. This constant factor does not
+reweight the pupil, and it disappears in the unit-sum normalisation. The factors are the same as in the classical calculation of
 Richards and Wolf.
 
 **Empirical OTF rescaling.** The paper found that the high spatial frequencies of
@@ -180,11 +181,11 @@ $$
 
 ### Depth-dependent index mismatch
 
-A point source at depth $d$ below the cover slip, in a medium of index $n_2$, imaged by
-an objective designed for an immersion index $n_1$ ($= n$), is aberrated: the pupil
+A point source at depth $t_s$ below the cover slip, in a medium of index $n_s$, imaged by
+an objective designed for an immersion index $n_i$ ($= n$), is aberrated: the pupil
 function is multiplied by a complex function of the pupil position. A ray that
 reaches the pupil at the angle $\theta_1$ left the source at the angle $\theta_2$, with
-$n_1 \sin\theta_1 = n_2 \sin\theta_2$ (Snell's law). The phase is the change of the
+$n_i \sin\theta_1 = n_s \sin\theta_2$ (Snell's law). The phase is the change of the
 optical path, the magnitude combines the Fresnel transmission of the interface
 (averaged over the two polarisations) and the *wavefront compression* that
 conserves energy:
@@ -193,12 +194,12 @@ conserves energy:
 
     $$
     \begin{aligned}
-    \psi(\theta_1) &= \frac{2\pi}{\lambda_0}\, d\,\bigl(n_2 \cos\theta_2 - n_1 \cos\theta_1\bigr),\\
+    \delta(\theta_1) &= k_0\, t_s\,\bigl(n_s \cos\theta_2 - n_i \cos\theta_1\bigr),\\
     A_{\mathrm t} &= \frac{\sin\theta_1 \cos\theta_2}{\sin(\theta_1 + \theta_2)}
     \Bigl[1 + \frac{1}{\cos(\theta_2 - \theta_1)}\Bigr],\qquad
-    A_{\mathrm w} = \frac{n_1 \tan\theta_2}{n_2 \tan\theta_1},\\
-    p'(\boldsymbol{\nu}) &= p(\boldsymbol{\nu})\, A_{\mathrm t} A_{\mathrm w}\, e^{i\psi(\theta_1)},
-    \qquad \sin\theta_1 = \frac{\lambda_0}{n_1}\, |\boldsymbol{\nu}| .
+    A_{\mathrm w} = \frac{n_i \tan\theta_2}{n_s \tan\theta_1},\\
+    p'(\boldsymbol{\nu}) &= p(\boldsymbol{\nu})\, A_{\mathrm t} A_{\mathrm w}\, e^{i\delta(\theta_1)},
+    \qquad \sin\theta_1 = \frac{\lambda_0}{n_i}\, |\boldsymbol{\nu}| .
     \end{aligned}
     $$
 
@@ -222,19 +223,20 @@ complex factor $A_{\mathrm t} A_{\mathrm w} e^{i\psi}$ on the pupil grid.
 
 | optix | Hanser et al. 2004 |
 |---|---|
-| $d$ | $d$ (depth) |
-| $n_1$, $n_2$ | $n_1$, $n_2$ |
+| $t_s$ (`depth`) | $d$ (depth) |
+| $n_i$ (`immersion_index`), $n_s$ (`specimen_index`) | $n_1$, $n_2$ |
 | $\theta_1$, $\theta_2$ | $\theta_1$, $\theta_2$ |
-| $\psi(\theta_1)$ (phase) | $2\pi OP/\lambda$ |
+| $\delta(\theta_1) = k_0\,OP$ (phase) | $2\pi OP/\lambda$ |
 | $A_{\mathrm t}$, $A_{\mathrm w}$ | $A_1$, $A_w$ |
-| $A_{\mathrm t} A_{\mathrm w} e^{i\psi}$ | $\psi(k_x, k_y, d, n_1, n_2)$ (Eq. 8) |
+| $A_{\mathrm t} A_{\mathrm w} e^{i\delta}$ | $\psi(k_x, k_y, d, n_1, n_2)$ (Eq. 8) |
 
-The paper uses $\psi$ for the whole complex function; here $\psi$ is the phase, as in
-the optics symbols of the notation page. The expressions are evaluated in equivalent
+The paper uses $\psi$ for the whole complex function. Here $\psi$ is the phase of the pupil,
+as in the optics table of the notation page, and the phase of the mismatch has its own
+symbol $\delta$. The expressions are evaluated in equivalent
 forms that are finite on the axis ($\theta_1 = 0$):
-$A_{\mathrm t} = \cos\theta_2\,[1 + 1/\cos(\theta_2 - \theta_1)]/(\cos\theta_2 + (n_1/n_2)\cos\theta_1)$
-and $A_{\mathrm w} = (n_1/n_2)^2 \cos\theta_1/\cos\theta_2$. Rays beyond the critical angle
-($n_1 \sin\theta_1 > n_2$) do not reach the pupil, and get $\psi = 0$ and a zero magnitude.
+$A_{\mathrm t} = \cos\theta_2\,[1 + 1/\cos(\theta_2 - \theta_1)]/(\cos\theta_2 + (n_i/n_s)\cos\theta_1)$
+and $A_{\mathrm w} = (n_i/n_s)^2 \cos\theta_1/\cos\theta_2$. Rays beyond the critical angle
+($n_i \sin\theta_1 > n_s$) do not reach the pupil, and get $\delta = 0$ and a zero magnitude.
 The constant $1/\lambda$ of Eq. 9 only scales the PSF and is omitted.
 
 ## Probabilistic model
@@ -286,15 +288,15 @@ in Zernike polynomials:
 === "optix"
 
     $$
-    p(r, \varphi) = m(r, \varphi)\, e^{i\psi(r, \varphi)},
+    p(\rho, \varphi) = A(\rho, \varphi)\, e^{i\psi(\rho, \varphi)},
     \qquad
-    m = \sum_{j=1}^{J_{\mathrm Z}} a_j Z_j(r, \varphi),
+    A = \sum_{j=1}^{J_{\mathrm Z}} a_j Z_j(\rho, \varphi),
     \qquad
-    \psi = \sum_{j=1}^{J_{\mathrm Z}} b_j Z_j(r, \varphi),
-    \qquad r \le 1,
+    \psi = \sum_{j=1}^{J_{\mathrm Z}} b_j Z_j(\rho, \varphi),
+    \qquad \rho \le 1,
     $$
 
-    with $r = |\boldsymbol{\nu}|\lambda_0/\mathrm{NA}$ the radius normalised to 1 at the
+    with $\rho = |\boldsymbol{\nu}|\lambda_0/\mathrm{NA}$ the radius normalised to 1 at the
     edge of the pupil, and $\varphi$ the azimuth.
 
 === "Hanser et al. 2004"
@@ -308,25 +310,25 @@ in Zernike polynomials:
 | optix | Hanser et al. 2004 / code |
 |---|---|
 | $a_j$, $b_j$ | `zernike_magnitude`, `zernike_phase` |
-| $Z_j(r, \varphi)$ | Zernike polynomial of Noll index $j$ (`zernike(j, rho, theta)`) |
-| $r$, $\varphi$ | `rho`, `theta` in the code (the radius and azimuth of the pupil grid) |
+| $Z_j(\rho, \varphi)$ | Zernike polynomial of Noll index $j$ (`zernike(j, rho, theta)`) |
+| $\rho$, $\varphi$ | `rho`, `theta` in the code (the radius and azimuth of the pupil grid) |
 | $J_{\mathrm Z}$ | `zernike_terms` (79) |
 
 The polynomials are those of Noll (1976), whom the paper cites; they are
-orthonormal on the unit disc, $\tfrac{1}{\pi}\iint Z_i Z_j\, r\, \mathrm{d}r\, \mathrm{d}\varphi = \delta_{ij}$, so
-a coefficient is the root-mean-square contribution of its term. With the radial order $n$ and
-the azimuthal frequency $m$ of the Noll index $j$
+orthonormal on the unit disc, $\tfrac{1}{\pi}\iint Z_i Z_j\, \rho\, \mathrm{d}\rho\, \mathrm{d}\varphi = \delta_{ij}$, so
+a coefficient is the root-mean-square contribution of its term. With the radial order $q$ and
+the azimuthal frequency $l$ of the Noll index $j$
 ([`noll_index`][optix.psf.utils.noll_index]),
 
 $$
 Z_j = \begin{cases}
-\sqrt{n+1}\, R_n^0(r) & m = 0,\\
-\sqrt{2(n+1)}\, R_n^{|m|}(r) \cos m\varphi & m > 0 \ (j \text{ even}),\\
-\sqrt{2(n+1)}\, R_n^{|m|}(r) \sin |m|\varphi & m < 0 \ (j \text{ odd}),
+\sqrt{q+1}\, R_q^0(\rho) & l = 0,\\
+\sqrt{2(q+1)}\, R_q^{|l|}(\rho) \cos l\varphi & l > 0 \ (j \text{ even}),\\
+\sqrt{2(q+1)}\, R_q^{|l|}(\rho) \sin |l|\varphi & l < 0 \ (j \text{ odd}),
 \end{cases}
 $$
 
-with $R_n^m$ the radial polynomials. The 79 terms are the indices $1 \ldots 79$: the
+with $R_q^l$ the radial polynomials (`noll_index` returns $(q, l)$ as `(n, m)`). The 79 terms are the indices $1 \ldots 79$: the
 $12 \times 13 / 2 = 78$ polynomials up to radial order 11 and the first polynomial of order
 12, which is the radial one.
 
@@ -364,8 +366,10 @@ constraint sets of the problem above, and each step has a closed form.
     amplitude error $\sum_j \lVert\,|\mathbf{g}_j| - \sqrt{\mathbf{y}_j}\rVert^2 / \sum_j \lVert\mathbf{y}_j\rVert_1$
     cannot increase.
 
-4. **Smoothing (optional).** The paper allows a smoothing filter at this point, whose
-   form it does not give (see [below](#faithful-mode-and-extensions)).
+4. **Smoothing.** The paper applies a smoothing filter to the pupil at this point, at
+   every iteration, to suppress noise. It does not give the filter, so faithful mode
+   does not smooth (see [below](#faithful-mode-and-extensions)); a Gaussian is
+   available as an extension.
 
 The starting guess is $\mathbf{p}^{(0)} = \mathbf{S}\mathbf{1}$: one inside the aperture,
 zero outside (Fig. 2B). The iteration stops after a fixed number of iterations
@@ -393,8 +397,8 @@ previous pixels of its path. The paths start at the centre pixel, run along the 
 column, then outwards along each row. Each map $v$ is then fitted by
 
 $$
-\hat{\mathbf{c}} = \arg\min_{\mathbf{c}} \sum_{r \le 1}
-\Bigl(v(r, \varphi) - \sum_{j=1}^{J_{\mathrm Z}} c_j Z_j(r, \varphi)\Bigr)^2 ,
+\hat{\mathbf{c}} = \arg\min_{\mathbf{c}} \sum_{\rho \le 1}
+\Bigl(v(\rho, \varphi) - \sum_{j=1}^{J_{\mathrm Z}} c_j Z_j(\rho, \varphi)\Bigr)^2 ,
 $$
 
 unweighted over the pixels of the pupil, by linear least squares
@@ -405,11 +409,11 @@ pupil has fewer pixels than terms: a larger lateral field of view, or lateral pa
 ## Algorithm
 
 ```text
-Input: stack (…, Z, Y, X), spacing (Δz, Δy, Δx), λ₀, NA, n,
+Input: stack (…, Z, Y, X), spacing (d_z, d_y, d_x), λ₀, NA, n,
        offsets = (−3, −1, 1, 3), focus = brightest section, iterations = 25,
        smoothing = none, zernike_terms = 79, unwrap = True
 Per group:
-    j₀ = focus; sections i_j = j₀ + round(offset_j / Δz); z_j = (i_j − j₀) Δz
+    j₀ = focus; sections i_j = j₀ + round(offset_j / d_z); z_j = (i_j − j₀) d_z
     y_j = max(section i_j, 0), scaled so that the mean energy of the sections
           equals the number of pixels of the pupil
     p = indicator of |ν| ≤ NA/λ₀                         # starting guess
@@ -429,21 +433,29 @@ Return PupilEstimate(pupil, zernike_magnitude, zernike_phase), meta, history
 ## Faithful mode and extensions
 
 `faithful=True` reproduces the procedure of the paper with its published settings: the
-starting guess, the four defocused sections, 25 iterations, no smoothing in
-the loop, the Zernike fit of 79 terms after phase unwrapping. Both presets
-(`faithful=True` and `False`) are the paper's settings; the estimator is reported as
-faithful (`is_faithful`) as long as no option below is changed.
+starting guess, the four defocused sections, 25 iterations, the Zernike fit of 79 terms
+after phase unwrapping. Both presets (`faithful=True` and `False`) are the paper's
+settings; the estimator is reported as faithful (`is_faithful`) as long as no option below
+is changed.
+
+!!! warning "Departure from the paper: smoothing"
+    The paper smoothed the pupil at every iteration (Fig. 2G; it notes that less
+    frequent or no smoothing may suit low-noise data), with a filter it does not
+    specify. That filter cannot be reproduced, so the default, also in faithful mode,
+    runs without smoothing. This is a necessary departure, and it is the only one of
+    the loop. `smoothing` is an opt-in Gaussian extension, and `is_faithful` is `False`
+    when it is set.
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
 | `offsets` | defocus of the sections used, relative to `focus`, each selecting the nearest section; `"all"` uses every section | `(-3, -1, 1, 3)` (the unit of `spacing`, µm) | same |
 | `focus` | index of the in-focus section | `None`: the section with the brightest voxel | same |
 | `iterations` | number of iterations | `25` | `25` |
-| `smoothing` | standard deviation, in pupil pixels, of a Gaussian smoothing of the pupil at every iteration (extension) | `None` | `None` |
+| `smoothing` | standard deviation, in pupil pixels, of a Gaussian smoothing of the pupil at every iteration (extension; the paper's filter is unspecified) | `None` (departure, see above) | `None` |
 | `zernike_terms` | Noll-ordered terms in each fit | `79` | `79` |
 | `unwrap` | unwrap the phase before its fit | `True` | `True` |
 
-Only `spacing`, `wavelength`, `na` and `n` are required; they describe the data and do
+Only `spacing`, `wavelength`, `numerical_aperture` and `refractive_index` are required; they describe the data and do
 not change the faithful status.
 
 The rendering options of [`pupil_psf`][optix.psf.pupil_psf] and
@@ -461,11 +473,11 @@ off by default and meant to be applied after the retrieval:
 
 Each of the following is a choice of the implementation.
 
-- **Smoothing filter.** The paper has an optional smoothing step but does not describe
-  the filter. Faithful mode does not smooth; the Gaussian of `smoothing` pupil pixels,
-  applied to the real and imaginary parts, is an opt-in extension. The optional
-  stopping criterion of the paper is not implemented: the number of iterations is
-  fixed.
+- **Smoothing filter.** The paper smooths the pupil at every iteration but does not
+  describe the filter. Faithful mode therefore does not smooth (a departure, above);
+  the Gaussian of `smoothing` pupil pixels, applied to the real and imaginary parts, is
+  an opt-in extension. The optional stopping criterion of the paper is not implemented:
+  the number of iterations is fixed.
 - **iMSE normalisation.** $\sum(\hat{\mathbf{y}} - \mathbf{y})^2/\sum \mathbf{y}^2$ over the voxels compared.
 - **Data scaling and sign.** The sections are scaled so that their mean energy equals that of the
   starting pupil (its number of pixels), so that the retrieved magnitude is close to 1.
@@ -482,9 +494,11 @@ Each of the following is a choice of the implementation.
   taken isotropic in the 3D frequency, equal to 1 at $\nu = 0$ (so the PSF sum is
   kept), and its width is found by a golden-section search on the least-squares
   criterion over the OTF support of an objective of the numerical aperture given to
-  [`fit_otf_rescaling`][optix.psf.utils.fit_otf_rescaling]. The paper fitted on the
+  [`fit_otf_rescaling`][optix.psf.utils.fit_otf_rescaling], leaving out the frequencies
+  where the calculated OTF is below $10^{-3}$ of its value at $\nu = 0$ (the ratio is
+  dominated by noise there). The paper fitted on the
   support of NA 1.15 for an NA 1.3 objective, where the measured OTF is above the noise.
-- **Rays beyond the critical angle.** $\psi = 0$ and a zero magnitude in the index-mismatch
+- **Rays beyond the critical angle.** $\delta = 0$ and a zero magnitude in the index-mismatch
   aberration.
 - **Constant factor $1/\lambda$ of Eq. 9.** Omitted.
 - **Numerical form of the defocus factor.** Written as above without cancellation; a
@@ -492,25 +506,45 @@ Each of the following is a choice of the implementation.
 
 ## Memory and streaming
 
-The algorithm is *whole-stack*: `PhaseRetrieval` reads the data once and in one piece
-(`data[...]`), then uses only the $J$ selected sections. The iteration holds, per group,
-$J$ complex fields of the size of the lateral image, $K_y \times K_x$, plus
-the defocus phase function of each; the final quality is computed on all $Z$ sections, at
-the cost of one more complex array of $Z K_y K_x$ per group. Each iteration costs
-$2J$ 2D FFTs per group, and the Zernike fit solves a least-squares problem of
-(pupil pixels) $\times$ 79 once per group. Groups are processed together in a single
-batch. To lower the memory for a large stack, crop it laterally around the bead, to the
-size that the pupil sampling requires, and pass only the sections needed with `focus`
-set to the in-focus section of the cropped stack. [`pupil_psf`][optix.psf.pupil_psf] and
-[`zernike_psf`][optix.psf.zernike_psf] hold the whole $(Z, Y, X)$ PSF.
+The selected sections of a group are used together, so the algorithm is tagged
+*whole-stack*, but the stack itself is never loaded whole. `PhaseRetrieval` reads
+basic slices of any array-like (a zarr array included) or of a `Labeled` array in its
+storage order, one group at a time and in z-slabs whose length follows the memory
+budget:
+
+1. when `focus` is `None`, one pass over z keeps the per-section maximum, to find the
+   brightest section;
+2. only the $J$ selected sections are read;
+3. after the iterations, the whole-stack iMSE and correlation are accumulated slab by slab
+   from mergeable sums (means and centred co-moments, merged pairwise in float64), and
+   only the PSF sections of each slab are computed.
+
+During the iterations only the $J$ sections and the pupil of every group are in memory
+(about $J$ complex fields of $K_y \times K_x$ per group and the defocus phase function
+of each). Each iteration costs $2J$ 2D FFTs per group; the Zernike fit solves a
+least-squares problem of (pupil pixels) $\times$ 79 per group. The data are read
+twice at most ($2Z + J$ sections per group). The pupil sampling is set by the
+lateral size of the data, so crop a large field of view around the bead, or pad it, to
+the size that the pupil needs.
+
+!!! note "Orientation"
+    $z$ increases with the section index. Reversing the axis (a z-stage that moves the
+    other way) turns the pupil into its complex conjugate rotated by 180° about index
+    `K // 2`, $p(\boldsymbol{\nu}) \to p^*(-\boldsymbol{\nu})$. For even $K$ the row and
+    column at index 0 have no partner, so the rotation is
+    `torch.roll(p.flip(-2, -1), (1, 1), (-2, -1))`, not a plain flip. If the stack was
+    acquired with $z$ running the other way, flip it along $z$ before the retrieval, or
+    the pupil is returned conjugated.
 
 ## Usage
 
 ```pycon
 >>> import torch
 >>> from optix.psf import PhaseRetrieval, zernike_psf
->>> optics = dict(wavelength=0.52, na=1.3, n=1.515)  # µm, oil objective
->>> spacing = (1.0, 0.0566, 0.0566)  # (Δz, Δy, Δx) in µm
+>>> optics = dict(
+...     wavelength=0.52, numerical_aperture=1.3, refractive_index=1.515
+... )  # µm, oil
+>>> spacing = (1.0, 0.0566, 0.0566)  # (d_z, d_y, d_x) in µm
 
 >>> # 1. A synthetic stack: 0.5 rad of coma (Noll j = 8), 0.3 rad of spherical (j = 11).
 >>> phase = torch.zeros(79)
@@ -549,7 +583,7 @@ Rendering a PSF from the result, on a new grid, with the corrections of the pape
 ```
 
 The pupil of the microscope under an index mismatch, a source $5\,\mu$m deep in water
-($n_2 = 1.33$) for an oil objective, is the retrieved pupil times the aberration:
+($n_s = 1.33$) for an oil objective, is the retrieved pupil times the aberration:
 
 ```pycon
 >>> from optix.psf import index_mismatch_aberration, pupil_psf
@@ -557,10 +591,10 @@ The pupil of the microscope under an index mismatch, a source $5\,\mu$m deep in 
 ...     (128, 128),
 ...     spacing[1:],
 ...     depth=5.0,
-...     n1=1.515,
-...     n2=1.33,
+...     immersion_index=1.515,
+...     specimen_index=1.33,
 ...     wavelength=0.52,
-...     na=1.3,
+...     numerical_aperture=1.3,
 ... )
 >>> deep = pupil_psf(
 ...     pupil.pupil * aberration,

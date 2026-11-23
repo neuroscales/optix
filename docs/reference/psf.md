@@ -26,6 +26,7 @@
         - pupil_psf
         - zernike_psf
         - index_mismatch_aberration
+        - gibson_lanni
 
 ## Utilities
 
@@ -58,3 +59,5 @@
         - vectorial_factors
         - bead_otf
         - fit_otf_rescaling
+        - gibson_lanni_opd
+        - gibson_lanni_profile
