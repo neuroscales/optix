@@ -78,7 +78,7 @@ def pixel_stats(
     order : int
         Highest central moment (2 or 4), for `statistic="mean"`.
     statistic : {"mean", "median"}
-        `"mean"`: Welford/Pebay moments over frame batches.
+        `"mean"`: Welford/Pébay moments over frame batches.
         `"median"`: exact per-pixel median and MAD over row tiles; the
         variance is then (1.4826·MAD)².
     dtype, device : optional

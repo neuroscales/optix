@@ -539,8 +539,8 @@ Other habits follow from the same concern.
   `SuffStats.zeros(..., dtype=torch.float64)` makes a double-precision
   accumulator for batches of single-precision statistics.
 - **Never form raw power sums.** `NormalStats` and `Moments` hold the mean and the
-  scatter $M = \sum (x - \bar{x})^2$ and merge them with Pébay's pairwise
-  formulas, instead of holding $\sum x$ and $\sum x^2$. For a camera with an
+  scatter $M = \sum (x - \bar{x})^2$ and merge them with
+  [Pébay's pairwise formulas](https://doi.org/10.1007/s00180-015-0637-z), instead of holding $\sum x$ and $\sum x^2$. For a camera with an
   offset of 100 ADU and a noise of 1.5 ADU, $\sum x^2$ is thousands of times larger
   than the scatter it is meant to produce, and `float32` keeps about seven digits.
 - **No silent failure at the edges.** $0 \log 0 = 0$ in entropies and in the
@@ -579,3 +579,25 @@ $$
 $$
 
 with $s = \sqrt{v}$, nodes $t_i$ and weights $w_i$ for the weight function $e^{-t^2}$.
+
+!!! references "References"
+
+    1. Pébay P, Terriberry TB, Kolla H, Bennett J. *Numerically stable, scalable
+       formulas for parallel and online computation of higher-order multivariate
+       central moments with arbitrary weights.* Comput Stat **31**(4):1305-1325,
+       2016. [doi:10.1007/s00180-015-0637-z](https://doi.org/10.1007/s00180-015-0637-z)
+
+    ??? quote "BibTeX"
+
+        ```bibtex
+        @article{pebay2016numerically,
+          author  = {P{\'e}bay, Philippe and Terriberry, Timothy B. and Kolla, Hemanth and Bennett, Janine},
+          title   = {Numerically stable, scalable formulas for parallel and online computation of higher-order multivariate central moments with arbitrary weights},
+          journal = {Computational Statistics},
+          volume  = {31},
+          number  = {4},
+          pages   = {1305--1325},
+          year    = {2016},
+          doi     = {10.1007/s00180-015-0637-z},
+        }
+        ```

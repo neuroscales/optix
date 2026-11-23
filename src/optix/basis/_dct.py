@@ -18,7 +18,7 @@ def dct_basis(
 ) -> Tensor:
     """Orthonormal DCT-II basis.
 
-    B[i, j] = cⱼ cos(π (i + ½) j / n) with c₀ = √(1/n) and cⱼ = √(2/n)
+    Φ[i, j] = cⱼ cos(π (i + ½) j / n) with c₀ = √(1/n) and cⱼ = √(2/n)
     for j ≥ 1. Built in float64, then cast.
 
     Parameters
@@ -34,7 +34,7 @@ def dct_basis(
     Returns
     -------
     (n, k) Tensor
-        Basis functions in columns, Bᵀ B = I.
+        Basis functions in columns, Φᵀ Φ = I.
     """
     k = n if k is None else k
     if not 0 < k <= n:
@@ -60,11 +60,11 @@ def dct_bending(
     """Diagonal regulariser of a separable DCT-II basis.
 
     Energy of the `order`-th derivatives of each separable basis
-    function `prod_d B_d[:, j_d]`. The DCT-II functions diagonalise the
+    function ∏_d Φ_d[:, j_d]. The DCT-II functions diagonalise the
     discrete Laplacian with reflecting (Neumann) boundaries, with
-    eigenvalues λⱼ = (2 − 2 cos(π j / n)) / h² (h = spacing). The energy
+    eigenvalues κⱼ = (2 − 2 cos(π j / n)) / h² (h = spacing). The energy
     of the order-m derivatives (sum over all ordered derivative
-    multi-indices) is then `(sum_d lambda_{j_d})^m`: m = 1 is the membrane
+    multi-indices) is then (∑_d κ_{j_d})ᵐ: m = 1 is the membrane
     energy and m = 2 the bending energy.
 
     The discrete eigenvalues are used (rather than the continuous
@@ -136,7 +136,7 @@ def project(x: Tensor, bases: Sequence[Tensor]) -> Tensor:
     Returns
     -------
     (..., k1, ..., kd) Tensor
-        Coefficients `x x_1 B_1^T ... x_d B_d^T`.
+        Coefficients x ×₁ Φ₁ᵀ … ×_d Φ_dᵀ.
     """
     return _apply(x, bases, transpose=True)
 
@@ -144,10 +144,10 @@ def project(x: Tensor, bases: Sequence[Tensor]) -> Tensor:
 def gram(weight: Tensor, bases: Sequence[Tensor]) -> Tensor:
     """Weighted Gram matrix of a separable basis over the trailing dims.
 
-    G = Bᵀ diag(w) B with B = B₁ ⊗ … ⊗ B_d, i.e.
-    G[j, j′] = ∑ᵢ wᵢ ∏_d B_d[i_d, j_d] B_d[i_d, j′_d]. It is the normal
-    matrix of a weighted least-squares fit of coefficients `c` to a
-    signal `x`, ‖x − reconstruct(c)‖²_w, whose right-hand side is
+    G = Φᵀ diag(w) Φ with Φ = Φ₁ ⊗ … ⊗ Φ_d, i.e.
+    G[j, j′] = ∑ᵢ wᵢ ∏_d Φ_d[i_d, j_d] Φ_d[i_d, j′_d]. It is the normal
+    matrix of a weighted least-squares fit of coefficients θ to a
+    signal x, ‖x − reconstruct(θ)‖²_w, whose right-hand side is
     `project(w * x, bases)`.
 
     Parameters
@@ -194,6 +194,6 @@ def reconstruct(coef: Tensor, bases: Sequence[Tensor]) -> Tensor:
     Returns
     -------
     (..., n1, ..., nd) Tensor
-        Signal `coef x_1 B_1 ... x_d B_d`.
+        Signal θ ×₁ Φ₁ … ×_d Φ_d.
     """
     return _apply(coef, bases, transpose=False)

@@ -10,7 +10,7 @@ from optix.stats import Moments, reduce_groups
 
 
 class MeanDark(optix.Estimator):
-    """Dark image as the per-pixel mean of frames taken without light."""
+    """Dark field as the per-pixel mean of frames taken without light."""
 
     tags = optix.Tags(
         targets=("shading",),
