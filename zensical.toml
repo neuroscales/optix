@@ -26,6 +26,7 @@ nav = [
     "reference/estimates.md",
     "reference/io.md",
     "reference/stats.md",
+    "reference/filters.md",
     "reference/basis.md",
     "reference/special.md",
     "reference/sensor.md",
