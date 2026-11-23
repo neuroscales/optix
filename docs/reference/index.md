@@ -8,7 +8,7 @@ the reference to look up a signature.
 |---|---|
 | [`optix`](configuration.md) | `config`, `set_config` and `get_config`, the options of a computation |
 | [`optix`](estimator.md) | `Estimator`, `Tags`, `History`, `estimators` and `load` |
-| [`optix.estimates`](estimates.md) | `SensorEstimate`, `ShadingEstimate`, `Classification`: the shared result types |
+| [`optix.estimates`](estimates.md) | `SensorEstimate`, `ShadingEstimate`, `Classification`, `PSFEstimate`: the shared result types |
 | [`optix.io`](io.md) | `Layout`, `labeled` and the chunk iterators `frame_batches`, `row_tiles` and `blocks` |
 | [`optix.stats`](stats.md) | streaming reducers (`Moments`, `Histogram`, ...) and per-pixel order statistics |
 | [`optix.filters`](filters.md) | spatial neighbourhood filters (`median_filter`, `median_disk`) |
@@ -17,6 +17,7 @@ the reference to look up a signature.
 | [`optix.sensor`](sensor.md) | sensor calibration estimators and variance-stabilising transforms |
 | [`optix.shading`](shading.md) | shading estimators and `correct` |
 | [`optix.deconv`](deconv.md) | Richardson–Lucy deconvolution and `richardson_lucy` |
+| [`optix.psf`](psf.md) | point spread functions: `BeadPSF`, `bead_psf` and `lightsheet_psf` |
 | [`optix.models`](models.md) | simulators of the camera and shading models |
 | [`optix.distributions`](distributions.md) | `Gamma`, `Normal`, `Dirichlet`, `Categorical`, statistics and conjugate updates |
 | [`optix.distributions.functional`](functional.md) | the pure tensor kernels behind the distributions |
