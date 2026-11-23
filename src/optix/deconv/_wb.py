@@ -480,9 +480,8 @@ class WienerButterworth(RichardsonLucy):
     --------
     >>> import torch
     >>> from optix.deconv import WienerButterworth
-    >>> x = torch.arange(15.0) - 7
-    >>> g = torch.exp(-(x**2) / 8)
-    >>> psf = g[:, None] * g
+    >>> from optix.models import gaussian_psf
+    >>> psf = gaussian_psf((15, 15), sigma=2.0)
     >>> data = torch.poisson(torch.full((64, 64), 10.0))
     >>> wb = WienerButterworth(psf).fit(data)
     >>> wb.apply(data).shape
