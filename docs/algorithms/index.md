@@ -20,6 +20,7 @@ example. The sections follow the modules of the
 | | [Defective pixels](sensor/defective-pixels.md) (`DefectivePixels`) | hot, dead and noisy pixels |
 | [`optix.shading`](../reference/shading.md) | [BaSiC](shading/basic.md) (`BaSiC`) | flat field, dark field and baseline |
 | | [CIDRE](shading/cidre.md) (`CIDRE`) | flat field and dark field |
+| | [Kask](shading/kask.md) (`KaskFlatField`) | foreground and background flat fields |
 | | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
 | [`optix.background`](../reference/background.md) | [Rolling ball](background/rolling-ball.md) (`RollingBall`, `TopHat`) | background, by grey-scale opening |
@@ -31,6 +32,7 @@ example. The sections follow the modules of the
 | | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
 | | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
+| | [Multiview Richardson–Lucy](deconv/multiview.md) (`MultiviewRL`) | one deconvolved image from several registered views |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
 | | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |

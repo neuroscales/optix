@@ -57,6 +57,9 @@ never `rₙ_k`.
 | $\mathbf{x}_i$ | latent image: frame $i$ without shading | ADU | result of `apply` |
 | $\mathbf{f}$ | flat field (multiplicative) | dimensionless | `ShadingEstimate.flat` |
 | $\mathbf{d}$ | dark field (additive, camera offset included) | ADU | `ShadingEstimate.dark` |
+| $\mathbf{s}_b$ | background profile, mean 1, when the background has its own profile | dimensionless | `ShadingEstimate.dark` ÷ its mean |
+| $\beta_i$, $\bar\beta$ | mean background intensity of frame $i$; its mean over frames | ADU | `KaskFlatField.background_level_` |
+| $\kappa_{\text{n}}$ | noise constant of a channel: local variance over local mean on the background; it equals the gain $g$ only when the offset $o$ is 0, and is $g\,(\bar y - o)/\bar y$ otherwise (written $\kappa$ in docstrings) | ADU | `meta["noise_constant"]` |
 | $b_i$, $\mathbf{b}$ | baseline of frame $i$; all baselines | ADU | `ShadingEstimate.baseline` |
 | $\lambda$ | expected number of photoelectrons | e⁻ | `signal` of `simulate_sensor` |
 | $n$ | actual number of photoelectrons (Poisson) | e⁻ | |
@@ -172,6 +175,8 @@ write `λ₀`, `k₀`.
 | $h$, $\ell$ | grid spacing; order of the energy $\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$ | `dct_bending(order=)` |
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
+| $\lambda$ | weight of a regulariser (a subscript tells several apart: $\lambda_f$, $\lambda_d$); distinct from the photoelectron count by context | `regularization` |
+| $\mathbf{L}_x$, $\mathbf{L}_y$ | second-difference operators along $x$ and $y$ | |
 
 ## Shift-variant blur
 
@@ -219,6 +224,19 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\rho(a)$, $\delta(a)$, $\varphi(u)$ | Stirling residual, $\log a - \psi(a)$, $u - 1 - \log u$ | `stirling_residual`, `log_minus_digamma`, `ratio_minus_log` |
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
+
+## Views
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $v$, $V$ | view index; number of views | `MultiviewRL(psfs)` |
+| $\mathbf{y}_v$ | recorded image of view $v$ | the views `data` |
+| $\mathbf{h}_v$, $\mathbf{A}_v$ | PSF of view $v$; its blur | `psfs` |
+| $\check{\mathbf{h}}_v$ | mirrored PSF, $\check{h}(\mathbf{r}) = h(-\mathbf{r})$ (kernel of $\mathbf{A}_v^\top$) | |
+| $\mathbf{h}_{b,v}$, $\mathbf{B}_v$ | back-projection kernel of view $v$ and its convolution | `MultiviewRL.kernels` |
+| $\mathbf{c}_v$ | multiplicative correction of view $v$ | |
+| $\mathbf{w}_v$, $k$ | weight image of view $v$; sum of the weights over the views | `weights`, `weight_sum` |
+| $\rho_v$ | reach of view $v$ on the margin of the object domain | |
 
 ## Indices and layouts
 
