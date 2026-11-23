@@ -37,14 +37,14 @@ inverted already, so that a tile differs from its neighbours by two numbers only
 the intensity of the same specimen point, recorded in tile $i$, is
 
 $$
-\mathbf{y}_i = g_i\,\mathbf{x}|_i + o_i + \boldsymbol{\varepsilon}_i ,
+\mathbf{y}_i = \gamma_i\,\mathbf{x}|_i + \omega_i + \boldsymbol{\varepsilon}_i ,
 $$
 
 where $\mathbf{x}|_i$ is the part of the (unknown) uniform image $\mathbf{x}$
-that the tile covers, $g_i$ and $o_i$ its gain and offset, and
+that the tile covers, $\gamma_i$ and $\omega_i$ its gain and offset (a dimensionless factor and an offset in ADU, not the camera gain and offset of the sensor models), and
 $\boldsymbol{\varepsilon}_i$ noise. The harmonised tile
 $\hat{\mathbf{x}}_i = a_i \mathbf{y}_i + c_i$ undoes this when
-$a_i = 1/g_i$ and $c_i = -o_i/g_i$; this is the model of
+$a_i = 1/\gamma_i$ and $c_i = -\omega_i/\gamma_i$; this is the model of
 `optix.models.simulate_tiles`. Only the *relative* gains and offsets can be
 recovered from the overlaps, since $\mathbf{x}$ is known up to a common affine
 map: the estimate is anchored by the identity term of the model below, or by
@@ -61,7 +61,7 @@ $\mathbf{r} \in O_{ij}$.
 The method is a least-squares fit and has no noise model. The objective is the
 squared difference of the intensities of all corresponding pixels:
 
-=== "optix"
+=== "optix (Eq. 8, both tiles transformed)"
 
     $$
     \min_{\{a_i,\,c_i\}}\;
@@ -72,7 +72,7 @@ squared difference of the intensities of all corresponding pixels:
     with the identity transform for the fixed tiles, $a_i = 1$ and
     $c_i = 0$ for $i \in F$.
 
-=== "Hörl et al. 2019"
+=== "Hörl et al. 2019 (Eq. 8, tile A only)"
 
     $$
     \arg\min_{\alpha,\,\beta}\;
@@ -81,6 +81,12 @@ squared difference of the intensities of all corresponding pixels:
     \Bigl[I_B(x_B) - \bigl(\alpha_{I_A} I_A(x_A) + \beta_{I_A}\bigr)\Bigr]^2
     \qquad\text{(Eq. 8)}
     $$
+
+As printed, Eq. 8 transforms tile $A$ only; the sum above transforms both
+tiles of every pair, the reading of the point-correspondence registration
+that the paper invokes (see the choices below). The estimate is not always a
+minimiser of this sum: it is the fixed point of the iteration of the paper,
+which minimises the sum only for $\lambda = (1, 0, 0)$.
 
 The objective has the trivial solution $a_i = 0$, $c_i = 0$ for all tiles. The
 paper removes it by writing each transform as a weighted average of three
@@ -103,8 +109,8 @@ transforms: a linear one, an additive one and the identity.
     \qquad\text{(Eq. 9)}
     $$
 
-The weights are user parameters. With $\lambda_2, \lambda_3 > 0$ the solution
-is pulled towards the identity and the trivial solution is excluded.
+The weights are user parameters. With $\lambda_3 > 0$ the solution is pulled
+towards the identity and the trivial solution is excluded.
 
 | optix | Hörl et al. 2019 | Meaning |
 |---|---|---|
@@ -130,33 +136,33 @@ fitted by least squares to its point correspondences, and the fits are repeated
 until they agree. Here the correspondences of tile $i$ are the pairs
 
 $$
-\bigl(p,\, q\bigr) = \bigl(y_i(\mathbf{r}),\; a_j\,y_j(\mathbf{r}) + c_j\bigr),
+\bigl(v,\, w\bigr) = \bigl(y_i(\mathbf{r}),\; a_j\,y_j(\mathbf{r}) + c_j\bigr),
 \qquad \mathbf{r} \in O_{ij},\; j \in \mathcal{N}(i),
 $$
 
 the value of tile $i$ and the *current transformed* value of each neighbour
-$j$ at the same pixel. Let $N_i$ be the number of pairs, $\bar p_i$, $\bar q_i$
-their means, and $S_{pp}$, $S_{pq}$ the sums of squares and cross-products about
-the means. Each model is a least-squares fit of $q$ on $p$:
+$j$ at the same pixel. Let $N_i$ be the number of pairs, $\bar v_i$, $\bar w_i$
+their means, and $S_{vv}$, $S_{vw}$ the sums of squares and cross-products about
+the means. Each model is a least-squares fit of $w$ on $v$:
 
 $$
-a'_i = \frac{S_{pq}}{S_{pp}},\quad c'_i = \bar q_i - a'_i\,\bar p_i,
+a'_i = \frac{S_{vw}}{S_{vv}},\quad c'_i = \bar w_i - a'_i\,\bar v_i,
 \qquad
-c''_i = \bar q_i - \bar p_i ,
+c''_i = \bar w_i - \bar v_i ,
 $$
 
 and the transform of the tile is their average,
 
 $$
-a_i = \lambda_1\,\frac{S_{pq}}{S_{pp}} + \lambda_2 + \lambda_3,
+a_i = \lambda_1\,\frac{S_{vw}}{S_{vv}} + \lambda_2 + \lambda_3,
 \qquad
-c_i = \lambda_1\,(\bar q_i - a'_i\,\bar p_i) + \lambda_2\,(\bar q_i - \bar p_i).
+c_i = \lambda_1\,(\bar w_i - a'_i\,\bar v_i) + \lambda_2\,(\bar w_i - \bar v_i).
 $$
 
-The transforms are the fixed point of these updates. The sums $\bar q_i$ and
-$S_{pq}$ are linear in the $(a_j, c_j)$ of the neighbours, and $S_{pp}$ does not
+The transforms are the fixed point of these updates. The sums $\bar w_i$ and
+$S_{vw}$ are linear in the $(a_j, c_j)$ of the neighbours, and $S_{vv}$ does not
 depend on them, so the fixed point is the solution of one linear system of
-size $2T$ for $T$ tiles, which is solved directly instead of iterated. Fixed
+size $2I$ for $I$ tiles, which is solved directly instead of iterated. Fixed
 tiles enter as the equations $a_i = 1$, $c_i = 0$, and tiles without any
 overlap keep the identity.
 
@@ -167,14 +173,20 @@ one streaming pass over the overlaps, with the pairwise merge of
 fit does not suffer from the cancellation of raw sums. The system is solved in
 float64 after centring the intensities.
 
-**Uniqueness.** With $\lambda_3 > 0$ the system is non-singular. With
+**Uniqueness.** With $\lambda_3 > 0$ the system is non-singular and the fixed
+point is unique: the update of the transforms contracts by a factor
+$1 - \lambda_3$ in the norm weighted by the number of pixel pairs of each
+overlap (each fit is a mixture of orthogonal projections, with weight
+$\lambda_1 + \lambda_2 = 1 - \lambda_3$). The same contraction shows that the
+iteration of the paper converges to the solution of the direct solve. The
+conditioning of the system degrades like $1/\lambda_3$. With
 $\lambda_3 = 0$ the linear and the additive models are equivariant to a
 common offset of all the tiles, so every connected set of overlapping tiles
 needs a fixed tile (with $\lambda_2 = 0$ too, a common scale is also free);
 otherwise `fit` raises a `ValueError`.
 
 **Constant tiles.** When the values of a tile are constant over all its
-overlaps, $S_{pp} = 0$ and the linear model is undefined: the additive model
+overlaps, $S_{vv} = 0$ and the linear model is undefined: the additive model
 replaces it for that tile, and a `RuntimeWarning` names the tiles.
 
 **Reported error.** `meta["mse_before"]` and `meta["mse_after"]` hold, for each
@@ -202,15 +214,16 @@ tile.
 
 ## Faithful mode and extensions
 
-`faithful=True` (the default) is the `paper` preset, and the `recommended`
-preset is identical. The method has free parameters but no extension: a keyword
-set to anything but its default makes `is_faithful` false. The paper leaves the
-three values below open; the defaults are the choices of optix.
+`faithful=True` (the default) is the `paper` preset. The method has free
+parameters but no extension: a keyword set to anything but its faithful value
+makes `is_faithful` false. The paper leaves the three values below open; the
+faithful values are the choices of optix. `faithful=False` differs in one
+keyword only, `downsample`, because of the noise bias described below.
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
 | `weights` | $(\lambda_1, \lambda_2, \lambda_3)$ of Eq. 9 | $(0.8, 0.1, 0.1)$, not specified in the paper | same |
-| `downsample` | bin size per spatial axis before the fit; the paper fits on precomputed downsampled images | 1 (no binning), the factor is not specified | same |
+| `downsample` | bin size per spatial axis before the fit; the paper fits on precomputed downsampled images | 1 (no binning), the factor is not specified | 4 |
 | `max_pixels` | cap on the pixel pairs per overlap, by random removal | `None` (all pixels), the cap is not specified | same |
 | `seed` | seed of the random selection (no effect on faithfulness) | `None` | same |
 
@@ -231,7 +244,8 @@ Choices that the paper does not specify and that both presets make:
 4. **Binning.** With `downsample`, both tiles of an overlap are averaged over
    the same bins, anchored at the corner of the overlap, so that binned values
    still correspond exactly; trailing partial bins average the pixels they
-   hold.
+   hold and are weighted by the fraction of a full bin they contain, which is
+   their inverse noise variance relative to a full bin.
 5. **Cap on the pixels.** `max_pixels` keeps a uniform random sample without
    replacement of the pixel pairs of each overlap, so that large overlaps do not
    outweigh small ones, as the paper intends.
@@ -244,18 +258,35 @@ Choices that the paper does not specify and that both presets make:
 The fit reads only the overlaps, each once and in blocks sized to the memory
 budget of [`optix.config`](../../reference/configuration.md), so lazy zarr arrays
 work and no tile is loaded whole. What it keeps in memory is a handful of
-numbers per group and per overlapping pair, plus, with `max_pixels`, at most
-`max_pixels` pixel pairs for each of them. The $2T \times 2T$ system is dense:
-its cost, $O(T^3)$ per group, is negligible for hundreds of tiles.
+numbers per group and per overlapping pair. With `max_pixels`, the random
+sample of an overlap is kept only while that overlap is read and is then merged
+into the statistics: at most $2G$ samples of `max_pixels` pixel pairs ($G$
+groups; one for the values and one for the weights of partial bins) are alive
+at a time. Each (group, overlap) draws its own subset, independent of the
+others, from `seed`. The $2T \times 2T$ system is dense:
+its cost, $O(I^3)$ time and $32\,I^2$ bytes per group, is negligible for hundreds of tiles and practical up to a few thousand (800 MB for 5000 tiles); beyond that a sparse solve would be needed.
 
 Group axes (channels, for instance) are fitted independently and the sample
 axes (time points) share the transforms of the tile and pool their pixels.
 `apply` is pointwise: tiles are processed in frame batches and written to `out`,
 in place if needed.
 
-Because the least squares regress the neighbour on the tile, noise on the tile
-attenuates the slope $a'_i$ slightly (errors in variables). Binning reduces the
-noise of the pixel pairs and therefore the bias.
+**Noise bias.** The least squares regress the neighbour on the tile, so noise
+on the tile attenuates the slopes (errors in variables), by about
+$s^2/(s^2 + \sigma^2)$ per fit for a signal of standard deviation $s$ and noise
+of standard deviation $\sigma$, and the attenuation compounds along the chain
+of overlaps of the fixed point. On a $3 \times 3$ mosaic of a scene with
+$s \approx 49$ the mean relative error of `scale` is:
+
+| noise $\sigma$ | `downsample=1` | `downsample=4` |
+|---|---|---|
+| 5 | −6 % | −0.4 % |
+| 20 | −48 % | −6 % |
+
+Binning by $f$ pixels per axis divides the noise variance by $f^D$ in $D$
+dimensions, which is why the paper fits on downsampled images, and why
+`faithful=False` uses `downsample=4`. Use a factor above 1 on noisy data.
+`max_pixels` does not reduce the bias: it only subsamples the pixels.
 
 ## Usage
 
@@ -317,7 +348,7 @@ from optix.io import Layout
 layout = Layout("cyx", spatial="yx", group="c")
 adj = IntensityAdjustment(layout=layout).fit(
     channel_tiles, positions
-)  # scale: (c, T)
+)  # scale: (c, tiles)
 
 # No identity term: every connected set of tiles needs a fixed tile.
 adj = IntensityAdjustment(weights=(0.5, 0.5, 0)).fit(
