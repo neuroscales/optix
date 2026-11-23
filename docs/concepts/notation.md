@@ -125,6 +125,45 @@ And the dark field is not the camera offset: it is offset + dark current +
 stray light. This is the reason why corrections never subtract both
 `ShadingEstimate.dark` and `SensorEstimate.offset`.
 
+## Optics
+
+The symbols of the models of the optics (`optix.psf`), such as the
+[Gibson–Lanni](../algorithms/psf/gibson-lanni.md) and Richards–Wolf PSFs.
+Lengths share one unit; the Gibson–Lanni defaults are in µm.
+
+| Symbol | Meaning | Unit | In code | Used by |
+|---|---|---|---|---|
+| $\mathrm{NA}$ | numerical aperture of the objective, $n \sin\alpha$ | | `numerical_aperture` | both |
+| $\lambda_0$ | wavelength of the light in vacuum | length | `wavelength` | both |
+| $k_0$ | wave number in vacuum, $2\pi/\lambda_0$ | 1 / length | | Gibson–Lanni |
+| $k$ | wave number in a medium of index $n$, $n k_0$ | 1 / length | | Richards–Wolf |
+| $n$ | refractive index of the medium in which the focus is formed | | `refractive_index` | Richards–Wolf |
+| $n_s$, $n_g$, $n_i$ | refractive index of the specimen, the coverslip, the immersion medium | | `specimen_index`, `coverslip_index`, `immersion_index` | Gibson–Lanni |
+| $n_g^*$, $n_i^*$ | the same, under the design conditions of the objective | | `design_coverslip_index`, `design_immersion_index` | Gibson–Lanni |
+| $t_s$ | depth of the source below the coverslip | length | `depth` | Gibson–Lanni |
+| $t_g$, $t_i$ | thickness of the coverslip, of the immersion layer | length | `coverslip_thickness` | Gibson–Lanni |
+| $t_g^*$, $t_i^*$ | the same, under the design conditions | length | `design_coverslip_thickness`, `design_immersion_thickness` | Gibson–Lanni |
+| $\alpha$ | angular semi-aperture of the objective, $\arcsin(\mathrm{NA}/n)$ | rad | | Richards–Wolf |
+| $\theta$, $\varphi$ | angle of a ray to the optical axis; azimuth around the axis | rad | | both |
+| $\rho$ | radius in the pupil (back focal plane), normalised to 1 at the edge of the aperture: $\rho = n \sin\theta / \mathrm{NA}$ | | `rho` | Gibson–Lanni |
+| $r$ | lateral distance from the optical axis, in object space | length | `radius`; `radial` is $k r$ | both |
+| $z$ | position along the optical axis, from the Gaussian focus, positive away from the lens | length | `axial` is $k z$ | Richards–Wolf |
+| $\Delta z$ | defocus: displacement of the stage from the paraxial focus of the source, positive for a thicker immersion layer | length | `defocus` | Gibson–Lanni |
+| $\mathrm{OPD}$ | optical path difference between the actual and the design ray | length | `gibson_lanni_opd` | Gibson–Lanni |
+| $\psi$ | phase aberration of the pupil; $\psi = k_0\,\mathrm{OPD}$ | rad | `pupil_phase` | both |
+| $\mathbf{e}$ | electric field near the focus | | `richards_wolf_field` | Richards–Wolf |
+| $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
+| $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
+| $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
+
+Some letters have another meaning elsewhere on this page: here $n$ is a
+refractive index, not a number of photoelectrons; $\lambda_0$ is a wavelength,
+where $\lambda$ alone is the expected number of photoelectrons; $\theta$,
+$\rho$ and $\psi$ are not the basis coefficients, the Stirling residual and the
+digamma function. A paper that writes the wavelength $\lambda$ and the vacuum
+wave number $k$ is mapped to $\lambda_0$ and $k_0$ on its page. Docstrings
+write `λ₀`, `k₀`.
+
 ## Bases and regularisation
 
 | Symbol | Meaning | In code |
