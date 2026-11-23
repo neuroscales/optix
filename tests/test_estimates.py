@@ -106,7 +106,9 @@ def test_shading_normalize_keeps_model_consistent(units, mode):
     baseline = torch.tensor([0.3, -0.7, 1.2], dtype=torch.float64)
     x = torch.rand(3, 3, 4, generator=g, dtype=torch.float64)
     sh = ShadingEstimate(
-        flat=flat, dark=dark, baseline=baseline,
+        flat=flat,
+        dark=dark,
+        baseline=baseline,
         meta={"baseline_units": units},
     )
     c = flat.mean() if mode == "mean" else flat.log().mean().exp()
