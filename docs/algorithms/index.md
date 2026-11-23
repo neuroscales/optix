@@ -19,6 +19,7 @@ example. The sections follow the modules of the
 | | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
+| | [Richardson–Lucy with TV](deconv/richardson-lucy-tv.md) (`RichardsonLucyTV`) | deconvolved image, total-variation regularised |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
 | | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
 | | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
