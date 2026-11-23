@@ -107,7 +107,7 @@ boosting the noise outside the band.
 | $n$ (Butterworth order) | $n$ |
 | $k_{c,a}$ | $k_c$ |
 
-The first factor is a Wiener inverse of the OTF; the second a Butterworth
+The first factor is a [Wiener](wiener.md) inverse of the OTF (the [Tikhonov](tikhonov.md) zero-order filter with $\lambda = \alpha$); the second a Butterworth
 low-pass filter whose gain at the cutoff is $\beta$. optix uses $|F|^2$ where
 the paper writes $F^2$ (the same for a real, symmetric OTF). Without the
 Poisson-likelihood structure, the iteration is not EM: the likelihood need not
