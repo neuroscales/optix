@@ -154,6 +154,26 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
 
+## Pupil function
+
+Used by the [phase retrieval](../algorithms/psf/phase-retrieval.md) page, together
+with the optics symbols $\lambda_0$, $n$, $\mathrm{NA}$, $\theta$, $\varphi$, $z$
+and the pupil phase $\psi$ (wavelength, immersion index, numerical aperture, polar
+angle and azimuth of a ray, position along the optical axis, phase of the pupil).
+
+| Symbol | Meaning | Unit | In code |
+|---|---|---|---|
+| $\boldsymbol{\nu}$, $\nu_z$ | lateral spatial frequency $(\nu_x, \nu_y)$ and axial frequency $\sqrt{(n/\lambda_0)^2 - \lvert\boldsymbol{\nu}\rvert^2}$, in cycles (not the wave number $k$) | 1 / length | |
+| $\mathbf{h}_{\mathrm A}$, $\mathbf{h}$ | amplitude PSF (complex) and intensity PSF, $\lvert h_{\mathrm A}\rvert^2$ | | `pupil_psf` |
+| $p(\boldsymbol{\nu})$, $\mathbf{p}$ | pupil function, non-zero for $\lvert\boldsymbol{\nu}\rvert \le \mathrm{NA}/\lambda_0$; its samples | | `PupilEstimate.pupil` |
+| $\mathbf{u}_j$ | defocus phase function $e^{2\pi i \nu_z z_j}$ of the section $z_j$ | | |
+| $r$ | pupil radius normalised to 1 at the edge, $\lvert\boldsymbol{\nu}\rvert\lambda_0/\mathrm{NA}$ (not the distance $\rho$ of the optics symbols) | | `rho` |
+| $m$, $\psi$ | magnitude and phase of the pupil, $p = m\,e^{i\psi}$ | rad (phase) | |
+| $Z_j$ | Zernike polynomial of Noll index $j$ | | `zernike` |
+| $a_j$, $b_j$ | Zernike coefficients of $m$ and of $\psi$ | rad (for $b_j$) | `zernike_magnitude`, `zernike_phase` |
+| $D$, $d$ | bead diameter; depth of the source below the cover slip | length | `bead_diameter`, `depth` |
+| $n_1$, $n_2$ | refractive index of the design immersion medium ($= n$) and of the sample medium | | `n1`, `n2` |
+
 ## Indices and layouts
 
 | Symbol | Ranges over |

@@ -26,6 +26,7 @@ example. The sections follow the modules of the
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
+| | [Phase retrieval](psf/phase-retrieval.md) (`PhaseRetrieval`) | pupil function and Zernike aberrations from a bead z-stack |
 
 The rest of this page explains how the section is organised and what an
 algorithm page contains.
