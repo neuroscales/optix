@@ -43,12 +43,14 @@ nav = [
       "algorithms/deconv/wiener.md",
       "algorithms/deconv/tikhonov.md",
       "algorithms/deconv/wiener-butterworth.md",
+      "algorithms/deconv/multiview.md",
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
     ]},
     {"Point-spread function" = [
       "algorithms/psf/bead-psf.md",
+      "algorithms/psf/gibson-lanni.md",
     ]},
     "algorithms/_template.md",
   ]},
