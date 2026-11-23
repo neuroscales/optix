@@ -92,24 +92,6 @@ class PoissonGaussian(Estimator):
     the `data_range`, the final edge threshold `tau` and
     `covariance_ok`.
 
-    Attributes
-    ----------
-    estimates : dict
-        `{"sensor": SensorEstimate}` after [`fit`][optix.Estimator.fit].
-    covariance : dict of tuple to Tensor
-        Per group, the 2×2 large-sample covariance of (a, b) in ADU: the
-        inverse Hessian of −log L at the estimate, by central
-        differences with steps of half a standard error (not part of
-        the paper). All NaN, with a `RuntimeWarning` and
-        `meta["covariance_ok"]` False, when no positive-definite
-        Hessian is found.
-    pairs : dict of tuple to Pairs
-        Per group, the level-set estimates (ŷᵢ, σ̂ᵢ) in normalised units
-        and their variance factors cᵢ, dᵢ.
-    history : History
-        log L of the best simplex vertex at each Nelder–Mead iteration
-        (all groups in sequence).
-
     !!! note "Faithful mode"
         One frame per group, sample standard deviations (Sections III
         and V of the paper), clipped model. The opt-in extensions are
@@ -139,6 +121,24 @@ class PoissonGaussian(Estimator):
                  doi     = {10.1109/TIP.2008.2001399}
                }
                ```
+
+    Attributes
+    ----------
+    estimates : dict
+        `{"sensor": SensorEstimate}` after [`fit`][optix.Estimator.fit].
+    covariance : dict of tuple to Tensor
+        Per group, the 2×2 large-sample covariance of (a, b) in ADU: the
+        inverse Hessian of −log L at the estimate, by central
+        differences with steps of half a standard error (not part of
+        the paper). All NaN, with a `RuntimeWarning` and
+        `meta["covariance_ok"]` False, when no positive-definite
+        Hessian is found.
+    pairs : dict of tuple to Pairs
+        Per group, the level-set estimates (ŷᵢ, σ̂ᵢ) in normalised units
+        and their variance factors cᵢ, dᵢ.
+    history : History
+        log L of the best simplex vertex at each Nelder–Mead iteration
+        (all groups in sequence).
     """
 
     tags = Tags(

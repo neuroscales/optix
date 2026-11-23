@@ -674,6 +674,12 @@ class CategoricalStats(SuffStats):
     ) -> Self:
         """Statistics of integer labels in `[0, num_classes)`.
 
+        !!! note
+            The labels are scattered into a `(*kept, K)` buffer: no one-hot
+            tensor of the data's size is built. Weights are summed in their
+            own floating dtype (integer or boolean weights in the
+            configuration's), then stored in float64.
+
         Parameters
         ----------
         index : Tensor
@@ -684,13 +690,6 @@ class CategoricalStats(SuffStats):
             As in [`from_samples`][optix.distributions.GammaStats.from_samples]
             of `GammaStats` (`dtype` is accepted for symmetry; counts are
             int64 without weights, float64 with).
-
-        Notes
-        -----
-        The labels are scattered into a `(*kept, K)` buffer: no one-hot
-        tensor of the data's size is built. Weights are summed in their
-        own floating dtype (integer or boolean weights in the
-        configuration's), then stored in float64.
         """
         del dtype  # counts have a fixed storage dtype
         index = torch.as_tensor(index)
