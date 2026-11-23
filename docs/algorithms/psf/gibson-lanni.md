@@ -387,8 +387,9 @@ True
 
 >>> # The optical path difference, in µm, at the edge of the pupil.
 >>> from optix.psf.utils import gibson_lanni_opd
->>> opd = gibson_lanni_opd(1.0, 0.0, numerical_aperture=1.4, depth=10.0,
-...                        specimen_index=1.33)
+>>> opd = gibson_lanni_opd(
+...     1.0, 0.0, numerical_aperture=1.4, depth=10.0, specimen_index=1.33
+... )
 >>> round(float(opd), 2)
 -4.07
 ```
