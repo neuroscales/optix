@@ -533,6 +533,7 @@
     "quantisation",
     "quantised",
     "radd",
+    "randint",
     "randn",
     "randperm",
     "Rayleigh",

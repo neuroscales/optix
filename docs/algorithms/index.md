@@ -16,6 +16,7 @@ example. The sections follow the modules of the
 | | [Defective pixels](sensor/defective-pixels.md) (`DefectivePixels`) | hot, dead and noisy pixels |
 | [`optix.shading`](../reference/shading.md) | [BaSiC](shading/basic.md) (`BaSiC`) | flat field, dark field and baseline |
 | | [CIDRE](shading/cidre.md) (`CIDRE`) | flat field and dark field |
+| | [Likar](shading/likar-entropy.md) (`Likar`) | flat field and dark field, from one image |
 | | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
