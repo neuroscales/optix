@@ -90,7 +90,7 @@ derivation, and one that is a research contribution gets a long one.
 3. **Probabilistic model.** The assumptions turned into equations: the
    generative model, the noise, the priors or the regularisers, with every
    symbol defined where it first appears and with the notation of the
-   [Concepts](../concepts/index.md#notation). For a method that is not
+   [Concepts](../concepts/notation.md). For a method that is not
    probabilistic (a filter, say), this section states the objective or the
    operator instead.
 

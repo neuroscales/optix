@@ -61,7 +61,7 @@ The icon and colour of the admonition are defined in `docs/stylesheets/extra.css
 ## Docs pages
 
 - Maths is LaTeX, between `$...$` or `$$...$$`. Symbols follow the
-  [notation table](../concepts/index.md#notation); add a symbol there when a page
+  [notation table](../concepts/notation.md); add a symbol there when a page
   introduces one.
 - Examples are `pycon` blocks that run as written, and their output is checked.
 - Use admonitions (`!!! note`, `!!! warning`, `??? tip` for collapsed ones) for
