@@ -139,6 +139,16 @@ stray light. This is the reason why corrections never subtract both
 | $\gamma$ | regularisation coefficient of a smooth fit | `regularization` |
 | $\mathbf{L}_x$, $\mathbf{L}_y$ | second differences along $x$ and $y$ | |
 
+## Morphology
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\boldsymbol{\beta}$ | background of an image, the opening of $\mathbf{y}$ | `output="background"` |
+| $\mathbf{u}$ | offset (integer displacement) within a structuring element | |
+| $B(\mathbf{u})$ | structuring element: its grey level at offset $\mathbf{u}$, $-\infty$ outside its support | `ball`, `footprint` |
+| $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
+| $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
+
 ## Distributions
 
 These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).
