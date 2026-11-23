@@ -169,7 +169,7 @@ has accumulated in front of pixel $j$ multiplies the signal by
 $\exp(-s\Delta\sum_{i<j}\mu_i)$, so the compensated signal is
 
 $$
-\hat{y}_j = y_j \,\gamma_j,
+y^{\mathrm{c}}_j = y_j \,\gamma_j,
 \qquad
 \gamma_j = \exp\!\Bigl(s\,\Delta \sum_{i<j} \mu_i\Bigr).
 $$
@@ -180,12 +180,12 @@ The product over $i < j$ telescopes, and the gain is
 $$
 \gamma_j = \frac{T_1}{T_j},
 \qquad
-\hat{y}_j = y_j\,\frac{T_1}{T_j},
+y^{\mathrm{c}}_j = y_j\,\frac{T_1}{T_j},
 $$
 
 which is what `DepthResolved.apply` computes: no exponential and no cumulated
 logarithm, and neither $s$ nor $\Delta$ appears. Where $T_j \le 0$ (no signal
-from pixel $j$ on) the gain is 0. The compensated signal is proportional to
+from pixel $j$ on) or $T_1 \le 0$, the gain is 0. The compensated signal is proportional to
 $\xi\,\mu_j$, the local emission under the locally constant emission
 assumption, so a medium with a constant $\mu$ gives a flat profile.
 
@@ -200,16 +200,16 @@ the confocal and sensitivity fall-off functions $f$ and $h$ of the paper set to 
 === "optix"
 
     $$
-    \hat{y}_j = y_j\,\frac{y_j^2}{y_j^2 + \sigma^2},
+    y^{\mathrm{r}}_j = y_j\,\frac{y_j^2}{y_j^2 + \sigma^2},
     \qquad
-    \hat{\mu}_j = \frac{\hat{y}_j}{s\,\Delta \sum_{k \ge j} \hat{y}_k}
+    \hat{\mu}_j = \frac{y^{\mathrm{r}}_j}{s\,\Delta \sum_{k \ge j} y^{\mathrm{r}}_k}
     $$
 
     $$
     \tilde{\boldsymbol{\mu}}_j^\star =
     \operatorname*{arg\,min}_{\tilde{\boldsymbol{\mu}} \,\ge\, 0}\;
     \tfrac{1}{2}\,\lVert \tilde{\boldsymbol{\mu}} - \hat{\boldsymbol{\mu}}_j \rVert_2^2
-    + \frac{\eta}{Q\,\Delta}\,
+    + \frac{2}{s}\,\frac{\eta}{Q\,\Delta}\,
       \sum_{q=1}^{Q-1} w_{q}\,\bigl|\tilde{\mu}_{q+1} - \tilde{\mu}_{q}\bigr|,
     \qquad
     w_q = \frac{1}{y_{j,q} + \epsilon}
@@ -218,8 +218,11 @@ the confocal and sensitivity fall-off functions $f$ and $h$ of the paper set to 
 === "Smith et al. 2015"
 
     $$
-    \hat{\boldsymbol{I}}[m] = \boldsymbol{I}_{\text{meas}}[m]\,
-      \frac{|\boldsymbol{I}_{\text{meas}}[m]|^2}{\boldsymbol{I}_{\text{meas}}[m]^2 + |\boldsymbol{c}[m]|^2}
+    \hat{\boldsymbol{I}}[m] = \boldsymbol{I}_{\text{meas}}[m]\,\boldsymbol{H}_{\text{res}}[m],
+    \qquad
+    \boldsymbol{H}_{\text{res}}[m] =
+      \frac{1}{\hat{\boldsymbol{f}}[m]\,\hat{\boldsymbol{h}}[m]}\,
+      \frac{|\boldsymbol{I}_{\text{meas}}[m]|^2}{|\boldsymbol{I}_{\text{meas}}[m]|^2 + |\boldsymbol{c}[m]|^2}
     \quad \text{(Eqs. 8, 9)}
     $$
 
@@ -244,7 +247,8 @@ the confocal and sensitivity fall-off functions $f$ and $h$ of the paper set to 
 | optix | [Smith et al. 2015](https://doi.org/10.1109/TMI.2015.2450197) | Meaning |
 |---|---|---|
 | $y_j$ | $\boldsymbol{I}_{\text{meas}}[m]$ | measured intensity at depth index $j$ ($m$) |
-| $\hat{y}_j$ | $\hat{\boldsymbol{I}}[m]$ | intensity after the restoration filter |
+| $y^{\mathrm{r}}_j$ | $\hat{\boldsymbol{I}}[m]$ | intensity after the restoration filter |
+| $y^{\mathrm{c}}_j$ | none | compensated intensity (derived above, not in the paper) |
 | $\sigma^2$ | $\lvert\boldsymbol{c}[m]\rvert^2$ | average noise power (`noise_power`) |
 | $s$ | 2 | crossings of the medium (`passes`) |
 | $\Delta$ | $\Delta z$ | pixel size along the propagation axis |
@@ -257,8 +261,22 @@ the confocal and sensitivity fall-off functions $f$ and $h$ of the paper set to 
 The denoising acts on every row of constant depth $j$ of the lateral-depth image
 of $\hat{\mu}$, along a lateral axis (`tv_axis`). The weight is small where the
 intensity is high, so the total variation smooths the deep, noisy regions more
-than the bright ones. The problem is convex and is solved through its dual by
-accelerated projected gradient (FISTA); Smith et al. use CVX.
+than the bright ones. The problem is convex and is solved exactly, line by
+line, by the direct dynamic-programming solver of
+[Johnson (2013)](https://doi.org/10.1080/10618600.2012.681238) for the
+weighted total variation, at a cost $O(Q)$ per line, followed by clamping at 0:
+in one dimension, $\operatorname{prox}_{\mathrm{TV} + \iota_{\ge 0}} =
+\max(\operatorname{prox}_{\mathrm{TV}}, 0)$, so the clamped solution is exact
+for the constrained problem. Smith et al. use CVX.
+
+The weight of the total variation is $\frac{2}{s}\frac{\eta}{Q\Delta}$ rather
+than the paper's $\frac{\eta}{Q\Delta}$. The two are equal at $s = 2$. Since
+$\hat{\mu}$ is proportional to $1/s$, the factor $2/s$ makes the denoised
+$\tilde{\mu}$, and hence the compensation, independent of $s$.
+$\eta$ and $\epsilon$ are tied to the intensity units of Smith et al.: the
+weight $w_q$ scales as the inverse of the intensity, so that multiplying the data
+by a factor $c$ divides the strength of the smoothing by about $c$. Values chosen
+for intensities of another magnitude must be rescaled.
 
 Choices that the paper leaves open, or where the code departs from it:
 
@@ -269,6 +287,11 @@ Choices that the paper leaves open, or where the code departs from it:
 - The paper's $\boldsymbol{W}_m$ has $N$ entries and $\boldsymbol{D}$ has $N-1$
   rows. Here $w_q$ weights the difference between positions $q+1$ and $q$.
 - Negative intensities count as 0 in the weights.
+- After a background subtraction, noise can make the tail sum of $y^{\mathrm{r}}$
+  small or negative near the end of a profile. Then $\hat{\mu} = 0$ where the
+  sum is $\le 0$; the gain is 0 where the tail sum at $j$ or at the first pixel is
+  $\le 0$ (as for Vermeer); and the compensated data are kept finite, within the
+  range of the output dtype.
 - In three dimensions the total variation runs along one lateral axis only,
   chosen with `tv_axis`.
 
@@ -282,36 +305,35 @@ for every profile along z:
     Vermeer (default):
         T_j = sum of y_k for k ≥ j              (float64)
         μ_j = log(1 + y_j / (T_j − y_j)) / (s Δ)
-        γ_j = T_1 / T_j                         (0 where T_j ≤ 0)
+        γ_j = T_1 / T_j                         (0 where T_j ≤ 0 or T_1 ≤ 0)
     Smith (method="smith"):
-        ŷ = y · y² / (y² + σ²)
-        μ̂_j = ŷ_j / (s Δ sum of ŷ_k for k ≥ j)  (0 where the sum is 0)
+        y^r = y · y² / (y² + σ²)
+        μ̂_j = y^r_j / (s Δ sum of y^r_k for k ≥ j)  (0 where the sum is ≤ 0)
         for every depth j, over the lateral axis:
-            μ̃_j = argmin ½‖μ̃ − μ̂_j‖² + η/(QΔ) sum_q w_q |μ̃_{q+1} − μ̃_q|, μ̃ ≥ 0
-        γ_j = exp(s Δ sum of μ̃_i for i < j)
+            μ̃_j = argmin ½‖μ̃ − μ̂_j‖² + (2/s) η/(QΔ) sum_q w_q |μ̃_{q+1} − μ̃_q|, μ̃ ≥ 0
+        γ_j = exp(s Δ sum of μ̃_i for i < j)    (0 where the tail sum of y^r
+                                                  at j or at 1 is ≤ 0)
     γ_j = min(γ_j, max_gain), if given
-Return  μ  (attenuation)   or   ŷ_j = γ_j · y_j  (apply)
+Return  μ  (attenuation)   or   y^c_j = γ_j · y_j  (apply), kept finite
 ```
 
-Defaults: `passes=2`, `pixel_size=1`, `eta=6`, `epsilon=1e-3`, `noise_power=0`,
-`max_iter=2000` and `tol=1e-6` for the TV solver, which stops when the relative
-duality gap falls below `tol`.
+Defaults: `passes=2`, `pixel_size=1`, `eta=6`, `epsilon=1e-3`, `noise_power=0`.
 
 ## Faithful mode and extensions
 
 `faithful=True` (the default) is the estimate of Eq. (17) with $s = 2$, and
-`is_faithful` is true for it. The axis, the pixel size, `tv_axis` and the solver
-settings are free parameters of the data, and any value of them is faithful;
+`is_faithful` is true for it. The axis, the pixel size and `tv_axis` are free
+parameters of the data, and any value of them is faithful;
 `eta`, `epsilon` and `noise_power` only matter with `method="smith"`.
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
-| `passes` | $s$, the number of crossings in the exponent; $\mu$ is proportional to $1/s$ | 2 | 2 |
+| `passes` | $s$, the number of crossings in the exponent; $\mu$ is proportional to $1/s$ | 2 | 1 (light sheet) |
 | `method` | `"smith"`: restoration filter and lateral TV denoising of Smith et al. (2015); extension | `"vermeer"` | `"vermeer"` |
 | `background` | an additive term subtracted first: a number, a tensor, the `offset` of a `SensorEstimate` or the `dark` of a `ShadingEstimate`; extension | `None` | `None` |
 | `max_gain` | $\ge 1$, caps the compensation gain, to limit the amplification of the noise deep in the profile; extension | `None` | `None` |
 
-`faithful=False` uses the same values: both presets give the Vermeer estimate.
+`faithful=False` differs from `faithful=True` by `passes` only: it uses the single-crossing value of a light sheet, and gives the Vermeer estimate otherwise.
 
 Choices that the paper leaves open:
 
@@ -332,15 +354,17 @@ Choices that the paper leaves open:
     twice. In a light sheet, the excitation crosses the specimen once, which
     corresponds to `passes=1`. Two choices for the default are possible:
     `passes=2` is the value of the paper and keeps the default faithful, and
-    `passes=1` is the single-pass value of the light-sheet model above.
+    `passes=1` is the single-pass value of the light-sheet model above. The
+    default is 2; `faithful=False` selects 1.
 
     The choice changes the values of $\mu$ and nothing else for the default
     method: with `passes=2`, $\mu$ is half the single-pass coefficient, and with
     `passes=1` it is the coefficient of a single crossing. The compensated data
-    of `method="vermeer"` is the same for both, since the gain $T_1 / T_j$ does not
-    contain $s$. With `method="smith"` it is not, because the total-variation term
-    acts on $\mu$. A value other than 2 makes `is_faithful` false, even though it
-    is the physical value for a light sheet.
+    is the same for both, with either method: the gain $T_1 / T_j$ does not
+    contain $s$, and with `method="smith"` the weight $2/s$ of the
+    total-variation term cancels the factor $1/s$ of $\hat{\mu}$. The compensation
+    does not depend on $\Delta$ either. A value other than 2 makes `is_faithful`
+    false, even though it is the physical value for a light sheet.
 
 ## Memory and streaming
 
@@ -355,9 +379,12 @@ a block fits, and a warning is issued when a single profile (or plane, for
 Smith) exceeds the budget.
 
 The cost of the Vermeer estimate is linear in the number of pixels: a reversed
-cumulative sum and a logarithm. The Smith extension adds up to `max_iter`
-iterations of the dual solver for every row, each linear in the block size;
-`tol` stops it earlier, and `eta=0` skips it.
+cumulative sum and a logarithm. The Smith extension adds the exact
+total-variation solver, linear in the length of the lateral axis for every row,
+and `eta=0` skips it. On one CPU thread, a $5 \times 64 \times 300$ B-scan takes
+about 0.13 s, and the solver alone takes about 8 s on a $2048^2$ plane. Smith
+blocks hold more intermediate arrays than Vermeer blocks, so they are smaller for
+the same budget.
 
 ## Usage
 
@@ -438,7 +465,10 @@ simulated B-scans, and the TV solution is checked for optimality.
        optical coherence tomography data.* IEEE Trans Med Imaging
        **34**(12):2592-2602, 2015.
        [doi:10.1109/TMI.2015.2450197](https://doi.org/10.1109/TMI.2015.2450197)
-    3. Frantz D, Wright CJ, Schaser AJ, Kirik D, Kristensson E, Berrocal E.
+    3. Johnson NA. *A dynamic programming algorithm for the fused lasso and
+       L0-segmentation.* J Comput Graph Stat **22**(2):246-260, 2013.
+       [doi:10.1080/10618600.2012.681238](https://doi.org/10.1080/10618600.2012.681238)
+    4. Frantz D, Wright CJ, Schaser AJ, Kirik D, Kristensson E, Berrocal E.
        *Image post-processing for SILMAS: structured illumination light sheet
        microscopy with axial sweeping.* Biomed Opt Express
        **15**(8):4943-4962, 2024.
@@ -466,6 +496,16 @@ simulated B-scans, and the TV solution is checked for optimality.
           pages   = {2592--2602},
           year    = {2015},
           doi     = {10.1109/TMI.2015.2450197},
+        }
+        @article{johnson2013dynamic,
+          author  = {Johnson, Nicholas A.},
+          title   = {A dynamic programming algorithm for the fused lasso and {L0}-segmentation},
+          journal = {Journal of Computational and Graphical Statistics},
+          volume  = {22},
+          number  = {2},
+          pages   = {246--260},
+          year    = {2013},
+          doi     = {10.1080/10618600.2012.681238},
         }
         @article{frantz2024image,
           author  = {Frantz, David and Wright, Courtney J. and Schaser, Allison J. and Kirik, Deniz and Kristensson, Elias and Berrocal, Edouard},

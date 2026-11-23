@@ -191,14 +191,18 @@ pixels of a profile (here, and only here, $j$ counts depth pixels).
 | Symbol | Meaning | In code |
 |---|---|---|
 | $y(z)$, $y_j$ | signal at depth $z$; value of pixel $j$ of a profile | the data of `DepthResolved` |
+| $y^{\mathrm{c}}_j$ | compensated signal, $y_j\,\gamma_j$ | `DepthResolved.apply`, `compensate` |
+| $y^{\mathrm{r}}_j$ | signal after the restoration filter of Smith et al. | `smith_attenuation` |
 | $\mu(z)$, $\mu_j$ | attenuation coefficient, in the inverse of the length unit of $z$ | `DepthResolved.attenuation`, `depth_resolved` |
-| $s$ | number of times the light crosses the medium (2 for OCT, 1 for a light sheet) | `passes` |
+| $\hat{\mu}_j$, $\tilde{\mu}_q$ | estimate of $\mu$ of Smith et al., before and after the lateral denoising | `smith_attenuation`, `weighted_tv` |
+| $s$ | number of times the light crosses the medium (2 for OCT, 1 for a light sheet); written $p$ in the docstrings | `passes` |
 | $\Delta$ | pixel size along $z$ (also the quantisation step above) | `pixel_size` |
 | $\xi$ | constant of the model: recorded fraction, conversion factor and incident irradiance | |
 | $T_j$ | sum of the intensities from pixel $j$ to the end of the profile | `tail_sums` |
 | $\gamma_j$ | compensation gain of pixel $j$ | `compensate` |
 | $q$, $Q$ | lateral position and number of positions of the total-variation term | `tv_axis` |
-| $\eta$, $\epsilon$ | weight of the total variation, and floor of its weights (also natural parameters, and read noise) | `eta`, `epsilon` |
+| $w_q$ | weight of the difference between positions $q+1$ and $q$ in the total variation, $1/(y_q + \epsilon)$ | `weighted_tv` |
+| $\eta$, $\epsilon$ | weight of the total variation, and floor of its weights; $\eta$ is also the natural parameters of a distribution, and $\epsilon$ (this glyph) differs from the read noise $\varepsilon$ | `eta`, `epsilon` |
 | $\sigma^2$ | average noise power of the restoration filter (also the read-noise variance) | `noise_power` |
 
 ## Distributions
