@@ -175,6 +175,13 @@ def rolling_ball(
         Both make the background an approximation of the opening; it is
         then capped at `data`.
 
+    !!! note "Cost and halo"
+        The cost is O(N·rⁿ) per pass for N pixels (one operation per
+        offset of the ball). The result at a pixel depends on the data
+        within 2⌊r⌋ pixels (erosion then dilation), the halo needed to
+        process blocks independently; see
+        [`RollingBall`][optix.background.RollingBall].
+
     !!! note "scikit-image"
         `skimage.restoration.rolling_ball` returns the erosion f ⊖ B (the
         height of the ball's apex), not the opening; the two differ by
@@ -219,13 +226,6 @@ def rolling_ball(
     -------
     Tensor
         Of the shape of `data`.
-
-    Notes
-    -----
-    The cost is O(N·rⁿ) per pass for N pixels (one operation per offset
-    of the ball). The result at a pixel depends on the data within 2⌊r⌋
-    pixels (erosion then dilation), the halo needed to process blocks
-    independently; see [`RollingBall`][optix.background.RollingBall].
     """
     _check_output(output)
     r = _check_radius(radius)
