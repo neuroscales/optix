@@ -28,6 +28,8 @@ example. The sections follow the modules of the
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
 | | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
+| | [Nagy–O'Leary](deconv/nagy-oleary.md) (`NagyOLeary`, `NagyOLearyPSF`) | deconvolved image with a spatially variant PSF |
+| | [Denis](deconv/denis.md) (`DenisPSF`) | spatially variant PSF model for the RL family |
 | | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
 | | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |

@@ -178,6 +178,23 @@ write `λ₀`, `k₀`.
 | $\lambda$ | weight of a regulariser (a subscript tells several apart: $\lambda_f$, $\lambda_d$); distinct from the photoelectron count by context | `regularization` |
 | $\mathbf{L}_x$, $\mathbf{L}_y$ | second-difference operators along $x$ and $y$ | |
 
+## Shift-variant blur
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $S$, $s$ | number of terms of the blur, term index | |
+| $\mathbf{h}_s$, $\mathbf{H}_s$ | kernel of term $s$; convolution with it | `ShiftVariantPSF.kernels` |
+| $\mathbf{w}_s$, $\mathbf{W}_s$ | pixel weights of term $s$; $\operatorname{diag}(\mathbf{w}_s)$ | `ShiftVariantConvolution.weights` |
+| $\mathbf{r}_s$ | position of the grid node of term $s$ | `centres` |
+| $\mathbf{K}$ | matrix of the un-shifted PSFs, one column per source pixel | |
+| $\boldsymbol{\varphi}_s$ | (multi)linear interpolation weights of node $s$ | `interpolation_weights` |
+| $\mathbf{C}$ | matrix of the kernels $\mathbf{h}_s$ of the optimal local approximation, one per column | `DenisPSF.kernels` |
+| $\tau$, $\mathbf{C}_\tau$ | truncation level; block-circulant preconditioner of Nagy and O'Leary, not to be confused with $\mathbf{C}$ | `tau`, `RegionPreconditioner` |
+| $\mathbf{e}_k$ | residual of the conjugate-gradient iteration $k$ | |
+
+The letter $\tau$ has a second meaning in the distributions below, the
+precision of a Normal; the context tells which is meant.
+
 ## Morphology
 
 | Symbol | Meaning | In code |
