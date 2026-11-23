@@ -54,8 +54,9 @@ background $\boldsymbol{\beta}$ that is smooth with respect to the ball while
 the features are not ([Sternberg 1983, p. 29](https://doi.org/10.1109/MC.1983.1654163)).
 The paper does not write this sum as an equation; it describes the gel image as
 spots on a background that "is not uniform over a gel and varies between gels".
-Both are then measured in the same units: a pixel of an image, one grey level
-of intensity.
+The ball is built in units where one pixel and one grey level have the same
+length, so the radius below is both a distance in the image and a height in
+intensity.
 
 ## Probabilistic model
 
@@ -100,11 +101,25 @@ inside the umbra, and its upper surface is the background.
 | $\mathbf{y} \ominus B$ | $C = A \ominus B_k$ |
 | $\boldsymbol{\beta}$ | $D = A_B$, the "background image" |
 | $\hat{\mathbf{x}}$ | background-normalised image |
-| $\rho$ | not named (the "sphere diameter") |
+| $\rho$ | not named: half the "sphere diameter" of the paper (p. 29), as $\rho$ is a radius |
+| $B$ | $B = (B_1 \oplus \cdots \oplus B_K)$, the composite element of the sequence $B_1, \ldots, B_K$ |
 
-The substitution $\mathbf{u} \to -\mathbf{u}$ turns the paper's erosion into
-the form above, with the offset of the element added to the image; the two are
-the same sum over the same set of offsets.
+The paper builds its element as a sequence of small elements $B_1, \ldots, B_K$,
+applied one after the other, and relies on the identities
+
+$$
+(A \ominus B_1) \ominus B_2 = A \ominus (B_1 \oplus B_2),
+\qquad
+B = [(B_1 \oplus B_2) \oplus B_3] \oplus \cdots
+$$
+
+so that the sequence acts as one erosion, then one dilation, by the composite
+element $B$ (p. 27 and 30). Here $B$ is given directly, and the sequence is not
+used. The substitution $\mathbf{u} \to -\mathbf{u}$ turns the paper's erosion
+into the form above, which adds the offset of the element to the image. Both are
+a minimum (or maximum) over the same set of offsets only because the support of
+the ball is symmetric ($\mathbf{u}$ and $-\mathbf{u}$ are both in it, with the
+same height), so that reflecting the window changes nothing.
 
 **The ball.** With radius $\rho$, the umbra of the ball is the element
 
@@ -137,9 +152,10 @@ $$
 There is no estimation: the background follows from the image by the two
 filters above. The reasoning of the paper (Fig. 10) is geometric:
 
-- The erosion $\mathbf{y} \ominus B$ is the height of the centre of the ball as
-  it is pushed up against the underside of the surface at every position.
-- The dilation by the same element sweeps the ball over those centres and takes
+- The erosion $\mathbf{y} \ominus B$ is the height of the apex of the ball (the top
+  of its umbra, where $B = 0$) as it is pushed up against the underside of the
+  surface at every position.
+- The dilation by the same element sweeps the ball over those apex positions and takes
   the top of the ball. The result is the surface touched by the ball's top while
   it rolls under the image.
 - The opening is **anti-extensive**: $\boldsymbol{\beta} \le \mathbf{y}$, so
@@ -152,7 +168,8 @@ The radius is a trade-off that the paper leaves to the user: the ball must be
 smooth contours of the changing background".
 
 The result at a pixel depends only on the image within $2\lfloor\rho\rfloor$
-pixels, since the erosion and the dilation each reach $\lfloor\rho\rfloor$. This
+pixels, since the erosion and the dilation each reach $\lfloor\rho\rfloor$ (one more
+with `smooth=True`). This
 is the halo that makes block-wise processing exact (see
 [Memory and streaming](#memory-and-streaming)).
 
@@ -223,7 +240,9 @@ independent. The halo is available as
 refused, since a block reads pixels that other blocks have written.
 
 With `shrink=s`, blocks start on multiples of $s$ so that the cells lie on the
-global grid, and the halo grows to a multiple of $s$.
+global grid, and the halo grows to $s\,(2\lfloor\rho/s\rfloor + 2 + [\text{smooth}])$, a
+multiple of $s$ that covers the coarse opening, the cells and the interpolation
+($[\text{smooth}]$ is 1 with `smooth=True` and 0 otherwise).
 
 The cost of the exact ball is $O(N \rho^n)$ for $N$ pixels, one operation per
 offset of the ball. On one CPU thread, a $1024^2$ image takes about 0.4 s with

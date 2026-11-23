@@ -119,7 +119,7 @@ def _background(
         )
         b = _expand(grey_opening(coarse, se), shrink, data.shape[-ndim:])
     # the opening is anti-extensive; this also removes the rounding of
-    # (f − B) + B
+    # (y − B) + B
     return torch.minimum(b, data)
 
 
@@ -134,16 +134,16 @@ def rolling_ball(
 ) -> Tensor:
     """Subtract the background estimated by a rolling ball.
 
-    Sternberg (1983) views a grey-scale image f as the umbra of its
+    Sternberg (1983) views a grey-scale image y as the umbra of its
     surface (the set of points under it) and estimates the background as
-    the grey-scale opening of f by a ball of radius r:
+    the grey-scale opening of y by a ball of radius ρ:
 
-        B(o) = √(r² − ‖o‖²) − r,   ‖o‖ ≤ r          (the ball's umbra)
-        (f ⊖ B)(x) = min_o [f(x + o) − B(o)]         (erosion)
-        (g ⊕ B)(x) = max_o [g(x − o) + B(o)]         (dilation)
-        background = (f ⊖ B) ⊕ B,   result = f − background.
+        B(u) = √(ρ² − ‖u‖²) − ρ,   ‖u‖ ≤ ρ          (the ball's umbra)
+        (y ⊖ B)(r) = min_u [y(r + u) − B(u)]         (erosion)
+        (z ⊕ B)(r) = max_u [z(r − u) + B(u)]         (dilation)
+        β = (y ⊖ B) ⊕ B,   result = y − β.
 
-    The opening is the top surface swept by the ball rolled under the
+    The opening β is the top surface swept by the ball rolled under the
     intensity landscape: the ball follows the slowly varying background
     but cannot enter peaks narrower than itself, which the subtraction
     keeps. Pixel and intensity units are the same (the "boxels" of the
@@ -153,9 +153,9 @@ def rolling_ball(
     The opening is exact (no decomposition or approximation of the ball).
     Offsets outside the image are left out of the minima and maxima (the
     paper does not specify the boundary), so the ball can overhang the
-    edges. The opening never exceeds f, so the result is ≥ 0; the
+    edges. The opening never exceeds y, so the result is ≥ 0; the
     background is capped at `data`, which also removes the rounding of
-    (f − B) + B.
+    (y − B) + B.
 
     !!! note "Extensions"
         `shrink` and `smooth` are not from Sternberg (1983). They follow
@@ -167,8 +167,8 @@ def rolling_ball(
           instead of `data`, which reduces the effect of noise on the
           background; the result is still `data` − background.
         * `shrink=s` takes the minimum of `data` over cells of sⁿ pixels, opens
-          that coarse image with the ellipsoid of lateral semi-axis r/s
-          and height r (the same ball, in coarse pixels), and interpolates
+          that coarse image with the ellipsoid of lateral semi-axis ρ/s
+          and height ρ (the same ball, in coarse pixels), and interpolates
           the opening linearly from the cell centres back to the pixel
           grid. The cost drops by about s²ⁿ.
 
@@ -178,12 +178,12 @@ def rolling_ball(
     !!! note "Cost and halo"
         The cost is O(N·rⁿ) per pass for N pixels (one operation per
         offset of the ball). The result at a pixel depends on the data
-        within 2⌊r⌋ pixels (erosion then dilation), the halo needed to
+        within 2⌊ρ⌋ pixels (erosion then dilation), the halo needed to
         process blocks independently; see
         [`RollingBall`][optix.background.RollingBall].
 
     !!! note "scikit-image"
-        `skimage.restoration.rolling_ball` returns the erosion f ⊖ B (the
+        `skimage.restoration.rolling_ball` returns the erosion y ⊖ B (the
         height of the ball's apex), not the opening; the two differ by
         the final dilation.
 
@@ -209,14 +209,14 @@ def rolling_ball(
         `(..., *spatial)`; the last `ndim` dims are spatial (floating
         point; other dtypes are converted to the configured dtype).
     radius : float
-        Radius r > 0 of the ball, in pixels (and intensity units). The
+        Radius ρ > 0 of the ball, in pixels (and intensity units). The
         paper leaves it to the user: larger than the features to keep,
         smaller than the scale of the background variations.
     ndim : {2, 3, 1}
         Number of spatial dims: 2 for images (a 3-D ball under a 2-D
         surface, as in the paper), 3 for volumes (a 4-D ball).
     output : {"corrected", "background"}
-        Return f − background (default) or the background.
+        Return y − β (default) or the background β.
     shrink : int, default 1
         Extension: shrink factor s ≥ 1 (1 is the paper's opening).
     smooth : bool, default False
@@ -252,10 +252,13 @@ def top_hat(
     With a flat element S (B = 0 on S), the erosion and dilation of
     Sternberg (1983) are a minimum and a maximum filter:
 
-        (f ⊖ S)(x) = min_{o ∈ S} f(x + o),   (g ⊕ S)(x) = max_{o ∈ S} g(x − o),
-        background = (f ⊖ S) ⊕ S,   result = f − background,
+        (y ⊖ S)(r) = min_{u ∈ S} y(r + u),   (z ⊕ S)(r) = max_{u ∈ S} z(r − u),
+        β = (y ⊖ S) ⊕ S,   result = y − β,
 
-    the top-hat of mathematical morphology. It removes the background
+    the top-hat of mathematical morphology. The paper defines the grey-scale
+    opening for any element B and uses a ball for the background; a flat
+    disk or square is the same equations with B = 0, not the paper's choice
+    of element. It removes the background
     under features that S cannot fit into, whatever their height (the
     ball of [`rolling_ball`][optix.background.rolling_ball] also limits
     their slope). Offsets outside the image are left out of the minima
@@ -287,12 +290,12 @@ def top_hat(
     radius : int
         Half-width k ≥ 0 of the element, in pixels.
     shape : {"disk", "square"}
-        `"disk"`: ‖o‖ ≤ k (a ball in 3-D); `"square"`: ‖o‖∞ ≤ k
+        `"disk"`: ‖u‖ ≤ k (a ball in 3-D); `"square"`: ‖u‖∞ ≤ k
         (side 2k + 1; a cube in 3-D).
     ndim : {2, 3, 1}
         Number of spatial dims.
     output : {"corrected", "background"}
-        Return f − background (default) or the background.
+        Return y − β (default) or the background β.
 
     Returns
     -------
@@ -315,9 +318,9 @@ def rolling_ball_halo(
 ) -> int:
     """Halo, in pixels, that makes block-wise rolling ball exact.
 
-    2⌊r⌋ for the opening (erosion then dilation), plus 1 with `smooth`.
+    2⌊ρ⌋ for the opening (erosion then dilation), plus 1 with `smooth`.
     With `shrink=s`, a multiple of s that covers the coarse opening, the
-    shrinking cells and the interpolation: s·(2⌊r/s⌋ + 2 + [smooth]).
+    shrinking cells and the interpolation: s·(2⌊ρ/s⌋ + 2 + [smooth]).
     Blocks must then start on multiples of s.
 
     Parameters
@@ -437,8 +440,8 @@ class RollingBall(_Background):
     The background is the grey-scale opening of each image (or volume) by
     a ball: see [`rolling_ball`][optix.background.rolling_ball] for the
     method. There are no parameters to fit:
-    [`fit`][optix.background.RollingBall.fit] only records the layout, and
-    [`apply`][optix.Estimator.apply] streams blocks with a halo of 2⌊r⌋
+    [`fit`][optix.Estimator.fit] only records the layout, and
+    [`apply`][optix.Estimator.apply] streams blocks with a halo of 2⌊ρ⌋
     pixels (see [`rolling_ball_halo`][optix.background.rolling_ball_halo]),
     so arrays larger than memory (zarr, memmap) give the same result as a
     whole-array computation. The spatial axes of the layout (2 or 3) set
@@ -498,7 +501,7 @@ class RollingBall(_Background):
         Parameters
         ----------
         radius : float
-            Radius r > 0 of the ball, in pixels and intensity units
+            Radius ρ > 0 of the ball, in pixels and intensity units
             (required; the paper leaves it to the user).
         output : {"corrected", "background"}
             What [`apply`][optix.Estimator.apply] returns: data −
@@ -592,7 +595,7 @@ class TopHat(_Background):
         radius : int
             Half-width k ≥ 0 of the element, in pixels (required).
         shape : {"disk", "square"}, default `"disk"`
-            Flat element: ‖o‖ ≤ k or ‖o‖∞ ≤ k.
+            Flat element: ‖u‖ ≤ k or ‖u‖∞ ≤ k.
         output : {"corrected", "background"}
             What [`apply`][optix.Estimator.apply] returns: data −
             background (default) or the background.

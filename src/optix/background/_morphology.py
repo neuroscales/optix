@@ -1,8 +1,8 @@
 """Grey-scale morphology with flat and non-flat structuring elements.
 
 A structuring element is given as a tensor `structure` of odd shape
-`(2k₁+1, …, 2kₙ+1)` with its origin at the centre: `structure[k + o]`
-is the height B(o) of offset o, and −∞ marks offsets outside the
+`(2k₁+1, …, 2kₙ+1)` with its origin at the centre: `structure[k + u]`
+is the height B(u) of offset u, and −∞ marks offsets outside the
 support (the umbra convention of Sternberg 1983). A flat element has
 B = 0 on its support.
 """
@@ -34,16 +34,16 @@ def ball(
 ) -> Tensor:
     """Umbra of a ball (or ellipsoid), as a non-flat structuring element.
 
-        B(o) = h · √(1 − ‖o‖²/r²) − h   for ‖o‖ ≤ r,   −∞ elsewhere,
+        B(u) = h · √(1 − ‖u‖²/ρ²) − h   for ‖u‖ ≤ ρ,   −∞ elsewhere,
 
-    on the integer offsets o ∈ ℤⁿ, with r the radius and h the height
-    (h = r for a ball: B(o) = √(r² − ‖o‖²) − r). The heights are shifted
+    on the integer offsets u ∈ ℤⁿ, with ρ the radius and h the height
+    (h = ρ for a ball: B(u) = √(ρ² − ‖u‖²) − ρ). The heights are shifted
     so that B(0) = 0; an opening does not depend on this shift.
 
     Parameters
     ----------
     radius : float
-        Radius r > 0 along the spatial axes, in pixels.
+        Radius ρ > 0 along the spatial axes, in pixels.
     ndim : int
         Number of spatial dims n.
     height : float, optional
@@ -87,8 +87,8 @@ def footprint(
     ndim : int
         Number of spatial dims n.
     shape : {"disk", "square"}
-        `"disk"`: the offsets with ‖o‖ ≤ k (a ball in 3-D);
-        `"square"`: the offsets with ‖o‖∞ ≤ k (a cube in 3-D).
+        `"disk"`: the offsets with ‖u‖ ≤ k (a ball in 3-D);
+        `"square"`: the offsets with ‖u‖∞ ≤ k (a cube in 3-D).
     dtype, device : optional
         Of the result (default dtype: float64).
 
@@ -166,7 +166,7 @@ def _min_filter_1d(x: Tensor, size: int, start: int, n: int) -> Tensor:
 def _flat_erosion(data: Tensor, structure: Tensor, sign: float) -> Tensor:
     """Erosion (sign 1) or dilation (sign -1) by a flat element.
 
-    Dilation by B is −erosion(−f) by the reflected element; the reflection
+    Dilation by B is −erosion(−y) by the reflected element; the reflection
     is applied to the offsets here.
     """
     ndim = structure.ndim
@@ -246,9 +246,9 @@ def _non_flat(data: Tensor, structure: Tensor, sign: float) -> Tensor:
 def grey_erosion(data: Tensor, structure: Tensor) -> Tensor:
     """Grey-scale erosion, Sternberg (1983):
 
-        (f ⊖ B)(x) = min_o [f(x + o) − B(o)],
+        (y ⊖ B)(r) = min_u [y(r + u) − B(u)],
 
-    over the offsets o of the support of B, on the trailing
+    over the offsets u of the support of B, on the trailing
     `structure.ndim` dims of `data`. Offsets that fall outside the image
     are left out of the minimum (the image is +∞ outside its domain).
 
@@ -275,9 +275,9 @@ def grey_erosion(data: Tensor, structure: Tensor) -> Tensor:
 def grey_dilation(data: Tensor, structure: Tensor) -> Tensor:
     """Grey-scale dilation, Sternberg (1983):
 
-        (f ⊕ B)(x) = max_o [f(x − o) + B(o)],
+        (z ⊕ B)(r) = max_u [z(r − u) + B(u)],
 
-    over the offsets o of the support of B, on the trailing
+    over the offsets u of the support of B, on the trailing
     `structure.ndim` dims of `data`. Offsets that fall outside the image
     are left out of the maximum (the image is −∞ outside its domain).
 
@@ -300,10 +300,10 @@ def grey_dilation(data: Tensor, structure: Tensor) -> Tensor:
 
 
 def grey_opening(data: Tensor, structure: Tensor) -> Tensor:
-    """Grey-scale opening, f_B = (f ⊖ B) ⊕ B (Sternberg 1983).
+    """Grey-scale opening, β = (y ⊖ B) ⊕ B (Sternberg 1983).
 
     The opening is the upper surface of the union of all translates of the
-    umbra of B that fit under the umbra of f: it is the surface swept by
+    umbra of B that fit under the umbra of y: it is the surface swept by
     B "rolled" under the image. Its influence radius is twice the
     half-size of B.
 
