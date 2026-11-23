@@ -9,6 +9,7 @@
       show_root_toc_entry: false
       members:
         - WaveletFFT
+        - GeneralStripeRemover
 
 ## Transforms
 
@@ -19,6 +20,7 @@
       show_root_toc_entry: false
       members:
         - wavelet_fft
+        - general_stripe_remover
 
 ## Utilities
 
@@ -41,3 +43,7 @@
         - waverec2
         - max_level
         - stripe_damping
+        - lattice_diff
+        - lattice_diff_adjoint
+        - stripe_offset
+        - general_stripe_objective
