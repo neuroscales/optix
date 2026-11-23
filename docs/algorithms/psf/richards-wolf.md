@@ -380,7 +380,11 @@ $I_0$ at the focus can be compared with the closed form of Eq. 3.18:
 (torch.Size([3, 65, 65]), torch.complex64)
 >>> alpha = math.asin(1.4 / 1.518)
 >>> i0, i1, i2 = richards_wolf_integrals(0.0, 0.0, alpha)
->>> exact = 16 / 15 * (1 - 5 / 8 * math.cos(alpha) ** 1.5 * (1 + 3 / 5 * math.cos(alpha)))
+>>> exact = (
+...     16
+...     / 15
+...     * (1 - 5 / 8 * math.cos(alpha) ** 1.5 * (1 + 3 / 5 * math.cos(alpha)))
+... )
 >>> abs(float(i0.real) - exact) < 1e-5
 True
 ```
@@ -389,11 +393,16 @@ The extensions are keywords. The detection PSF of a freely rotating fluorescent
 molecule, and a PSF with a pupil aberration (here a small spherical-aberration term):
 
 ```pycon
->>> iso = richards_wolf((33, 33, 33), spacing=0.05, emitter="isotropic", normalize="sum", **kw)
+>>> iso = richards_wolf(
+...     (33, 33, 33), spacing=0.05, emitter="isotropic", normalize="sum", **kw
+... )
 >>> iso.shape
 torch.Size([33, 33, 33])
 >>> sph = richards_wolf(
-...     (33, 33, 33), spacing=0.05, normalize="sum", **kw,
+...     (33, 33, 33),
+...     spacing=0.05,
+...     normalize="sum",
+...     **kw,
 ...     pupil_phase=lambda theta: 2.0 * (theta / alpha) ** 4,
 ... )
 >>> sph.shape
