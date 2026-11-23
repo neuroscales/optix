@@ -25,6 +25,7 @@ example. The sections follow the modules of the
 | | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
+| | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
 
 The rest of this page explains how the section is organised and what an

@@ -247,6 +247,7 @@
     "ifft",
     "ifftn",
     "ifftshift",
+    "infty",
     "iinfo",
     "Ikegami",
     "incollection",
