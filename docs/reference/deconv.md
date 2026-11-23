@@ -15,6 +15,8 @@ Deconvolution with a known point spread function.
         - WienerButterworth
         - BiggsAndrews
         - NagyOLeary
+        - Wiener
+        - Tikhonov
 
 ## Shift-variant PSF models
 
@@ -39,6 +41,8 @@ Deconvolution with a known point spread function.
         - wiener_butterworth
         - biggs_andrews
         - nagy_oleary
+        - wiener
+        - tikhonov
 
 ## Utilities
 
@@ -60,6 +64,11 @@ Deconvolution with a known point spread function.
         - RegionPreconditioner
         - cgls
         - next_fast_len
+        - transfer_function
+        - smooth_periodic_extension
+        - frequencies
+        - laplacian_power
+        - linear_filter
         - rl_step
         - rl_block
         - biggs_andrews_alpha
