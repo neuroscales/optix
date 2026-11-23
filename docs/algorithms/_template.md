@@ -29,7 +29,7 @@ and state only what is specific here.*
 
 *The generative model and its assumptions as equations: observation model,
 noise, priors or regularisers. Define every symbol when it first appears, in the
-notation of [Concepts](../concepts/index.md#notation).*
+notation of [Concepts](../concepts/notation.md).*
 
 $$
 y = \ldots

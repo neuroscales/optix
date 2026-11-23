@@ -1,8 +1,9 @@
-"""Local estimation of Foi et al. (2008): wavelets, segmentation, pairs.
+"""Local estimation of the noise fit: wavelets, segmentation, pairs.
 
 Implements Section III-A to III-C (non-clipped) and V-A / VI-A (clipped
 and robust variants: the estimators are the same, only their model
-changes) of Foi et al. (2008), see
+changes) of
+[Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399), see
 [`PoissonGaussian`][optix.sensor.PoissonGaussian].
 
 Every image here is in the normalised units of the paper (data range

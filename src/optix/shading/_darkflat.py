@@ -72,7 +72,7 @@ class DarkFlatCalibration(CalibrationEstimator):
         ----------
         statistic : {"mean", "median"}
             Per-pixel reduction of the reference stacks. `"mean"`:
-            streaming Welford/Pebay moments (one pass over frame batches).
+            streaming Welford/Pébay moments (one pass over frame batches).
             `"median"`: exact per-pixel median over row tiles (robust to
             cosmic rays and dust moving between flat frames). Default
             (optix convention): `"mean"`.
