@@ -4,6 +4,7 @@ import pytest
 import torch
 from test_deconv import blur, gaussian_psf, poisson_image
 
+from optix import config
 from optix.deconv import (
     BiggsAndrews,
     RichardsonLucy,
@@ -16,6 +17,7 @@ from optix.deconv.utils import (
     chi2_probability,
     rl_block,
 )
+from optix.io import Layout
 
 F64 = torch.float64
 
@@ -185,14 +187,15 @@ def test_nonnegative_on_poisson_data():
     assert (out >= 0).all()
 
 
-# -- blocks -----------------------------------------------------------------
+# -- blocks: block-wise α ---------------------------------------------------
 @pytest.mark.parametrize("n_iter", [5, 10])
 def test_blocks_match_whole_image_2d(n_iter):
     """Each block has its own α: agreement within a few percent."""
     psf = gaussian_psf(9, 1.5)
     truth, data = poisson_image((96, 80), psf, seed=1)
-    whole = biggs_andrews(data, psf, n_iter=n_iter, block=(96, 80), dtype=F64)
-    parts = biggs_andrews(data, psf, n_iter=n_iter, block=(32, 24), dtype=F64)
+    kw = {"n_iter": n_iter, "dtype": F64, "alpha_scope": "block"}
+    whole = biggs_andrews(data, psf, block=(96, 80), **kw)
+    parts = biggs_andrews(data, psf, block=(32, 24), **kw)
     diff = (parts - whole).abs()
     assert float(diff.max() / whole.max()) < 0.1
     assert float(diff.mean() / whole.mean()) < 0.05
@@ -202,7 +205,7 @@ def test_blocks_match_whole_image_2d(n_iter):
 def test_blocks_match_whole_image_3d():
     psf = gaussian_psf(5, 1.0, ndim=3)
     truth, data = poisson_image((20, 24, 22), psf, seed=2)
-    kw = {"n_iter": 10, "dtype": F64}
+    kw = {"n_iter": 10, "dtype": F64, "alpha_scope": "block"}
     whole = biggs_andrews(data, psf, block=(20, 24, 22), **kw)
     parts = biggs_andrews(data, psf, block=(10, 12, 11), **kw)
     diff = (parts - whole).abs()
@@ -211,12 +214,270 @@ def test_blocks_match_whole_image_3d():
     assert error(parts, truth) == pytest.approx(error(whole, truth), rel=0.01)
 
 
+def test_block_scope_is_per_block_rl_block():
+    """alpha_scope="block": each block is an image of its own (one pass)."""
+    psf = gaussian_psf(9, 1.5)
+    _, data = poisson_image((96, 80), psf, seed=1)
+    out = biggs_andrews(
+        data, psf, n_iter=12, block=(48, 80), alpha_scope="block", dtype=F64
+    )
+    # default halo: twice the PSF size, 18
+    for core, region in (
+        (slice(0, 48), slice(0, 66)),
+        (slice(48, 96), slice(30, 96)),
+    ):
+        y = data[region]
+        op = PaddedConvolution(psf, y.shape)
+        f, _ = rl_block(y, op, float(data.mean()), n_iter=12, accelerate=True)
+        inner = slice(core.start - region.start, core.stop - region.start)
+        torch.testing.assert_close(out[core], op.crop(f)[inner])
+
+
+# -- blocks: global α (lockstep) ---------------------------------------------
+@pytest.mark.parametrize("n_iter", [3, 10, 30])
+def test_global_alpha_matches_whole_image_2d(n_iter):
+    """One α per image and iteration: block-wise = whole-image BA."""
+    psf = gaussian_psf(9, 1.5)
+    _, data = poisson_image((96, 80), psf, seed=1)
+    kw = {"n_iter": n_iter, "dtype": F64}
+    whole = biggs_andrews(data, psf, block=(96, 80), **kw)
+    parts = BiggsAndrews(psf, block=(32, 24), alpha_scope="global", **kw)
+    out = parts.fit(data).apply(data)
+    assert float((out - whole).abs().max() / whole.max()) < 1e-10
+    assert parts.history.extras["alpha_scope"] == ["global"]
+    assert parts.history.extras["iterations"] == [float(n_iter)]
+    op = PaddedConvolution(psf, data.shape)
+    trace = {}
+    rl_block(
+        data,
+        op,
+        float(data.mean()),
+        n_iter=n_iter,
+        accelerate=True,
+        trace=trace,
+    )
+    assert parts.history.extras["effective_iterations"][0] == pytest.approx(
+        trace["effective"], rel=1e-9
+    )
+    if n_iter >= 10:  # the block-wise α is visibly different
+        block = biggs_andrews(
+            data, psf, block=(32, 24), alpha_scope="block", **kw
+        )
+        assert float((block - whole).abs().max() / whole.max()) > 1e-2
+
+
+def test_global_alpha_matches_whole_image_3d_and_edge_blocks():
+    """3-D, an even PSF size and short edge blocks."""
+    psf = gaussian_psf(4, 0.8, ndim=3)
+    _, data = poisson_image((20, 23, 22), psf, seed=2)
+    kw = {"n_iter": 15, "dtype": F64}
+    whole = biggs_andrews(data, psf, block=(20, 23, 22), **kw)
+    parts = biggs_andrews(data, psf, block=(7, 9, 22), **kw)
+    assert float((parts - whole).abs().max() / whole.max()) < 1e-10
+
+
+def test_global_alpha_stack_and_extensions():
+    """Images of a stack are iterated separately, extensions apply."""
+    psf = gaussian_psf(7, 1.2)
+    imgs = [poisson_image((40, 36), psf, seed=s)[1] for s in range(3)]
+    stack = torch.stack(imgs, dim=-1) + 10.0  # (y, x, t)
+    layout = Layout("yxt", spatial="yx")
+    kw = {"n_iter": 12, "dtype": F64, "background": 10.0, "damping": 0.8}
+    est = BiggsAndrews(psf, block=(16, 12), layout=layout, **kw)
+    out = est.fit(stack).apply(stack)
+    assert est.history.extras["alpha_scope"] == ["global"] * 3
+    for i in range(3):
+        ref = biggs_andrews(stack[..., i], psf, **kw)
+        torch.testing.assert_close(out[..., i], ref)
+
+
+def test_global_alpha_chi2_stop_on_whole_image():
+    """The χ² test is evaluated once per iteration, over the whole image."""
+    psf = gaussian_psf(9, 1.5)
+    _, data = poisson_image((96, 80), psf, seed=1)
+    whole = BiggsAndrews(psf, dtype=F64).fit(data)
+    ref = whole.apply(data)
+    est = BiggsAndrews(psf, block=(32, 24), dtype=F64).fit(data)
+    out = est.apply(data)
+    n = est.history.extras["iterations"]
+    assert n == whole.history.extras["iterations"]
+    assert len(n) == 1
+    assert float((out - ref).abs().max() / ref.max()) < 1e-10
+    op = PaddedConvolution(psf, data.shape)
+    start = float(data.mean())
+    f, _ = rl_block(data, op, start, n_iter=int(n[0]), accelerate=True)
+    assert chi2_probability(data, op.forward(f)) >= 0.05
+    f, _ = rl_block(data, op, start, n_iter=int(n[0]) - 1, accelerate=True)
+    assert chi2_probability(data, op.forward(f)) < 0.05
+    # per block, the test stops at other iterations
+    block = BiggsAndrews(psf, block=(32, 24), alpha_scope="block", dtype=F64)
+    block.fit(data).apply(data)
+    counts = block.history.extras["iterations"]
+    assert len(counts) == 12
+    assert set(counts) != {n[0]}
+
+
+def test_global_alpha_n_iter_zero_and_one():
+    psf = gaussian_psf(7, 1.2)
+    _, data = poisson_image((40, 36), psf, seed=6)
+    for n in (0, 1):
+        torch.testing.assert_close(
+            biggs_andrews(data, psf, n_iter=n, block=(16, 16), dtype=F64),
+            richardson_lucy(data, psf, n_iter=n, dtype=F64),
+        )
+
+
+def test_auto_scope():
+    psf = gaussian_psf(9, 1.5)
+    _, data = poisson_image((64, 48), psf, seed=3)
+    kw = {"n_iter": 10, "dtype": F64, "alpha_scope": "auto"}
+    one = BiggsAndrews(psf, **kw)
+    assert one.is_faithful is False  # not known before apply
+    whole = one.fit(data).apply(data)
+    assert one.history.extras["alpha_scope"] == ["global"]
+    many = BiggsAndrews(psf, block=(32, 24), **kw).fit(data)
+    out = many.apply(data)
+    assert many.history.extras["alpha_scope"] == ["block"]
+    torch.testing.assert_close(
+        out,
+        biggs_andrews(
+            data,
+            psf,
+            block=(32, 24),
+            alpha_scope="block",
+            **{k: v for k, v in kw.items() if k != "alpha_scope"},
+        ),
+    )
+    assert not torch.allclose(out, whole)
+    # the memory budget decides whether an image fits in one block
+    with config(memory="600KiB"):
+        small = BiggsAndrews(psf, **kw).fit(data)
+        small.apply(data)
+    assert small.history.extras["alpha_scope"] == ["block"]
+    # faithful=False defaults to "auto"
+    assert BiggsAndrews(psf, faithful=False).options["alpha_scope"] == "auto"
+
+
+def test_faithful_scope():
+    psf = gaussian_psf(9, 1.5)
+    _, data = poisson_image((64, 48), psf, seed=3)
+    est = BiggsAndrews(psf, dtype=F64)
+    assert est.options["alpha_scope"] == "global"
+    assert est.is_faithful
+    with config(memory="600KiB"):  # several blocks: still global α
+        est.fit(data).apply(data)
+    assert est.history.extras["alpha_scope"] == ["global"]
+    assert est.is_faithful
+    auto = BiggsAndrews(psf, alpha_scope="auto", dtype=F64).fit(data)
+    auto.apply(data)
+    assert auto.is_faithful  # one block: the global α was used
+    with config(memory="600KiB"):
+        auto.apply(data)
+    assert auto.is_faithful is False
+    assert BiggsAndrews(psf, alpha_scope="block").is_faithful is False
+    with pytest.raises(ValueError, match="alpha_scope"):
+        BiggsAndrews(psf, alpha_scope="image")
+
+
+def _zarr(path, data, chunks):
+    zarr = pytest.importorskip("zarr")
+    z = zarr.open_array(
+        str(path), mode="w", shape=data.shape, chunks=chunks, dtype="f4"
+    )
+    z[:] = data.numpy().astype("f4")
+    return z
+
+
+def test_global_alpha_out_of_core(tmp_path, monkeypatch):
+    """zarr in, zarr out, iterates on disk: same as in memory."""
+    from optix.deconv import _lockstep
+
+    psf = gaussian_psf(7, 1.2)
+    data = torch.stack(
+        [poisson_image((64, 48), psf, seed=s)[1] for s in (4, 5)]
+    )
+    src = _zarr(tmp_path / "in.zarr", data, (1, 16, 16))
+    dst = _zarr(tmp_path / "out.zarr", torch.zeros_like(data), (1, 16, 16))
+    kinds = []
+    real = _lockstep._State
+
+    class Spy(real):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            kinds.append(self.kind)
+
+    monkeypatch.setattr(_lockstep, "_State", Spy)
+    kw = {"n_iter": 12, "block": (32, 16), "dtype": torch.float32}
+    with config(memory="16KiB"):  # 3 × 70 × 54 float32 iterates do not fit
+        est = BiggsAndrews(psf, **kw).fit(src)
+        est.apply(src, dst)
+    assert kinds == ["disk"]
+    assert est.history.extras["alpha_scope"] == ["global", "global"]
+    mem = BiggsAndrews(psf, **kw).fit(data.float())
+    ref = mem.apply(data.float())
+    assert kinds == ["disk", "memory"]
+    torch.testing.assert_close(torch.from_numpy(dst[:]), ref)
+    for i in range(2):
+        whole = biggs_andrews(data[i].float(), psf, n_iter=12)
+        assert float((ref[i] - whole).abs().max() / whole.max()) < 1e-4
+
+
+class _Recorder:
+    """Array-like that records the regions read from it."""
+
+    def __init__(self, array):
+        self.array = array
+        self.shape = array.shape
+        self.dtype = array.dtype
+        self.reads = []
+
+    def __getitem__(self, index):
+        value = self.array[index]
+        self.reads.append(value.size)
+        return value
+
+
+def test_global_alpha_memory_and_io_bounded(monkeypatch):
+    """Block-sized reads only, one read of each block per iteration."""
+    from optix.deconv import _lockstep
+
+    psf = gaussian_psf(7, 1.2)
+    _, data = poisson_image((96, 80), psf, seed=7)
+    src = _Recorder(data.numpy())
+    grids = []
+    real = _lockstep.PaddedConvolution
+
+    def spy(psf, shape, **kwargs):
+        op = real(psf, shape, **kwargs)
+        grids.append(op.grid)
+        return op
+
+    monkeypatch.setattr(_lockstep, "PaddedConvolution", spy)
+    n_iter, block, halo = 9, (32, 40), 14
+    with config(memory="32KiB"):
+        est = BiggsAndrews(psf, n_iter=n_iter, block=block, dtype=F64)
+        est.fit(src)  # the start level: one pass, in budget-sized blocks
+        fit_reads = len(src.reads)
+        out = est.apply(src)
+    count = 3 * 2
+    assert len(src.reads) == fit_reads + n_iter * count
+    largest = (block[0] + 2 * halo) * (block[1] + 2 * halo)
+    assert max(src.reads[fit_reads:]) <= largest
+    assert all(g[0] * g[1] <= 2 * largest for g in grids)
+    whole = biggs_andrews(data, psf, n_iter=n_iter, dtype=F64)
+    assert float((out - whole).abs().max() / whole.max()) < 1e-10
+
+
 def test_float32_matches_float64():
     psf = gaussian_psf(9, 1.5)
     _, data = poisson_image((48, 48), psf, seed=5)
     a = biggs_andrews(data, psf, n_iter=20, dtype=F64)
     b = biggs_andrews(data.float(), psf.float(), n_iter=20, dtype="float32")
     assert float((a - b).abs().max() / a.max()) < 1e-3
+    c = biggs_andrews(
+        data.float(), psf.float(), n_iter=20, block=(16, 24), dtype="float32"
+    )
+    assert float((a - c).abs().max() / a.max()) < 1e-3
 
 
 # -- estimator --------------------------------------------------------------
@@ -226,6 +487,7 @@ def test_faithful_flags_and_extensions():
     assert RichardsonLucy(psf).is_faithful
     assert BiggsAndrews(psf, n_iter=3).is_faithful is False
     assert BiggsAndrews(psf, damping=0.5).is_faithful is False
+    assert BiggsAndrews(psf).options["alpha_scope"] == "global"
     assert "doi:10.1364/AO.36.001766" in BiggsAndrews.tags.reference
     assert "effective_iterations" not in (
         RichardsonLucy(psf, n_iter=2).fit(torch.ones(16, 16)).history.extras
@@ -250,4 +512,5 @@ def test_save_load(tmp_path):
     est.save(tmp_path / "ba.pt")
     new = load(tmp_path / "ba.pt")
     assert isinstance(new, BiggsAndrews)
+    assert new.options["alpha_scope"] == "global"
     torch.testing.assert_close(new.apply(data), est.apply(data))

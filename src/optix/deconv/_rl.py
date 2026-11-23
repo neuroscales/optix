@@ -23,9 +23,7 @@ from ..io import (
 from ._fft import PaddedConvolution
 
 __all__ = [
-    "BiggsAndrews",
     "RichardsonLucy",
-    "biggs_andrews",
     "biggs_andrews_alpha",
     "chi2_probability",
     "richardson_lucy",
@@ -690,131 +688,6 @@ class RichardsonLucy(Estimator):
         self.level = state.get("level")
 
 
-class BiggsAndrews(RichardsonLucy):
-    """Richardson–Lucy deconvolution accelerated by vector extrapolation.
-
-    The iteration ψ of [`RichardsonLucy`][optix.deconv.RichardsonLucy]
-    (same model, start, stopping rule, blocks and extensions) is applied
-    to a point predicted from the last two iterates (Biggs and Andrews
-    1997, "technique II"):
-
-        yₖ = xₖ + αₖ hₖ,        hₖ = xₖ − xₖ₋₁,
-        xₖ₊₁ = yₖ + gₖ,         gₖ = ψ(yₖ) − yₖ,
-
-    with the acceleration parameter
-
-        αₖ = ∑ gₖ₋₁ · gₖ₋₂ / ∑ gₖ₋₂ · gₖ₋₂,   0 ≤ αₖ ≤ 1,
-
-    the least-squares projection of the latest change on the one before
-    (first-order extrapolation, Eq. 10). The safeguards of the paper:
-    αₖ < 0 is set to 0, which suspends the extrapolation until successive
-    changes agree again; αₖ is capped at 1 so that the predicted step
-    cannot grow exponentially; and the prediction is kept non-negative,
-    negative pixels of yₖ being set to 0 (the paper requires the check
-    but leaves the correction open). No extrapolation is made until two
-    changes are known.
-
-    **Start.** From the uniform start, the first Richardson–Lucy update
-    gives Hᵀy/Hᵀ1, the PSF-correlated data h ⋆ g that the paper uses as
-    its starting image; the extrapolation history starts there, which
-    also gives the paper's "few unaccelerated iterations" from a constant
-    start. The first prediction is therefore made at the fourth update,
-    and up to three iterations the result is plain Richardson–Lucy.
-
-    **Acceleration factor.** The estimated number of unaccelerated
-    iterations equivalent to the accelerated ones, ∑ₖ ηₖ with
-
-        ηₖ = 1 + ∑ⱼ₌₁ᵏ ∏ₘ₌ₖ₋ⱼ₊₁ᵏ γₘ,   γₖ = (αₖ βₖ)²,
-        βₖ = ∑ gₖ₋₁ · gₖ₋₂ / ∑ gₖ₋₁ · gₖ₋₁,
-
-    (Eqs. 11–13) is recorded per block in
-    `history.extras["effective_iterations"]`.
-
-    **Blocks.** Each block keeps its own extrapolation history and its
-    own αₖ, so block-wise and whole-image results agree less closely than
-    for plain Richardson–Lucy.
-
-    **Stopping rule.** Not specified in the paper, which compares
-    restorations at fixed iteration counts; the default is Lucy's χ²
-    rule of [`RichardsonLucy`][optix.deconv.RichardsonLucy], evaluated on
-    the iterates xₖ. Accelerated iterations amplify noise sooner, so the
-    stopping rule or `n_iter` matters more than for the plain iteration.
-
-    !!! references "References"
-
-        1. Biggs DSC, Andrews M. *Acceleration of iterative image
-           restoration algorithms.* Appl Opt **36**(8):1766-1775, 1997.
-           [doi:10.1364/AO.36.001766](https://doi.org/10.1364/AO.36.001766)
-        2. Richardson WH. *Bayesian-based iterative method of image
-           restoration.* J Opt Soc Am **62**(1):55-59, 1972.
-           [doi:10.1364/JOSA.62.000055](https://doi.org/10.1364/JOSA.62.000055)
-        3. Lucy LB. *An iterative technique for the rectification of
-           observed distributions.* Astron J **79**(6):745-754, 1974.
-           [doi:10.1086/111605](https://doi.org/10.1086/111605)
-
-        ??? quote "BibTeX"
-
-            ```bibtex
-            @article{biggs1997acceleration,
-              author  = {Biggs, David S. C. and Andrews, Mark},
-              title   = {Acceleration of iterative image restoration
-                         algorithms},
-              journal = {Applied Optics},
-              volume  = {36},
-              number  = {8},
-              pages   = {1766--1775},
-              year    = {1997},
-              doi     = {10.1364/AO.36.001766}
-            }
-            @article{richardson1972bayesian,
-              author  = {Richardson, William Hadley},
-              title   = {Bayesian-Based Iterative Method of Image
-                         Restoration},
-              journal = {Journal of the Optical Society of America},
-              volume  = {62},
-              number  = {1},
-              pages   = {55--59},
-              year    = {1972},
-              doi     = {10.1364/JOSA.62.000055}
-            }
-            @article{lucy1974iterative,
-              author  = {Lucy, L. B.},
-              title   = {An iterative technique for the rectification of
-                         observed distributions},
-              journal = {The Astronomical Journal},
-              volume  = {79},
-              number  = {6},
-              pages   = {745--754},
-              year    = {1974},
-              doi     = {10.1086/111605}
-            }
-            ```
-
-    Examples
-    --------
-    >>> import torch
-    >>> from optix.deconv import BiggsAndrews
-    >>> psf = torch.ones(5, 5)
-    >>> data = torch.poisson(torch.full((64, 64), 10.0))
-    >>> est = BiggsAndrews(psf, n_iter=10).fit(data)
-    >>> est.apply(data).shape
-    torch.Size([64, 64])
-    """
-
-    tags = Tags(
-        targets=("deconvolution",),
-        streaming="halo",
-        noise="poisson",
-        reference=(
-            "doi:10.1364/AO.36.001766, doi:10.1364/JOSA.62.000055, "
-            "doi:10.1086/111605"
-        ),
-    )
-    paper = dict(RichardsonLucy.paper)
-    recommended = dict(paper)
-    _accelerate = True
-
-
 def richardson_lucy(
     data: ArrayLike,
     psf: Tensor,
@@ -854,49 +727,5 @@ def richardson_lucy(
         `out`, the deconvolved images.
     """
     est = RichardsonLucy(psf, layout=layout, **options)
-    est.fit(data, init=sensor)
-    return est.apply(data, out)
-
-
-def biggs_andrews(
-    data: ArrayLike,
-    psf: Tensor,
-    *,
-    out: WritableArrayLike | None = None,
-    sensor: SensorEstimate | None = None,
-    layout: Layout | None = None,
-    **options: object,
-) -> WritableArrayLike:
-    """Accelerated Richardson–Lucy deconvolution of `data`.
-
-    Shortcut for `BiggsAndrews(psf, **options).fit(data,
-    init=sensor).apply(data, out)`; see
-    [`BiggsAndrews`][optix.deconv.BiggsAndrews] for the acceleration and
-    [`RichardsonLucy`][optix.deconv.RichardsonLucy] for the model, the
-    defaults and the extensions.
-
-    Parameters
-    ----------
-    data : array-like or Labeled
-        Images; `(*samples, *spatial)` without a layout, with as many
-        spatial dims as the PSF.
-    psf : Tensor
-        Point spread function, centred at index `K // 2`.
-    out : writable array-like, optional
-        Output (tensor, numpy, zarr, ...). Default: a new tensor.
-    sensor : SensorEstimate, optional
-        Camera model; the data are converted to electrons.
-    layout : Layout, optional
-        Axis roles.
-    **options
-        Options of [`BiggsAndrews`][optix.deconv.BiggsAndrews]
-        (`n_iter`, `background`, `damping`, `halo`, `faithful`, ...).
-
-    Returns
-    -------
-    writable array-like
-        `out`, the deconvolved images.
-    """
-    est = BiggsAndrews(psf, layout=layout, **options)
     est.fit(data, init=sensor)
     return est.apply(data, out)
