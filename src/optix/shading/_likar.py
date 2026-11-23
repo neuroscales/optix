@@ -415,6 +415,18 @@ class Likar(Estimator):
     ) -> None:
         """Set the options; unset ones come from the preset.
 
+        !!! note
+
+            Not specified in the paper, and chosen here: the optimisation
+            starts from no shading (all parameters 0); Powell's initial
+            directions are the unit vectors of parameters rescaled to
+            coordinates x̃ = 2x/W, ỹ = 2y/H ∈ [−1, 1] (additive ones in
+            units of hi − lo), which changes the scale of the search but
+            not the model; pixel coordinates are pixel centres; corrected
+            values outside [−G, 2G] are clamped to the end bins; parameters
+            that make Ŝ_M ≤ 0 at a pixel are rejected (their objective
+            exceeds the maximum entropy).
+
         Parameters
         ----------
         levels : int
@@ -451,18 +463,6 @@ class Likar(Estimator):
             spatial axes, the first (in layout order) being y, of size H,
             and the second x, of size W; each group (e.g. channel)
             gets its own shading.
-
-        Notes
-        -----
-        Not specified in the paper, and chosen here: the optimisation
-        starts from no shading (all parameters 0); Powell's initial
-        directions are the unit vectors of parameters rescaled to
-        coordinates x̃ = 2x/W, ỹ = 2y/H ∈ [−1, 1] (additive ones in
-        units of hi − lo), which changes the scale of the search but
-        not the model; pixel coordinates are pixel centres; corrected
-        values outside [−G, 2G] are clamped to the end bins; parameters
-        that make Ŝ_M ≤ 0 at a pixel are rejected (their objective
-        exceeds the maximum entropy).
         """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
