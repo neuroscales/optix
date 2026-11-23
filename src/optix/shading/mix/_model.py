@@ -473,8 +473,8 @@ class MixtureFit:
 
         The bound is
 
-            ∑ᵢₚ log ∑_z exp(E[log π_{iz}]) · p(yᵢₚ | z)
-            − ∑ᵢ KL(q(πᵢ) ‖ p(πᵢ)) + log p(θ) + log p(v) + log p(g)
+            ∑ₙᵢ log ∑_z exp(E[log π_{nz}]) · p(yₙᵢ | z)
+            − ∑ₙ KL(q(πₙ) ‖ p(πₙ)) + log p(θ) + log p(v) + log p(g)
         """
         prm, prior, post = self.param, self.prior, self.post
         height, width = self.spatial_shape
@@ -703,7 +703,7 @@ class MixtureFit:
 
     # -- mixture step: q(π), then μ, ν, α ----------------------------------
     def update_post(self) -> None:
-        """q(πᵢ) = Dirichlet(α + ∑ₚ zᵢₚ); class fit of the aggregated q(u)."""
+        """q(πₙ) = Dirichlet(α + ∑ᵢ zₙᵢ); class fit of the aggregated q(u)."""
         if self._counts is None:
             raise RuntimeError("Run update_latent() first")
         prior, post = self.prior, self.post
@@ -906,13 +906,13 @@ def fit_modulation(
 
     If the tissue signal has the same distribution in every pixel (on
     average over frames, given that the pixel contains tissue), the mean
-    tissue signal of pixel p is fₚ·E[u]. Its log is fitted by weighted,
+    tissue signal of pixel i is fᵢ·E[u]. Its log is fitted by weighted,
     penalised least squares in the DCT basis,
 
-        min ½ ∑ₚ wₚ (log f̂ₚ − (Φ·θ)ₚ)² + ½ θᵀ·diag(penalty)·θ,
+        min ½ ∑ᵢ wᵢ (log f̂ᵢ − (Φ·θ)ᵢ)² + ½ θᵀ·diag(penalty)·θ,
 
-    where f̂ₚ = totalₚ / countₚ and wₚ = info · countₚ is the information
-    about log fₚ (info ≈ mean² / variance of one tissue value). Pixels
+    where f̂ᵢ = totalᵢ / countᵢ and wᵢ = info · countᵢ is the information
+    about log fᵢ (info ≈ mean² / variance of one tissue value). Pixels
     with fewer than `min_count` tissue values are ignored. The DC
     coefficient is then dropped (geometric mean of f = 1). Pixels whose
     residual exceeds `outlier` robust standard deviations (hot pixels)
