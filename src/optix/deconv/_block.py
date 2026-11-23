@@ -18,6 +18,7 @@ from ..io import (
     prepare_out,
 )
 from ._fft import PaddedConvolution
+from ._shiftvariant import ShiftVariantPSF
 
 __all__: list[str] = []
 
@@ -70,6 +71,10 @@ class _BlockDeconvolution(Estimator):
     def _after_block(self, trace: dict) -> None:
         """Called after each block with the trace of its solve."""
 
+    def _overhead_for(self, psf: object, data: Labeled) -> float:
+        """Working buffers per loaded voxel for this PSF and data."""
+        return self._overhead()
+
     # -- helpers -----------------------------------------------------------
     def _halo(self, psf: Tensor) -> tuple[int, ...]:
         halo = self.options["halo"]
@@ -95,6 +100,25 @@ class _BlockDeconvolution(Estimator):
         psf = self.psf
         ndim = 2 if psf is None else psf.ndim
         return self._labeled(data, Layout.default(len(data.shape), ndim))
+
+    def _block_operator(
+        self,
+        psf: Tensor | ShiftVariantPSF,
+        chunk: Chunk,
+        shape: tuple[int, ...],
+        cache: dict,
+    ) -> PaddedConvolution:
+        """Blur operator of a loaded block (core + halo).
+
+        A shift-variant PSF gives the operator of the block at its global
+        position; a single PSF gives one operator per block shape.
+        """
+        if isinstance(psf, ShiftVariantPSF):
+            origin = tuple(s.start for s in self._region(chunk))
+            return psf.operator(origin, shape)
+        if shape not in cache:
+            cache[shape] = PaddedConvolution(psf, shape)
+        return cache[shape]
 
     @staticmethod
     def _region(chunk: Chunk) -> tuple[slice, ...]:
@@ -131,7 +155,7 @@ class _BlockDeconvolution(Estimator):
             data,
             self.options["block"],
             halo,
-            overhead=self._overhead(),
+            overhead=self._overhead_for(psf, data),
             contiguous=True,
             align=chunks_of(out),
             **backend,
@@ -179,10 +203,7 @@ class _BlockDeconvolution(Estimator):
                     stacklevel=3,
                 )
             blk = self._prepare(chunk, maps)
-            key = tuple(blk.data.shape)
-            if key not in ops:
-                ops[key] = PaddedConvolution(psf, key)
-            op = ops[key]
+            op = self._block_operator(psf, chunk, tuple(blk.data.shape), ops)
             f, n = self._solve(blk, op, self._block_input(chunk), trace)
             iterations.append(float(n))
             self._after_block(trace)
@@ -191,7 +212,13 @@ class _BlockDeconvolution(Estimator):
         return out
 
     def _extra_state(self) -> dict[str, object]:
-        return {"psf": self.psf}
+        psf = self.psf
+        if isinstance(psf, ShiftVariantPSF):
+            psf = psf._payload()
+        return {"psf": psf}
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
-        self.psf = state.get("psf")
+        psf = state.get("psf")
+        if isinstance(psf, dict):
+            psf = ShiftVariantPSF._from_payload(psf)
+        self.psf = psf
