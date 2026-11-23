@@ -25,9 +25,9 @@ projector.
 A linear, shift-invariant blur $\mathbf{A}$ by a known PSF $\mathbf{h}$ of unit
 sum (so $|\hat{h}(\boldsymbol{\nu})| \le 1$ and $\hat{h}(\mathbf{0}) = 1$), plus
 additive noise (see [Image formation and noise](../../concepts/image-formation.md)).
-One image (or one block of it) of $P$ pixels is a vector
-$\mathbf{y} \in \mathbb{R}^P$, and the blur a matrix
-$\mathbf{A} \in \mathbb{R}^{P\times P}$:
+One image (or one block of it) of $\lvert\Omega\rvert$ pixels is a vector
+$\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$, and the blur a matrix
+$\mathbf{A} \in \mathbb{R}^{\lvert\Omega\rvert\times\lvert\Omega\rvert}$:
 
 === "optix"
 
@@ -44,11 +44,11 @@ $\mathbf{A} \in \mathbb{R}^{P\times P}$:
 
 | optix | Gonzalez & Woods | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}$ | $g$ | recorded image | $\mathbb{R}^P$, per image |
-| $\mathbf{x}$ | $f$ | latent (sharp) image | $\mathbb{R}^P$, per image |
+| $\mathbf{y}$ | $g$ | recorded image | $\mathbb{R}^{\lvert\Omega\rvert}$, per image |
+| $\mathbf{x}$ | $f$ | latent (sharp) image | $\mathbb{R}^{\lvert\Omega\rvert}$, per image |
 | $\mathbf{h}$ | $h$ | PSF, unit sum | kernel, one per group |
-| $\mathbf{A}$ | $H$ | convolution by $\mathbf{h}$ | $\mathbb{R}^{P\times P}$, one per group |
-| $\boldsymbol{\varepsilon}$ | $\eta$ | additive noise | $\mathbb{R}^P$, per image |
+| $\mathbf{A}$ | $H$ | convolution by $\mathbf{h}$ | $\mathbb{R}^{\lvert\Omega\rvert\times\lvert\Omega\rvert}$, one per group |
+| $\boldsymbol{\varepsilon}$ | $\eta$ | additive noise | $\mathbb{R}^{\lvert\Omega\rvert}$, per image |
 | $\hat{h}(\boldsymbol{\nu})$ | $H(u, v)$ | OTF, Fourier transform of the PSF | scalar per frequency, one per group |
 | $\boldsymbol{\nu}$ | $(u, v)$ | spatial frequency, cycles per pixel | one per spatial axis |
 
@@ -89,14 +89,14 @@ least-squares problem, solved in closed form:
 
 | optix | Gonzalez & Woods | Meaning | Shape |
 |---|---|---|---|
-| $\hat{\mathbf{x}}(\boldsymbol{\nu})$, $\hat{\mathbf{y}}(\boldsymbol{\nu})$ | $\hat{F}(u, v)$, $G(u, v)$ | Fourier transforms of estimate and data | $\mathbb{C}^P$, per image |
+| $\hat{\mathbf{x}}(\boldsymbol{\nu})$, $\hat{\mathbf{y}}(\boldsymbol{\nu})$ | $\hat{F}(u, v)$, $G(u, v)$ | Fourier transforms of estimate and data | $\mathbb{C}^{\lvert\Omega\rvert}$, per image |
 | $S_x$, $S_\varepsilon$ | $S_f$, $S_\eta$ | power spectra of object and noise | scalar per frequency, whole stack |
 | $K$ (`nsr`) | $S_\eta / S_f$ (often a constant $K$) | noise-to-signal ratio | scalar, or per frequency; whole stack |
 
 In statistical terms this is the linear minimum-mean-squared-error estimator. When object and noise are Gaussian,
 $\mathbf{x} \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_x)$ and
 $\boldsymbol{\varepsilon} \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_\varepsilon)$
-with circulant covariances $\boldsymbol{\Sigma}_x, \boldsymbol{\Sigma}_\varepsilon \in \mathbb{R}^{P\times P}$
+with circulant covariances $\boldsymbol{\Sigma}_x, \boldsymbol{\Sigma}_\varepsilon \in \mathbb{R}^{\lvert\Omega\rvert\times\lvert\Omega\rvert}$
 (diagonalised by the FFT, eigenvalues $S_x$ and $S_\varepsilon$), it is also
 the posterior mean, and the MAP estimate, of $\mathbf{x}$ given $\mathbf{y}$.
 A constant $K$ is the MAP estimate under white noise of variance $\sigma^2$
@@ -119,9 +119,9 @@ inverts a circular blur on a single block.
 
 ## Algorithm
 
-**Input:** images $\mathbf{y} \in \mathbb{R}^P$; PSF $\mathbf{h}$ of unit sum;
+**Input:** images $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$; PSF $\mathbf{h}$ of unit sum;
 `nsr` $K = 0.01$; `boundary = "taper"` \
-**Output:** the deconvolved images $\hat{\mathbf{x}} \in \mathbb{R}^P$.
+**Output:** the deconvolved images $\hat{\mathbf{x}} \in \mathbb{R}^{\lvert\Omega\rvert}$.
 
 1. **Split** each image into blocks, each a core plus a halo of at least the
    PSF size (default twice).

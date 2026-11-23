@@ -40,11 +40,11 @@ blur $\mathbf{A}$ by a known PSF $\mathbf{h}$ of unit sum, plus additive noise
 
 | optix | Bertero & Boccacci 1998 | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}$ | $g$ | recorded image ($P$ pixels) | $\mathbb{R}^P$, per image |
-| $\mathbf{x}$ | $f$ | latent (sharp) image | $\mathbb{R}^P$, per image |
-| $\mathbf{A}$ | $A$ | convolution by the PSF | $\mathbb{R}^{P\times P}$, one per group |
+| $\mathbf{y}$ | $g$ | recorded image ($\lvert\Omega\rvert$ pixels) | $\mathbb{R}^{\lvert\Omega\rvert}$, per image |
+| $\mathbf{x}$ | $f$ | latent (sharp) image | $\mathbb{R}^{\lvert\Omega\rvert}$, per image |
+| $\mathbf{A}$ | $A$ | convolution by the PSF | $\mathbb{R}^{\lvert\Omega\rvert\times\lvert\Omega\rvert}$, one per group |
 | $\hat{h}$ | $\hat{K}$ | OTF | scalar per frequency, one per group |
-| $\boldsymbol{\varepsilon}$ | $w$ | additive noise | $\mathbb{R}^P$, per image |
+| $\boldsymbol{\varepsilon}$ | $w$ | additive noise | $\mathbb{R}^{\lvert\Omega\rvert}$, per image |
 | $\lambda$ | $\mu$ | regularisation weight | scalar, whole stack |
 
 The book's $f$ is the object, not the optix flat field. The class docstring
@@ -63,7 +63,7 @@ $$
 \lVert \mathbf{y} - \mathbf{A}\mathbf{x} \rVert^2 + \lambda \lVert \mathbf{L}\mathbf{x} \rVert^2 ,
 $$
 
-with $\mathbf{L} \in \mathbb{R}^{P\times P}$ the identity or the discrete
+with $\mathbf{L} \in \mathbb{R}^{\lvert\Omega\rvert\times\lvert\Omega\rvert}$ the identity or the discrete
 Laplacian (the $2d+1$-point stencil, $d$ the number of spatial axes).
 Statistically, this is the MAP estimate (here also the posterior mean) under
 the Gaussian likelihood
@@ -102,7 +102,7 @@ decouple over frequencies and are solved in one step:
 
 | optix | Bertero & Boccacci 1998 | Meaning | Shape |
 |---|---|---|---|
-| $\hat{\mathbf{x}}$, $\hat{\mathbf{y}}$ | $\hat{f}_\mu$, $\hat{g}$ | Fourier transforms of estimate and data | $\mathbb{C}^P$, per image |
+| $\hat{\mathbf{x}}$, $\hat{\mathbf{y}}$ | $\hat{f}_\mu$, $\hat{g}$ | Fourier transforms of estimate and data | $\mathbb{C}^{\lvert\Omega\rvert}$, per image |
 | $\hat{h}$ | $\hat{K}$ | OTF | scalar per frequency, one per group |
 | $\lambda$ (`lam`) | $\mu$ | regularisation weight | scalar, whole stack |
 | $\hat{l}$ | $\hat{P}$ | transfer function of $\mathbf{L}$ | scalar per frequency |
@@ -119,22 +119,22 @@ with $r(\boldsymbol{\nu}) = |\hat{h}|^2/(|\hat{h}|^2 + \lambda|\hat{l}|^2)$
 the eigenvalues of the influence matrix, the score
 
 $$
-V(\lambda) = n\,\frac{\sum_{\boldsymbol{\nu}} |(1 - r)\,\hat{\mathbf{y}}|^2}{\bigl(\sum_{\boldsymbol{\nu}} (1 - r)\bigr)^2},
+V(\lambda) = \lvert\Omega\rvert\,\frac{\sum_{\boldsymbol{\nu}} |(1 - r)\,\hat{\mathbf{y}}|^2}{\bigl(\sum_{\boldsymbol{\nu}} (1 - r)\bigr)^2},
 $$
 
 summed over all blocks and images, is minimised over a grid of $\lambda$ from
 $10^{-10}$ to $10^{2}$, four values per decade. GCV estimates the
 prediction error without knowing the noise level; a choice at an end of the
-grid is flagged with a warning. Here $n$ is the total number of pixels
+grid is flagged with a warning. Here $\lvert\Omega\rvert$ is the total number of pixels
 summed over. In Bayesian terms, GCV is an empirical (data-driven) choice of
 the prior precision $\lambda$, an alternative to empirical Bayes, which would
 maximise the marginal likelihood of $\mathbf{y}$ over $\lambda$ and $\sigma^2$.
 
 ## Algorithm
 
-**Input:** images $\mathbf{y} \in \mathbb{R}^P$; PSF $\mathbf{h}$ of unit sum;
+**Input:** images $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$; PSF $\mathbf{h}$ of unit sum;
 `lam` $\lambda = 0.01$; `operator = "identity"`; `boundary = "taper"` \
-**Output:** the deconvolved images $\hat{\mathbf{x}} \in \mathbb{R}^P$; the
+**Output:** the deconvolved images $\hat{\mathbf{x}} \in \mathbb{R}^{\lvert\Omega\rvert}$; the
 $\lambda$ used, in `strength`.
 
 1. **Choose $\lambda$** (only with `lam="gcv"`): evaluate $V(\lambda)$ on 49
