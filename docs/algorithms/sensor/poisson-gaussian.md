@@ -1,11 +1,11 @@
 # Poisson-Gaussian noise fit
 
 !!! info "At a glance"
-    **Estimates:** `SensorEstimate` (`gain`, `variance`; `offset = None`) \
-    **Noise model:** Poisson-Gaussian, optionally clipped \
-    **Streaming:** per-frame \
-    **Needs many frames:** no (one image; pooling over frames is an extension) \
-    **Reference:** Foi, Trimeche, Katkovnik, Egiazarian, IEEE Trans Image Process, 2008, [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
+    - **Estimates:** `SensorEstimate` (`gain`, `variance`; `offset = None`)
+    - **Noise model:** Poisson-Gaussian, optionally clipped
+    - **Streaming:** per-frame
+    - **Needs many frames:** no (one image; pooling over frames is an extension)
+    - **Reference:** Foi, Trimeche, Katkovnik, Egiazarian, IEEE Trans Image Process, 2008, [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
 
 ## Overview
 
@@ -44,7 +44,7 @@ smooth regions spanning several intensities.
     $$
     z(x) = y(x) + \eta_p\bigl(y(x)\bigr) + \eta_g(x), \qquad
     \chi\,\bigl(y(x) + \eta_p\bigl(y(x)\bigr)\bigr) \sim \mathcal{P}\bigl(\chi\, y(x)\bigr),\quad
-    \eta_g(x) \sim \mathcal{N}(0, b),
+    \eta_g(x) \sim \mathcal{N}(0, b), \qquad
     \tilde z = \max\bigl(0, \min(z, 1)\bigr)
     $$
 
@@ -64,18 +64,25 @@ Both parametrisations give a variance that is affine in the expectation:
     \sigma^2\bigl(y(x)\bigr) = a\,y(x) + b, \qquad a = \chi^{-1}
     $$
 
-| optix | [Foi et al. 2008](https://doi.org/10.1109/TIP.2008.2001399) | meaning |
-|---|---|---|
-| $y$ | $z$ (clipped: $\tilde z$) | observation |
-| $\mathbb{E}[y]$ | $y$ | expectation of the observation |
-| $g\,(n - \lambda)$, $\varepsilon$ | $\eta_p$, $\eta_g$ | Poisson and Gaussian parts |
-| $g$ | $a = \chi^{-1}$ | gain |
-| $\sigma^2 - g\,o$ | $b$ | variance at zero expectation |
-| data range | $[0, 1]$ after normalisation (Section IV-A) | |
+Here $P$ is the number of pixels of a frame, $N$ the number of frames of a
+group, and $M$ the number of level sets (segments) found in a group.
+
+| optix | [Foi et al. 2008](https://doi.org/10.1109/TIP.2008.2001399) | Meaning | Shape |
+|---|---|---|---|
+| $y$ | $z$ (clipped: $\tilde z$) | recorded value of a pixel | scalar, per pixel and per frame |
+| $\mathbb{E}[y]$ | $y(x)$ | noise-free expectation of the pixel | scalar, per pixel |
+| $g\,(n - \lambda)$, $\varepsilon$ | $\eta_p$, $\eta_g$ | Poisson (signal-dependent) and Gaussian (read) noise | scalar, per pixel and per frame |
+| $g$ | $a = \chi^{-1}$ | gain, slope of the variance function | scalar, one per group |
+| $\sigma^2 - g\,o$ | $b$ | variance extrapolated to zero expectation | scalar, one per group |
+| $(\hat y_j, \hat\sigma_j)$ | $(\hat y_i, \hat\sigma_i)$ | mean and noise standard deviation of level set $j$ | $\mathbb{R}^2$, one pair per segment, $M$ per group |
+| `data_range` | $[0, 1]$ after normalisation (Section IV-A) | clipping bounds | two scalars, one pair per group |
 
 Assumptions: the noise is independent between pixels and its variance depends
-only on the expectation, with the same $(a, b)$ everywhere (one value per
-group); clipping, if present, is at the known bounds `data_range`. optix works in
+only on the expectation. The two parameters $(a, b)$ are **shared by every pixel
+and every frame of a group** (one pair per group, for instance per colour
+channel); they are not per-pixel maps. The level-set estimates are per segment:
+each segment pools the smooth pixels whose expectation falls in one intensity
+bin. Clipping, if present, is at the known bounds `data_range`. optix works in
 normalised units $z' = (z - \text{low})/(\text{high} - \text{low})$, as the
 paper does, and maps $(a, b)$ back to ADU at the end.
 
@@ -88,7 +95,7 @@ The strategy has two stages.
    near edges, where the detail coefficients exceed a threshold $\tau$, are
    discarded. The remaining smooth pixels are grouped into level sets of width
    $\Delta$ of the smoothed image. Each set gives a pair
-   $(\hat y_i, \hat\sigma_i)$: its mean expectation and the standard deviation
+   $(\hat y_j, \hat\sigma_j)$: its mean expectation and the standard deviation
    of its detail coefficients (sample std, or MAD in the robust variant).
 2. **Global fit.** The pairs are treated as noisy samples of the curve
    $\sigma(y) = \sqrt{a y + b}$ (or its clipped counterpart
@@ -101,20 +108,35 @@ The strategy has two stages.
 The covariance of $(a, b)$ is the inverse Hessian of $-\log L$ (an optix
 addition). The offset cannot be separated from $b$, so it is left unestimated.
 
+Statistically, stage 1 is a method-of-moments estimate of the local mean and
+variance (a robust M-estimate of scale in the MAD variant), and stage 2 is
+maximum likelihood for a heteroscedastic Gaussian regression of
+$\hat\sigma_j$ on $\hat y_j$; the clipped version is the likelihood of a
+censored (Tobit-type) model. The Hessian covariance is the usual
+observed-information (Laplace) approximation of the ML estimator.
+
 ## Algorithm
 
-```text
-Input: image(s) Y, data_range, delta, tau
-Normalise Y to [0, 1] with data_range
-Wavelet-transform; mask edge coefficients (|detail| > tau)
-Segment the smooth pixels into level sets of width delta
-   (double tau while fewer than two sets are found)
-For each set: pair (y_i, sigma_i) and its variance factors
-Initial (a, b): weighted least squares on the pairs
-(a, b): maximise log L with Nelder-Mead (max_iter, tol)
-Covariance from the Hessian at the optimum
-Return gain = a, variance = b (ADU), offset = None
-```
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$ of one
+group (only frame `frame` unless `pooled=True`); `data_range`,
+$\Delta = 1/300$, $\tau = 0.25$, `max_iter` $= 500$, `tol` $= 10^{-10}$. \
+**Output:** $(\hat a, \hat b)$ in ADU for the group and their $2 \times 2$
+covariance; `offset = None`.
+
+1. **Normalise** the data to $[0, 1]$ with `data_range`.
+2. **Wavelet transform** (one level); mark as edges the coefficients with
+   $\lvert\text{detail}\rvert > \tau$ and drop them.
+3. **Segment** the smooth pixels into $M$ level sets of width $\Delta$ of the
+   approximation image; while fewer than two sets are found, double $\tau$ and
+   repeat step 2.
+4. **Local estimates:** for each set $j = 1, \ldots, M$, compute
+   $(\hat y_j, \hat\sigma_j)$ and the variance factors of $\hat\sigma_j$.
+5. **Initialise** $(a, b)$ by weighted least squares of $\hat\sigma_j^2$ on
+   $\hat y_j$.
+6. **Maximise** $\log L(a, b)$ over the $M$ pairs with Nelder-Mead, until the
+   change is below `tol` or after `max_iter` iterations.
+7. **Covariance:** invert the Hessian of $-\log L$ at the optimum.
+8. **Return** `gain` $= \hat a$ and `variance` $= \hat b$, mapped back to ADU.
 
 ## Faithful mode and extensions
 

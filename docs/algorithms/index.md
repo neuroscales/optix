@@ -1,3 +1,7 @@
+---
+icon: fontawesome/solid/gears
+---
+
 # Algorithms
 
 One page for every estimator in optix. Each page states the model in the common
@@ -18,6 +22,7 @@ example. The sections follow the modules of the
 | | [CIDRE](shading/cidre.md) (`CIDRE`) | flat field and dark field |
 | | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
+| [`optix.background`](../reference/background.md) | [Rolling ball](background/rolling-ball.md) (`RollingBall`, `TopHat`) | background, by grey-scale opening |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
 | | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |

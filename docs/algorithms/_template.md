@@ -8,11 +8,11 @@ what each section holds.
 -->
 
 !!! info "At a glance"
-    **Estimates:** the result type, for instance `ShadingEstimate` (fields it fills) \
-    **Noise model:** none, Gaussian, Poisson or Poisson-Gaussian \
-    **Streaming:** pointwise, per-frame, halo, per-pixel-stats or whole-stack \
-    **Needs many frames:** yes or no \
-    **Reference:** Author, Journal, Year, DOI
+    - **Estimates:** the result type, for instance `ShadingEstimate` (fields it fills)
+    - **Noise model:** none, Gaussian, Poisson or Poisson-Gaussian
+    - **Streaming:** pointwise, per-frame, halo, per-pixel-stats or whole-stack
+    - **Needs many frames:** yes or no
+    - **Reference:** Author, Journal, Year, DOI
 
 ## Overview
 
@@ -39,9 +39,17 @@ in the paper's, followed by a table mapping one set of symbols onto the other.*
     I_i = \ldots
     $$
 
-| optix | Author et al. 2000 |
-|---|---|
-| $\mathbf{y}_i$ | $I_i$ |
+| optix | Author et al. 2000 | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_i$ | $I_i$ | recorded frame $i$ | $P$, one per frame |
+| $\mathbf{f}$ | $S$ | flat field | $P$, shared by all frames of a group |
+
+*Every table of symbols says in words what each symbol means, gives the shape
+of vectors and matrices ($\mathbf{y}_i \in \mathbb{R}^P$,
+$\boldsymbol{\Phi} \in \mathbb{R}^{P \times K}$), and says what each
+parameter is shared across: one value per pixel, per frame, per group, or one
+for the whole stack. Annotate terms of an equation with `\underbrace`, never
+with text such as `mode=""` inside the equation.*
 
 ## Probabilistic model
 
@@ -56,7 +64,10 @@ $$
 
 ## Inference / derivation
 
-*The estimation strategy, clearly explained but without every derivation:
+*The estimation strategy, clearly explained but without every derivation.
+Name its statistical counterpart whenever there is one: maximum likelihood,
+MAP, EM, variational Bayes, iteratively reweighted least squares, method of
+moments (for instance, Richardson–Lucy is EM for a Poisson likelihood).
 what is optimised or inferred, by what kind of scheme (alternation, convex
 splitting, EM, fixed point, ...), which terms are fixed or updated in turn, and
 how any ambiguity is resolved (normalisation of a flat field, for instance).
@@ -65,17 +76,19 @@ without them.*
 
 ## Algorithm
 
-*Pseudocode: inputs, initialisation, iterations, stopping rule, outputs, and
-the default hyper-parameters.*
+*The steps of the algorithm as a numbered list, with the maths rendered:
+inputs, initialisation, iterations, stopping rule, outputs, and the default
+hyper-parameters. No raw-text pseudocode block.*
 
-```text
-Input: data Y, hyper-parameters ...
-Initialise ...
-Repeat until the relative change of the objective is below tol:
-    1. Update ...
-    2. Update ...
-Return the estimate
-```
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$;
+hyper-parameters $\lambda$, ... \
+**Output:** the estimate, for instance $\hat{\mathbf{f}}$.
+
+1. **Initialise** $\mathbf{f}^{(0)} = \mathbf{1}$, ...
+2. **Repeat** until the relative change of the objective is below `tol`:
+    1. update ... with ...;
+    2. update ... with ....
+3. **Normalise** ... and return the estimate.
 
 ## Faithful mode and extensions
 

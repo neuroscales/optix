@@ -1,11 +1,11 @@
 # Gamma mixture
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark`), `SensorEstimate` (`offset`, `variance`, nominal `gain`), `Classification` (`concentration`, `weights`, `parameters`) \
-    **Noise model:** Poisson-Gaussian (Gaussian limit) \
-    **Streaming:** per-frame \
-    **Needs many frames:** yes \
-    **Reference:** none: an original optix model, not published (the Dirichlet update follows [Minka 2000](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/))
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark`), `SensorEstimate` (`offset`, `variance`, nominal `gain`), `Classification` (`concentration`, `weights`, `parameters`)
+    - **Noise model:** Poisson-Gaussian (Gaussian limit)
+    - **Streaming:** per-frame
+    - **Needs many frames:** yes
+    - **Reference:** none: an original optix model, not published (the Dirichlet update follows [Minka 2000](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/))
 
 ## Overview
 
@@ -46,7 +46,8 @@ $$
 
 with the offset $\mathbf{c} = \mathbf{o} + g(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$
 and the variance of an empty pixel $\mathbf{v} = \boldsymbol{\sigma}^2 + g^2(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$.
-In optix terms the dark field is the offset, $\hat{\mathbf{d}} = \mathbf{c}$
+Frames have $P$ pixels (index $p$), flattened into vectors, and the group has
+$N$ frames (index $i$); products are pixel-wise. In optix terms the dark field is the offset, $\hat{\mathbf{d}} = \mathbf{c}$
 (`estimates["sensor"].offset` = `estimates["shading"].dark`), the flat field
 is $\mathbf{f}$ (`estimates["shading"].flat`, geometric mean 1), $\mathbf{v}$
 is `estimates["sensor"].variance`, and the baseline is absorbed in
@@ -71,7 +72,9 @@ u_{ip} \mid z_{ip} = k &\sim \mathrm{Gamma}(\nu_k,\ \nu_k/\mu_k), \\
 \end{aligned}
 $$
 
-with $\boldsymbol{\Phi}$ the separable DCT-II basis without its constant term
+with $\boldsymbol{\Phi} \in \mathbb{R}^{P \times M}$ the separable DCT-II
+basis without its constant term ($M$ functions, set by `order`;
+$\boldsymbol{\theta}, \boldsymbol{\kappa} \in \mathbb{R}^M$)
 (so the geometric mean of $\mathbf{f}$ is 1), $\boldsymbol{\kappa}$ the
 bending energies of its functions, $\mu_k$, $\nu_k$ the mean and shape of
 class $k$ (Gamma in the $(\mu, \nu)$ form of the
@@ -87,6 +90,23 @@ Data are quantised: each value stands for a uniform bin of width $\Delta$,
 which adds $\Delta^2/12$ to every squared residual and keeps the bound finite
 for pixels that repeat the same value.
 
+| Symbol | Meaning | Shape |
+|---|---|---|
+| $\mathbf{y}_i$ | recorded frame $i$ (ADU) | $\mathbb{R}^P$, one per frame |
+| $u_{ip}$ | specimen signal of pixel $p$ in frame $i$ (ADU) | scalar, per pixel and per frame |
+| $z_{ip}$ | class of pixel $p$ in frame $i$ (0 = background) | $\{0, \ldots, K\}$, per pixel and per frame |
+| $\boldsymbol{\pi}_i$ | class proportions of frame $i$ | $\mathbb{R}^{K+1}$, one per frame |
+| $\boldsymbol{\alpha}$ | Dirichlet concentrations of the proportions | $\mathbb{R}^{K+1}$, per group |
+| $\mu_k$, $\nu_k$ | mean and shape of tissue class $k$ | scalars, per class, per group |
+| $\mathbf{c}$ | offset of an empty pixel (dark field) | $\mathbb{R}^P$, per pixel, shared by all frames |
+| $\mathbf{v}$ | variance of an empty pixel | $\mathbb{R}^P$, per pixel, shared by all frames |
+| $\mathbf{f}$ | flat field, $\exp(\boldsymbol{\Phi}\boldsymbol{\theta})$ | $\mathbb{R}^P$, shared by all frames |
+| $\boldsymbol{\theta}$ | DCT coefficients of $\log \mathbf{f}$ | $\mathbb{R}^M$, per group |
+| $\boldsymbol{\kappa}$, $\lambda$ | bending energies of the basis and prior precision | $\mathbb{R}^M$ and scalar |
+| $g$ | camera gain (held at its nominal value) | scalar, for the whole stack |
+| $\nu_v$, $v_0$ | strength and value of the prior on $v_p$ | scalars |
+| $\Delta$ | quantisation bin width | scalar |
+
 After fitting, `concentration_` holds the concentrations
 $\boldsymbol{\alpha}_i$ of $q(\boldsymbol{\pi}_i)$ for every training frame,
 and `apply(..., output="mean")` returns the posterior mean
@@ -94,7 +114,13 @@ $\mathbb{E}[u \mid y]$ of the signal of each pixel (0 in the background).
 
 ## Inference / derivation
 
-Variational EM. The posterior is approximated by
+The scheme is variational Bayes with a mean-field (factorised) posterior over
+the local latent variables $\boldsymbol{\pi}_i$, $z_{ip}$, $u_{ip}$, and point
+estimates (Dirac factors) for the global parameters: a variational EM, whose
+E-step is a mean-field VB update and whose M-step is a MAP update of
+$\mathbf{c}, \mathbf{v}, \boldsymbol{\theta}$ (under their priors) and a
+type-II maximum-likelihood (empirical Bayes) update of $\boldsymbol{\mu}$,
+$\boldsymbol{\nu}$, $\boldsymbol{\alpha}$. The posterior is approximated by
 
 $$
 q = \prod_i q(\boldsymbol{\pi}_i)\ \prod_{i,p} q(z_{ip})\, q(u_{ip} \mid z_{ip})
@@ -124,19 +150,28 @@ flat field and a k-means of the classes on $\log y$.
 
 ## Algorithm
 
-```text
-Input: frames Y (per group), gain g, options (nclass, order, nodes, ...)
-Initialise c, v from per-pixel order statistics; f, classes from the tissue pixels
-Repeat until the bound improves by less than tol per data point, or max_iterations:
-    1. Local step: q(z, u) by quadrature, q(π) Dirichlet        (one pass over frames)
-    2. Update μ, ν of each class; α (Minka)
-    3. One Fisher-scoring step in (c, v, θ); halve it if the bound drops
-Return sensor (c, v, g), shading (f, d = c), classification (α, μ, ν)
-apply: x̂ = (y − c) / f, or foreground / class probabilities / E[u | y]
-```
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$ (per
+group), gain $g$; defaults `nclass=1`, `order=(8, 8)`, `nodes=24`,
+`max_iterations=100`, `tol=1e-6`, `lam=1`. \
+**Output:** `SensorEstimate` $(\mathbf{c}, \mathbf{v}, g)$, `ShadingEstimate`
+$(\mathbf{f}, \mathbf{d} = \mathbf{c})$, `Classification`
+$(\boldsymbol{\alpha}, \boldsymbol{\mu}, \boldsymbol{\nu})$.
 
-Defaults: `nclass=1`, `order=(8, 8)`, `nodes=24`, `max_iterations=100`,
-`tol=1e-6`, `lam=1`. Each group of a layout gets its own fit.
+For each group of a layout:
+
+1. **Initialise** $\mathbf{c}$, $\mathbf{v}$ from per-pixel order statistics,
+   and $\mathbf{f}$ and the classes from the pixels labelled tissue.
+2. **Repeat** until the bound improves by less than `tol` per data point, or
+   `max_iterations` is reached:
+    1. **local step** (one pass over the frames): $q(z, u)$ by Gauss-Hermite
+       quadrature, $q(\boldsymbol{\pi}_i)$ Dirichlet;
+    2. **class step:** update $\mu_k$, $\nu_k$ of each class, and
+       $\boldsymbol{\alpha}$ by Minka's method;
+    3. **field step:** one Fisher-scoring step in
+       $(\mathbf{c}, \mathbf{v}, \boldsymbol{\theta})$, halved if the bound drops.
+
+`apply` returns $\hat{\mathbf{x}}_i = (\mathbf{y}_i - \mathbf{c}) / \mathbf{f}$,
+or the foreground or class probabilities, or $\mathbb{E}[u \mid y]$.
 
 ## Faithful mode and extensions
 
