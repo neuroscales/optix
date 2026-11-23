@@ -140,7 +140,7 @@ gradient.
 
 Since $\lVert\mathbf{n}\rVert \le 1$, $\sum_k n_k(\mathbf{r}) \le \sqrt{d}$, and each
 $-n_k(\mathbf{r} - \mathbf{e}_k) \le 1$ adds at most 1, so
-$\lvert\operatorname{div}\mathbf{n}\rvert \le d + \sqrt{d}$ (the componentwise bound
+$\lvert\operatorname{div}\mathbf{n}\rvert \le d + \sqrt{d}$ (the per-component bound
 $\lvert n_k \rvert \le 1$ alone would only give $2d$). The
 denominator stays positive when $\lambda_{\mathrm{TV}} < 1/(d + \sqrt{d})$, that is
 0.29 in 2-D and 0.21 in 3-D. Larger values are refused with an error.
