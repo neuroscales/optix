@@ -1,11 +1,11 @@
 # Biggs–Andrews
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Poisson (Poisson-Gaussian as an extension) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Biggs and Andrews, Appl Opt, 1997, [doi:10.1364/AO.36.001766](https://doi.org/10.1364/AO.36.001766)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Poisson (Poisson-Gaussian as an extension)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Biggs and Andrews, Appl Opt, 1997, [doi:10.1364/AO.36.001766](https://doi.org/10.1364/AO.36.001766)
 
 ## Overview
 
@@ -34,8 +34,11 @@ $$
 \qquad \mathbf{x} \ge 0 ,
 $$
 
-with $\mathbf{A}$ the blur by $\mathbf{h}$ and $\mathbf{b}$ an optional background
-(none in the paper). The acceleration changes the path to the maximum-likelihood
+with $\mathbf{y} \in \mathbb{R}^P$ one recorded image of $P$ pixels,
+$\mathbf{x} \in \mathbb{R}^Q$ the latent image on the extended domain of
+$Q \ge P$ pixels, $\mathbf{A} \in \mathbb{R}^{P \times Q}$ the blur by
+$\mathbf{h}$ (one for the whole stack) and $\mathbf{b} \in \mathbb{R}^P$ an
+optional background (none in the paper). The acceleration changes the path to the maximum-likelihood
 estimate, not the model.
 
 ## Inference / derivation
@@ -54,7 +57,8 @@ agree, and to apply $\psi$ at the extrapolated point:
     \alpha_k = \frac{\mathbf{g}_{k-1}^\top \mathbf{g}_{k-2}}{\mathbf{g}_{k-2}^\top \mathbf{g}_{k-2}},
     $$
 
-    with $\mathbf{g}_k = \psi(\mathbf{v}_k) - \mathbf{v}_k$ the change made by
+    with $\mathbf{x}_k, \mathbf{v}_k, \mathbf{g}_k \in \mathbb{R}^Q$ and
+    $\mathbf{g}_k = \psi(\mathbf{v}_k) - \mathbf{v}_k$ the change made by
     the $k$-th update.
 
 === "Biggs & Andrews 1997"
@@ -72,15 +76,16 @@ agree, and to apply $\psi$ at the extrapolated point:
     \quad \text{(Eq. 10)}.
     $$
 
-| optix | [Biggs & Andrews 1997](https://doi.org/10.1364/AO.36.001766) |
-|---|---|
-| $\mathbf{y}$ (recorded image) | $g$ |
-| $\mathbf{x}_k$ (iterate) | $\mathbf{x}_k$ |
-| $\mathbf{v}_k$ (prediction) | $\mathbf{y}_k$ |
-| $\mathbf{x}_k - \mathbf{x}_{k-1}$ | $\mathbf{h}_k$ |
-| $\mathbf{g}_k$ | $\mathbf{g}_k$ |
-| $\mathbf{h}$ (PSF) | $h$ |
-| $\psi$ | $\psi$ |
+| optix | [Biggs & Andrews 1997](https://doi.org/10.1364/AO.36.001766) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$ | $g$ | recorded image, in counts | $P$, one per image |
+| $\mathbf{x}_k$ | $\mathbf{x}_k$ | iterate after $k$ updates | $Q$, one per image |
+| $\mathbf{v}_k$ | $\mathbf{y}_k$ | extrapolated (predicted) point | $Q$, one per image |
+| $\mathbf{x}_k - \mathbf{x}_{k-1}$ | $\mathbf{h}_k$ | last step, the extrapolation direction | $Q$, one per image |
+| $\mathbf{g}_k$ | $\mathbf{g}_k$ | change made by one update at $\mathbf{v}_k$ | $Q$, one per image |
+| $\alpha_k$ | $\alpha_k$ | acceleration factor | scalar, per image (or per block) and iteration |
+| $\mathbf{h}$ | $h$ | PSF | $K$ voxels, one for the whole stack |
+| $\psi$ | $\psi$ | one Richardson–Lucy update | map from $\mathbb{R}^Q$ to $\mathbb{R}^Q$ |
 
 The paper's symbols clash with optix: its $\mathbf{y}_k$ is the prediction, not
 the data, and its $\mathbf{h}_k$ a step, not the PSF.
@@ -94,19 +99,38 @@ requires non-negativity but leaves the correction open). The equivalent number
 of unaccelerated iterations, $\sum_k \eta_k$ of Eqs. 11–13, is recorded in
 `history.extras["effective_iterations"]`.
 
+Statistically, $\psi$ is one EM step for the Poisson maximum-likelihood
+estimate (see [Richardson–Lucy](richardson-lucy.md#inference-derivation)), so
+the scheme is an accelerated EM: a first-order vector extrapolation of the EM
+fixed-point map, close to the momentum (heavy-ball) acceleration of gradient
+methods and to the squared extrapolation methods for EM. It leaves
+the fixed point, the maximum-likelihood estimate, unchanged but gives up the
+monotone increase of the likelihood that plain EM guarantees.
+
 ## Algorithm
 
-```text
-Input: data Y (counts), PSF h, alpha = 0.05, max_iter = 100, alpha_scope = "global"
-Initialise x(0): uniform, with the mean intensity of y − b
-Update 1: plain Richardson–Lucy, giving Aᵀy / Aᵀ1 (the paper's starting image)
-Repeat:
-    if n_iter is None and the χ² test on x_k is not significant: stop
-    if two changes are known: α_k from Eq. 10, clipped to [0, 1]; predict v_k ≥ 0
-    else: v_k = x_k
-    x_{k+1} = ψ(v_k)
-Return x, cropped to the observed region
-```
+**Input:** an image $\mathbf{y} \in \mathbb{R}^P$ in counts, the PSF
+$\mathbf{h}$; hyper-parameters `alpha` $= 0.05$ (χ² level), `max_iter`
+$= 100$, `n_iter` $=$ `None`, `alpha_scope` $=$ `"global"`. \
+**Output:** the deconvolved image $\hat{\mathbf{x}}$, cropped to the observed
+region.
+
+1. **Initialise** $\mathbf{x}_0$ uniform, at the mean intensity of
+   $\mathbf{y} - \mathbf{b}$.
+2. **First update:** plain Richardson–Lucy,
+   $\mathbf{x}_1 = \psi(\mathbf{x}_0)$, which gives
+   $\mathbf{A}^\top\mathbf{y} / \mathbf{A}^\top\mathbf{1}$ (the paper's
+   starting image).
+3. **Repeat** for $k = 1, 2, \ldots$ until `n_iter` (if given) or `max_iter`
+   iterations:
+    1. **Test** (only when `n_iter` is `None`): stop if the χ² test of
+       Richardson–Lucy on $\mathbf{x}_k$ is no longer significant;
+    2. **Predict:** if two changes $\mathbf{g}_{k-1}, \mathbf{g}_{k-2}$ are
+       known, compute $\alpha_k$ by Eq. 10, clip it to $[0, 1]$ and set
+       $\mathbf{v}_k = \max(\mathbf{x}_k + \alpha_k(\mathbf{x}_k - \mathbf{x}_{k-1}), 0)$;
+       otherwise $\mathbf{v}_k = \mathbf{x}_k$;
+    3. **Update** $\mathbf{x}_{k+1} = \psi(\mathbf{v}_k)$.
+4. **Crop** $\mathbf{x}$ to the observed region and return it.
 
 The first prediction is made at the fourth update; up to three iterations the
 result is plain Richardson–Lucy. The stopping rule is not in the paper, which

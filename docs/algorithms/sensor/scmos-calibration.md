@@ -1,11 +1,11 @@
 # sCMOS calibration
 
 !!! info "At a glance"
-    **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`, and `defective` with `confidence=`) \
-    **Noise model:** Poisson-Gaussian, one set of parameters per pixel \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** Huang F et al., Nat Methods, 2013, [doi:10.1038/nmeth.2488](https://doi.org/10.1038/nmeth.2488)
+    - **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`, and `defective` with `confidence=`)
+    - **Noise model:** Poisson-Gaussian, one set of parameters per pixel
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** Huang F et al., Nat Methods, 2013, [doi:10.1038/nmeth.2488](https://doi.org/10.1038/nmeth.2488)
 
 ## Overview
 
@@ -49,8 +49,10 @@ $$
 $$
 
 The variance excess is linear in the mean excess, with slope $g_p$ and no
-intercept. In vector form, with $\bar{\mathbf{y}}^k$ and $\mathbf{v}^k$ the
-temporal mean and variance at level $k$:
+intercept. In vector form, with $P$ the number of pixels, $M$ the number of dark
+frames, $K$ the number of illumination levels, dark frames
+$\mathbf{y}_m^{\text{dark}} \in \mathbb{R}^P$, and $\bar{\mathbf{y}}^k, \mathbf{v}^k \in \mathbb{R}^P$ the
+temporal mean and variance at level $k$ (squares and divisions are pixel-wise):
 
 === "optix"
 
@@ -81,16 +83,18 @@ temporal mean and variance at level $k$:
 
     with $A = (v^k - \mathrm{var})_k$ and $B = (\bar{D}^k - o)_k$.
 
-| optix | [Huang et al. 2013](https://doi.org/10.1038/nmeth.2488) |
-|---|---|
-| $\mathbf{y}_m^{\text{dark}}$ | $s^m$ (dark frame $m$) |
-| $\mathbf{o}$ | $o$ |
-| $\boldsymbol{\sigma}^2$ | $\mathrm{var}$ |
-| $\mathbf{g}$ | $g$ |
-| $\bar{\mathbf{y}}^k$ | $\bar{D}^k$ |
-| $\mathbf{v}^k$ | $v^k$ |
-| $M$, $K$ | number of frames, number of levels |
-| $\delta$ (`ddof`) | $0$ |
+| optix | [Huang et al. 2013](https://doi.org/10.1038/nmeth.2488) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_m^{\text{dark}}$ | $s^m$ | dark frame $m$ (ADU) | $\mathbb{R}^P$, per frame |
+| $\mathbf{o}$ | $o$ | offset: mean dark level (ADU) | $\mathbb{R}^P$, per pixel, shared by all frames |
+| $\boldsymbol{\sigma}^2$ | $\mathrm{var}$ | read-noise variance (ADU²) | $\mathbb{R}^P$, per pixel, shared by all frames |
+| $\mathbf{g}$ | $g$ | gain (ADU per photoelectron) | $\mathbb{R}^P$, per pixel, shared by all frames |
+| $\bar{\mathbf{y}}^k$ | $\bar{D}^k$ | temporal mean at level $k$ (ADU) | $\mathbb{R}^P$, per pixel and level |
+| $\mathbf{v}^k$ | $v^k$ | temporal variance at level $k$ (ADU²) | $\mathbb{R}^P$, per pixel and level |
+| $\lambda_p^k$ | | expected photoelectrons of pixel $p$ at level $k$ | scalar, per pixel and level |
+| | $A$, $B$ | variance and mean excesses of one pixel over the levels | $\mathbb{R}^{1\times K}$, per pixel |
+| $M$, $K$, $P$ | | numbers of dark frames, levels, pixels | scalars, whole stack |
+| $\delta$ (`ddof`) | $0$ | degrees of freedom removed from the variance divisor | scalar, whole stack |
 
 ## Inference / derivation
 
@@ -100,20 +104,30 @@ them from the moments of each illuminated level leaves $K$ points per pixel on a
 line through the origin whose slope is the gain, fitted by least squares with
 equal weight per level (closed form above). Nothing is ambiguous: the dark
 stack pins the intercept. The standard error of the slope is kept as
-`gain_stderr`. Extensions swap the regression for a robust one (Huber
-reweighting, or the Theil-Sen median of per-level slopes).
+`gain_stderr`. Statistically, the offset and read variance are method-of-moments
+estimates (the Gaussian maximum-likelihood ones when $\delta = 0$), and the
+gain is an ordinary least-squares fit of the mean-variance relation, that is
+the maximum-likelihood slope under Gaussian errors of equal variance on the
+variance excesses. Extensions swap the regression for a robust M-estimator
+(Huber loss, solved by iteratively reweighted least squares) or the Theil-Sen
+median of per-level slopes.
 
 ## Algorithm
 
-```text
-Input: dark stack (M frames), K illumination stacks, robust, confidence, ddof
-1. Stream the dark stack once: per-pixel mean o and variance σ² (divisor M − ddof).
-2. For each level k, stream its stack once: per-pixel mean ȳᵏ and variance vᵏ.
-3. a_k = ȳᵏ − o,  b_k = vᵏ − σ²  (per pixel).
-4. g = Σₖ a_k b_k / Σₖ a_k²   (or Huber IRLS / Theil-Sen median of b_k / a_k).
-5. If confidence is set: defective = not (g finite and g > 0 and stderr/g ≤ confidence).
-Return SensorEstimate(offset=o, variance=σ², gain=g, defective)
-```
+**Input:** dark frames $\mathbf{y}_1^{\text{dark}}, \ldots, \mathbf{y}_M^{\text{dark}} \in \mathbb{R}^P$;
+$K$ illumination stacks; `robust="none"`, `confidence=None`, `ddof` $\delta = 0$ (faithful) or $1$. \
+**Output:** `SensorEstimate` with $\mathbf{o}$, $\boldsymbol{\sigma}^2$, $\mathbf{g}$ and, if `confidence` is set, `defective`.
+
+1. **Dark moments.** Stream the dark stack once: per-pixel mean $\mathbf{o}$ and
+   variance $\boldsymbol{\sigma}^2$ with divisor $M - \delta$.
+2. **Level moments.** For each level $k = 1, \ldots, K$, stream its stack once:
+   per-pixel mean $\bar{\mathbf{y}}^k$ and variance $\mathbf{v}^k$.
+3. **Excesses.** $\mathbf{a}^k = \bar{\mathbf{y}}^k - \mathbf{o}$ and
+   $\mathbf{b}^k = \mathbf{v}^k - \boldsymbol{\sigma}^2$, both in $\mathbb{R}^P$.
+4. **Gain.** Pixel-wise $\mathbf{g} = \sum_k \mathbf{a}^k \odot \mathbf{b}^k \big/ \sum_k (\mathbf{a}^k)^2$,
+   or the Huber IRLS fit, or the Theil-Sen median of $b_p^k / a_p^k$.
+5. **Defects** (if `confidence` is set): flag pixel $p$ unless $g_p$ is finite,
+   $g_p > 0$ and $\mathrm{stderr}(g_p) / g_p \le$ `confidence`.
 
 The paper used 60,000 dark frames and 15 levels of 20,000 frames, from about 20
 to 200 photons per pixel.
