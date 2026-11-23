@@ -26,6 +26,12 @@ def clipped_normal_moments(
         E[clip(z)]   = μ + σ m
         Var[clip(z)] = σ² (s² − m²)
 
+    !!! note
+        Writing the moments about μ in units of σ avoids the cancellation
+        of E[z²] − E[z]² when clipping is negligible: then m → 0 and
+        s² → 1. Φ(−β) is used instead of 1 − Φ(β). Compute in float64 when
+        nearly every sample is clipped, because s² − m² then cancels.
+
     Parameters
     ----------
     mean, std : Tensor
@@ -37,13 +43,6 @@ def clipped_normal_moments(
     -------
     mean, std : Tensor
         Moments of the clipped variable.
-
-    Notes
-    -----
-    Writing the moments about μ in units of σ avoids the cancellation
-    of E[z²] − E[z]² when clipping is negligible: then m → 0 and
-    s² → 1. Φ(−β) is used instead of 1 − Φ(β). Compute in float64 when
-    nearly every sample is clipped, because s² − m² then cancels.
     """
     mean, std = torch.broadcast_tensors(
         torch.as_tensor(mean), torch.as_tensor(std).to(mean)

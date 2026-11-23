@@ -252,6 +252,10 @@ def get_config() -> Config:
 def set_config(**options: object) -> None:
     """Set process-wide defaults.
 
+    !!! note
+        An active `with config(...)` block keeps shadowing the options it
+        overrides.
+
     Parameters
     ----------
     **options
@@ -264,11 +268,6 @@ def set_config(**options: object) -> None:
         If an option name is unknown.
     ValueError
         If a value is invalid.
-
-    Notes
-    -----
-    An active `with config(...)` block keeps shadowing the options it
-    overrides.
     """
     global _global
     values = _normalize(options)
@@ -283,10 +282,9 @@ class config(contextlib.ContextDecorator):
     as a decorator. Overrides apply to the current thread / asyncio task
     only: threads started inside the block see the process-wide defaults.
 
-    Notes
-    -----
-    Nesting works, and an instance may be re-entered (but not used
-    concurrently from several threads).
+    !!! note
+        Nesting works, and an instance may be re-entered (but not used
+        concurrently from several threads).
     """
 
     def __init__(self, **options: object) -> None:

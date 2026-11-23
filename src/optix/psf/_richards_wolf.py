@@ -126,6 +126,31 @@ def richards_wolf_integrals(
     integrand. Bessel functions are from
     [`bessel_j012`][optix.special.bessel_j012].
 
+    !!! references "References"
+
+        1. Richards B, Wolf E. *Electromagnetic diffraction in optical
+           systems II. Structure of the image field in an aplanatic
+           system.* Proc R Soc Lond A **253**(1274):358–379, 1959.
+           [doi:10.1098/rspa.1959.0200](https://doi.org/10.1098/rspa.1959.0200)
+
+        ??? quote "BibTeX"
+
+            ```bibtex
+            @article{richards1959electromagnetic,
+              author  = {Richards, B. and Wolf, E.},
+              title   = {Electromagnetic diffraction in optical systems
+                         {II}. {Structure} of the image field in an
+                         aplanatic system},
+              journal = {Proceedings of the Royal Society of London.
+                         Series A, Mathematical and Physical Sciences},
+              volume  = {253},
+              number  = {1274},
+              pages   = {358--379},
+              year    = {1959},
+              doi     = {10.1098/rspa.1959.0200}
+            }
+            ```
+
     Parameters
     ----------
     radial : Tensor or float
@@ -152,31 +177,6 @@ def richards_wolf_integrals(
     I0, I1, I2 : Tensor
         Complex tensors of the broadcast shape of `radial` and `axial`.
         The work memory is that shape times the number of nodes.
-
-    !!! references "References"
-
-        1. Richards B, Wolf E. *Electromagnetic diffraction in optical
-           systems II. Structure of the image field in an aplanatic
-           system.* Proc R Soc Lond A **253**(1274):358–379, 1959.
-           [doi:10.1098/rspa.1959.0200](https://doi.org/10.1098/rspa.1959.0200)
-
-        ??? quote "BibTeX"
-
-            ```bibtex
-            @article{richards1959electromagnetic,
-              author  = {Richards, B. and Wolf, E.},
-              title   = {Electromagnetic diffraction in optical systems
-                         {II}. {Structure} of the image field in an
-                         aplanatic system},
-              journal = {Proceedings of the Royal Society of London.
-                         Series A, Mathematical and Physical Sciences},
-              volume  = {253},
-              number  = {1274},
-              pages   = {358--379},
-              year    = {1959},
-              doi     = {10.1098/rspa.1959.0200}
-            }
-            ```
     """
     aperture = _check_aperture(aperture)
     radial = torch.as_tensor(radial)
@@ -354,21 +354,6 @@ def richards_wolf_field(
     The time dependence is e^{−iωt} and z increases away from the
     lens.
 
-    Parameters
-    ----------
-    shape, wavelength, numerical_aperture, refractive_index, spacing
-        See [`richards_wolf`][optix.psf.richards_wolf].
-    nodes, pupil_phase
-        See
-        [`richards_wolf_integrals`][optix.psf.utils.richards_wolf_integrals].
-    dtype, device : optional
-        Real working dtype and device. Default: configuration.
-
-    Returns
-    -------
-    Tensor
-        Complex field, `(3, *shape)`: the components (e_x, e_y, e_z).
-
     !!! references "References"
 
         1. Richards B, Wolf E. *Electromagnetic diffraction in optical
@@ -393,6 +378,21 @@ def richards_wolf_field(
               doi     = {10.1098/rspa.1959.0200}
             }
             ```
+
+    Parameters
+    ----------
+    shape, wavelength, numerical_aperture, refractive_index, spacing
+        See [`richards_wolf`][optix.psf.richards_wolf].
+    nodes, pupil_phase
+        See
+        [`richards_wolf_integrals`][optix.psf.utils.richards_wolf_integrals].
+    dtype, device : optional
+        Real working dtype and device. Default: configuration.
+
+    Returns
+    -------
+    Tensor
+        Complex field, `(3, *shape)`: the components (e_x, e_y, e_z).
     """
     full, step, ndim = _shape_spacing(shape, spacing)
     k, aperture = _optics(wavelength, numerical_aperture, refractive_index)
@@ -517,6 +517,31 @@ def richards_wolf(
     precision (about 10⁻¹² of the peak in float64). It runs on any torch
     device.
 
+    !!! references "References"
+
+        1. Richards B, Wolf E. *Electromagnetic diffraction in optical
+           systems II. Structure of the image field in an aplanatic
+           system.* Proc R Soc Lond A **253**(1274):358–379, 1959.
+           [doi:10.1098/rspa.1959.0200](https://doi.org/10.1098/rspa.1959.0200)
+
+        ??? quote "BibTeX"
+
+            ```bibtex
+            @article{richards1959electromagnetic,
+              author  = {Richards, B. and Wolf, E.},
+              title   = {Electromagnetic diffraction in optical systems
+                         {II}. {Structure} of the image field in an
+                         aplanatic system},
+              journal = {Proceedings of the Royal Society of London.
+                         Series A, Mathematical and Physical Sciences},
+              volume  = {253},
+              number  = {1274},
+              pages   = {358--379},
+              year    = {1959},
+              doi     = {10.1098/rspa.1959.0200}
+            }
+            ```
+
     Parameters
     ----------
     shape : sequence of int
@@ -555,31 +580,6 @@ def richards_wolf(
     -------
     Tensor
         Real tensor of shape `shape`.
-
-    !!! references "References"
-
-        1. Richards B, Wolf E. *Electromagnetic diffraction in optical
-           systems II. Structure of the image field in an aplanatic
-           system.* Proc R Soc Lond A **253**(1274):358–379, 1959.
-           [doi:10.1098/rspa.1959.0200](https://doi.org/10.1098/rspa.1959.0200)
-
-        ??? quote "BibTeX"
-
-            ```bibtex
-            @article{richards1959electromagnetic,
-              author  = {Richards, B. and Wolf, E.},
-              title   = {Electromagnetic diffraction in optical systems
-                         {II}. {Structure} of the image field in an
-                         aplanatic system},
-              journal = {Proceedings of the Royal Society of London.
-                         Series A, Mathematical and Physical Sciences},
-              volume  = {253},
-              number  = {1274},
-              pages   = {358--379},
-              year    = {1959},
-              doi     = {10.1098/rspa.1959.0200}
-            }
-            ```
     """
     full, step, ndim = _shape_spacing(shape, spacing)
     k, aperture = _optics(wavelength, numerical_aperture, refractive_index)
