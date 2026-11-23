@@ -3,12 +3,11 @@
 import math
 from collections.abc import Callable, Sequence
 
-import numpy as np
 import torch
 from torch import Tensor
 
 from .._config import get_config, resolve_backend
-from ..special import bessel_j012
+from ..special import bessel_j012, gauss_legendre
 
 __all__ = [
     "richards_wolf",
@@ -17,10 +16,21 @@ __all__ = [
 ]
 
 
-# Automatic number of Gauss-Legendre nodes: _NODES_MIN + _NODES_SLOPE · Φ,
-# with Φ the largest phase excursion of the integrand over the aperture.
+# Automatic number of Gauss-Legendre nodes:
+#     _NODES_MIN + ⌈_NODES_SLOPE · Φ + _NODES_EDGE · (k r sin α)^⅓⌉,
+# with Φ the largest phase excursion of the integrand over the aperture
+# (k r sin α + |kz| (1 − cos α) + the total variation of ψ). The cube-root
+# term is the transition margin of J_n(k r sin θ) near θ = 90°, where the
+# Bessel argument behaves as 2 k r √(1 − s) in s = √cos θ.
 _NODES_MIN = 24
 _NODES_SLOPE = 0.5
+_NODES_EDGE = 4.0
+# Samples of ψ on [0, α] used to measure its total variation.
+_PHASE_SAMPLES = 4097
+# Complex work arrays per (point, node, Bessel sample) in the quadrature:
+# the Bessel argument, its cosine and sine and two products.
+_WORK_ARRAYS = 5
+_BESSEL_SAMPLES = 17
 
 PupilPhase = Callable[[Tensor], Tensor]
 
@@ -30,21 +40,57 @@ PupilPhase = Callable[[Tensor], Tensor]
 # --------------------------------------------------------------------------
 
 
-def _gauss_legendre(
-    n: int, lower: float, upper: float, backend: dict
-) -> tuple[Tensor, Tensor]:
-    """Gauss-Legendre nodes and weights on [lower, upper]."""
-    x, w = np.polynomial.legendre.leggauss(n)
-    half = 0.5 * (upper - lower)
-    nodes = torch.as_tensor(lower + half * (x + 1), dtype=torch.float64)
-    weights = torch.as_tensor(half * w, dtype=torch.float64)
-    return nodes.to(**backend), weights.to(**backend)
+def _eval_phase(pupil_phase: PupilPhase, theta: Tensor) -> Tensor:
+    """ψ(θ), checked to be real, finite and broadcastable to θ."""
+    psi = pupil_phase(theta)
+    psi = torch.as_tensor(psi, device=theta.device)
+    if psi.is_complex():
+        raise TypeError(
+            "pupil_phase must return a real phase ψ(θ), in radians, got a "
+            "complex tensor"
+        )
+    try:
+        shape = torch.broadcast_shapes(psi.shape, theta.shape)
+    except RuntimeError:
+        shape = None
+    if shape != theta.shape:
+        raise ValueError(
+            "pupil_phase must return a tensor broadcastable to the shape "
+            f"of θ, {tuple(theta.shape)}, got {tuple(psi.shape)}"
+        )
+    psi = psi.to(theta.dtype).expand(theta.shape)
+    if not bool(torch.isfinite(psi).all()):
+        raise ValueError("pupil_phase returned non-finite values")
+    return psi
 
 
-def _auto_nodes(aperture: float, radial: float, axial: float) -> int:
-    """Number of nodes for the largest |kρ| and |kz| of a request."""
-    phase = radial * math.sin(aperture) + axial * (1 - math.cos(aperture))
-    return _NODES_MIN + math.ceil(_NODES_SLOPE * phase)
+def _phase_variation(
+    aperture: float, pupil_phase: PupilPhase | None, backend: dict
+) -> float:
+    """Total variation of ψ(θ) on [0, α], on a dense grid of θ."""
+    if pupil_phase is None:
+        return 0.0
+    theta = torch.linspace(0, aperture, _PHASE_SAMPLES, **backend)
+    psi = _eval_phase(pupil_phase, theta)
+    return float((psi[1:] - psi[:-1]).abs().sum())
+
+
+def _auto_nodes(
+    aperture: float, radial: float, axial: float, variation: float = 0.0
+) -> int:
+    """Number of nodes for the largest k r and |kz| of a request, and the
+    total variation of ψ."""
+    lateral = radial * math.sin(aperture)
+    phase = lateral + axial * (1 - math.cos(aperture)) + variation
+    extra = _NODES_SLOPE * phase + _NODES_EDGE * lateral ** (1 / 3)
+    return _NODES_MIN + math.ceil(extra)
+
+
+def _chunk_size(nodes: int, dtype: torch.dtype) -> int:
+    """Number of points per chunk of the quadrature, from the budget."""
+    itemsize = torch.finfo(dtype).bits // 8
+    per_point = _WORK_ARRAYS * itemsize * nodes * _BESSEL_SAMPLES
+    return max(1, get_config().memory // per_point)
 
 
 def _check_aperture(aperture: float) -> float:
@@ -72,7 +118,10 @@ def _pupil(
     Gauss-Legendre converges exponentially up to α = 90°.
     """
     lower = math.sqrt(max(math.cos(aperture), 0.0))
-    s, w = _gauss_legendre(nodes, lower, 1.0, backend)
+    x, w = gauss_legendre(nodes, dtype=torch.float64)  # on [−1, 1]
+    half = 0.5 * (1.0 - lower)
+    s = (lower + half * (x + 1)).to(**backend)
+    w = (half * w).to(**backend)
     cos = s * s
     sin = torch.sqrt((1 - cos * cos).clamp_min(0))
     base = 2 * cos * w
@@ -85,7 +134,7 @@ def _pupil(
     }
     if pupil_phase is not None:
         theta = torch.acos(cos.clamp(-1, 1))
-        out["psi"] = torch.as_tensor(pupil_phase(theta)).to(**backend)
+        out["psi"] = _eval_phase(pupil_phase, theta)
     else:
         out["psi"] = torch.zeros_like(cos)
     return out
@@ -106,17 +155,18 @@ def richards_wolf_integrals(
 ) -> tuple[Tensor, Tensor, Tensor]:
     """The integrals I₀, I₁, I₂ of Richards & Wolf (1959), Eq. (2.32).
 
-        I₀ = ∫₀^α √cos θ sin θ (1 + cos θ) J₀(kρ sin θ) e^{ikz cos θ} dθ,
-        I₁ = ∫₀^α √cos θ sin²θ J₁(kρ sin θ) e^{ikz cos θ} dθ,
-        I₂ = ∫₀^α √cos θ sin θ (1 − cos θ) J₂(kρ sin θ) e^{ikz cos θ} dθ,
+        I₀ = ∫₀^α √cos θ sin θ (1 + cos θ) J₀(k r sin θ) e^{ikz cos θ} dθ,
+        I₁ = ∫₀^α √cos θ sin²θ J₁(k r sin θ) e^{ikz cos θ} dθ,
+        I₂ = ∫₀^α √cos θ sin θ (1 − cos θ) J₂(k r sin θ) e^{ikz cos θ} dθ,
 
-    with α the angular semi-aperture on the image side, k = 2π n / λ₀
-    the wave number in the image space, ρ = √(x² + y²) the distance from
-    the axis and z the distance from the Gaussian focus along the axis,
-    positive away from the exit pupil (kρ = k r_P sin θ_P and
-    kz = k r_P cos θ_P in the paper). In the optical coordinates of
-    Eq. (3.1a), u = kz sin²α and v = kρ sin α, these are the integrals
-    of Eq. (3.2).
+    with α the angular semi-aperture on the image side, k = n k₀ the wave
+    number in the image space (k₀ = 2π / λ₀, λ₀ the vacuum wavelength,
+    n the refractive index), r = √(x² + y²) the distance from the axis
+    and z the distance from the Gaussian focus along the axis, positive
+    away from the exit pupil (k r = k r_P sin θ_P and kz = k r_P cos θ_P
+    in the paper). In the optical coordinates of Eq. (3.1a),
+    u = kz sin²α and v = k r sin α, these are the integrals of
+    Eq. (3.2).
 
     The integrals are computed by Gauss-Legendre quadrature in the
     variable s = √cos θ, in which the three integrands are analytic on
@@ -154,15 +204,19 @@ def richards_wolf_integrals(
     Parameters
     ----------
     radial : Tensor or float
-        kρ, the radial optical distance (≥ 0).
+        k r, the radial optical distance (≥ 0).
     axial : Tensor or float
         kz, the axial optical distance. Broadcast with `radial`.
     aperture : float
         Angular semi-aperture α, in radians, in (0, π/2].
     nodes : int, optional
         Number of quadrature nodes. Default:
-        24 + ⌈½ (max kρ · sin α + max |kz| · (1 − cos α))⌉, which keeps
-        the error at the level of the floating-point precision.
+        24 + ⌈½ Φ + 4 (max k r · sin α)^⅓⌉, with
+        Φ = max k r · sin α + max |kz| · (1 − cos α) + TV(ψ) the largest
+        phase excursion of the integrand and TV(ψ) the total variation
+        of `pupil_phase` on [0, α] (measured on 4097 values of θ). This
+        keeps the error near 10⁻¹² of I₀(0, 0) in float64, up to
+        α = 90°, for a smooth ψ (see below).
     pupil_phase : callable, optional
         Extension (not in the aplanatic model of the paper): a phase
         ψ(θ) = kΦ(θ), in radians, multiplied into the integrands as
@@ -170,13 +224,24 @@ def richards_wolf_integrals(
         paper sets to zero for an aplanatic system (Eq. 2.7); ψ must
         depend on θ only (not on the azimuth), so that the azimuthal
         integration (2.29) still applies. Called with a tensor of polar
-        angles θ, it returns a tensor of the same shape.
+        angles θ, it returns a real tensor broadcastable to the shape of
+        θ (a `TypeError` or `ValueError` is raised otherwise). It is a
+        phase only: it carries an optical path difference (e.g. that of
+        an index mismatch), but not amplitudes that differ between the s
+        and p components, such as the Fresnel transmission coefficients
+        of an interface, which enter I₀, I₁ and I₂ with different
+        weights. The quadrature converges exponentially only if ψ is a
+        smooth function of sin²θ (even in θ, e.g. a polynomial in cos θ
+        or sin²θ); a term odd in θ, such as ∝ sin θ, makes the
+        convergence algebraic, and `nodes` must then be raised by hand.
 
     Returns
     -------
     I0, I1, I2 : Tensor
         Complex tensors of the broadcast shape of `radial` and `axial`.
-        The work memory is that shape times the number of nodes.
+        The points are processed in chunks within the memory budget of
+        `optix.config`: each point and node holds 17 Bessel samples in
+        about five work arrays.
     """
     aperture = _check_aperture(aperture)
     radial = torch.as_tensor(radial)
@@ -189,14 +254,23 @@ def richards_wolf_integrals(
     if nodes is None:
         max_r = float(radial.abs().max()) if radial.numel() else 0.0
         max_z = float(axial.abs().max()) if axial.numel() else 0.0
-        nodes = _auto_nodes(aperture, max_r, max_z)
-    q = _pupil(aperture, int(nodes), pupil_phase, backend)
-    phase = axial[..., None] * q["cos"] + q["psi"]
-    expo = torch.polar(torch.ones_like(phase), phase)
-    j0, j1, j2 = bessel_j012(radial[..., None] * q["sin"])
-    i0 = (expo * (q["g0"] * j0)).sum(-1)
-    i1 = (expo * (q["g1"] * j1)).sum(-1)
-    i2 = (expo * (q["g2"] * j2)).sum(-1)
+        variation = _phase_variation(aperture, pupil_phase, backend)
+        nodes = _auto_nodes(aperture, max_r, max_z, variation)
+    nodes = int(nodes)
+    q = _pupil(aperture, nodes, pupil_phase, backend)
+    shape = radial.shape
+    radial, axial = radial.reshape(-1), axial.reshape(-1)
+    chunk = _chunk_size(nodes, dtype)
+    out: list[list[Tensor]] = [[], [], []]
+    # One pass at least, so that an empty request returns empty tensors.
+    for start in range(0, max(radial.numel(), 1), chunk):
+        r = radial[start : start + chunk, None]
+        phase = axial[start : start + chunk, None] * q["cos"] + q["psi"]
+        expo = torch.polar(torch.ones_like(phase), phase)
+        js = bessel_j012(r * q["sin"])
+        for n, (g, j) in enumerate(zip(("g0", "g1", "g2"), js, strict=True)):
+            out[n].append((expo * (q[g] * j)).sum(-1))
+    i0, i1, i2 = (torch.cat(o).reshape(shape) for o in out)
     return i0, i1, i2
 
 
@@ -207,20 +281,18 @@ def _grid_integrals(
     nodes: int,
     pupil_phase: PupilPhase | None,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    """I₀, I₁, I₂ on the outer product (kz, kρ), as matrix products.
+    """I₀, I₁, I₂ on the outer product (kz, k r), as matrix products.
 
-    Iₙ(z, ρ) = ∑_q e^{i(kz cos θ_q + ψ_q)} · gₙ(θ_q) Jₙ(kρ sin θ_q), i.e.
+    Iₙ(z, r) = ∑_q e^{i(kz cos θ_q + ψ_q)} · gₙ(θ_q) Jₙ(k r sin θ_q), i.e.
     a (Z, N) by (N, R) product, computed in chunks of R.
     """
     backend = {"dtype": radial.dtype, "device": radial.device}
     q = _pupil(aperture, nodes, pupil_phase, backend)
     phase = axial[:, None] * q["cos"] + q["psi"]
     cos_p, sin_p = torch.cos(phase), torch.sin(phase)  # (Z, N)
-    itemsize = torch.finfo(radial.dtype).bits // 8
     # The Bessel evaluation holds a few (N, chunk, 17) work arrays.
-    per_column = 5 * itemsize * nodes * 17
-    chunk = max(1, get_config().memory // per_column)
-    out = [[], [], []]
+    chunk = _chunk_size(nodes, radial.dtype)
+    out: list[list[Tensor]] = [[], [], []]
     for start in range(0, radial.numel(), chunk):
         r = radial[start : start + chunk]
         js = bessel_j012(q["sin"][:, None] * r)  # (N, R) each
@@ -291,17 +363,17 @@ class _Grid:
         y = (torch.arange(ny, **backend) - ny // 2) * step[1]
         x = (torch.arange(nx, **backend) - nx // 2) * step[2]
         yy, xx = torch.meshgrid(y, x, indexing="ij")
-        rho2 = (yy * yy + xx * xx).reshape(-1)
+        r2 = (yy * yy + xx * xx).reshape(-1)
         # Distinct radii only: the quadrant (and, for square pixels, the
         # diagonal) symmetries of the grid make most of them repeat.
-        unique, self.inverse = torch.unique(rho2, return_inverse=True)
-        rho = unique.sqrt()
+        unique, self.inverse = torch.unique(r2, return_inverse=True)
+        r_unique = unique.sqrt()
         self.axial = k * z
-        self.radial = k * rho
-        flat_rho = rho2.sqrt()
-        safe = torch.where(flat_rho > 0, flat_rho, torch.ones_like(flat_rho))
-        cos = torch.where(flat_rho > 0, xx.reshape(-1) / safe, 1.0)
-        sin = torch.where(flat_rho > 0, yy.reshape(-1) / safe, 0.0)
+        self.radial = k * r_unique
+        r_flat = r2.sqrt()
+        safe = torch.where(r_flat > 0, r_flat, torch.ones_like(r_flat))
+        cos = torch.where(r_flat > 0, xx.reshape(-1) / safe, 1.0)
+        sin = torch.where(r_flat > 0, yy.reshape(-1) / safe, 0.0)
         self.cos, self.sin = cos, sin
         self.cos2, self.sin2 = cos * cos - sin * sin, 2 * cos * sin
         self.shape = shape
@@ -316,7 +388,9 @@ def _integrals_on_grid(
     if nodes is None:
         max_r = float(grid.radial.max())
         max_z = float(grid.axial.abs().max())
-        nodes = _auto_nodes(aperture, max_r, max_z)
+        backend = {"dtype": grid.radial.dtype, "device": grid.radial.device}
+        variation = _phase_variation(aperture, pupil_phase, backend)
+        nodes = _auto_nodes(aperture, max_r, max_z, variation)
     i0, i1, i2 = _grid_integrals(
         grid.axial, grid.radial, aperture, int(nodes), pupil_phase
     )
@@ -502,20 +576,35 @@ def richards_wolf(
     unit solid angle that the sine condition (h = f sin θ, Eq. 2.8)
     spreads over a pupil area f² cos θ dΩ, so the pupil amplitude is
     ∝ 1/√cos θ, and the pupil area element contributes cos θ, leaving
-    √cos θ, as in Eq. (2.32). The emitter is taken in a homogeneous
-    medium of index `refractive_index` (no interface).
+    √cos θ, as in Eq. (2.32). The model also assumes that:
+
+    - the emitter is in a homogeneous medium of index
+      `refractive_index` (no interface);
+    - a fixed dipole is excited independently of its orientation (no
+      excitation selection by a polarised illumination);
+    - the result is the detection PSF only: a confocal or light-sheet
+      system multiplies it by an illumination PSF.
+
+    The prefactor 1/16π is kept from Eq. (3.14) for continuity with the
+    focal energy density; it has no physical meaning for an emitter (the
+    2/3 of the isotropic case is not a collection efficiency).
 
     **Extension: pupil phase** (`pupil_phase`, not in the paper): an
-    aberration ψ(θ) multiplied into the integrands; see
+    aberration phase e^{iψ(θ)} multiplied into the integrands. It is a
+    phase only (no s- and p-dependent amplitudes, such as Fresnel
+    coefficients), and ψ should be a smooth function of sin²θ; see
     [`richards_wolf_integrals`][optix.psf.utils.richards_wolf_integrals].
 
     **Evaluation.** The integrals are computed by Gauss-Legendre
     quadrature in s = √cos θ, for each axial position and each distinct
     distance from the axis on the grid (as matrix products), with Bessel
     functions accurate to ~10⁻¹⁵ ([`bessel_j012`][optix.special.bessel_j012]).
-    The default number of nodes keeps the error near the floating-point
-    precision (about 10⁻¹² of the peak in float64). It runs on any torch
-    device.
+    The default number of nodes, which accounts for the grid extent and
+    for the total variation of ψ, keeps the error near 10⁻¹² of the
+    peak in float64. The Bessel work arrays are chunked within the
+    memory budget of `optix.config`; I₀, I₁, I₂ are then gathered onto
+    every voxel, so the peak memory is about ten times the size of the
+    output. It runs on any torch device.
 
     !!! references "References"
 
@@ -554,7 +643,8 @@ def richards_wolf(
         NA = n sin α, at most `refractive_index`.
     refractive_index : float
         Refractive index n of the image space (immersion medium); the
-        wave number is k = 2π n / λ₀. The paper takes n = 1.
+        wave number is k = n k₀, with k₀ = 2π / λ₀. The paper takes
+        n = 1.
     spacing : float or sequence of float
         Voxel size, per axis.
     polarization : {"x", "y", "unpolarized"} or float
@@ -564,7 +654,8 @@ def richards_wolf(
         Extension: return the detection PSF of a fluorescent emitter
         (see above) instead of the focal energy density.
     pupil_phase : callable, optional
-        Extension: aberration phase ψ(θ), in radians.
+        Extension: aberration phase ψ(θ), in radians (real, smooth in
+        sin²θ; see above).
     normalize : {None, "focus", "sum"}
         None (default): ⟨w_e⟩ with A = 1, the paper's quantity;
         `"focus"`: divided by its value at the Gaussian focus (1 there;

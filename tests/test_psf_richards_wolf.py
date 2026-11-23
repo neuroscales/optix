@@ -5,6 +5,7 @@ import math
 import pytest
 import torch
 
+import optix
 from optix.psf import richards_wolf
 from optix.psf.utils import (
     fwhm,
@@ -29,34 +30,8 @@ def _i0_focus(alpha):
 
 
 # --------------------------------------------------------------------------
-# Special functions and quadrature
+# Quadrature
 # --------------------------------------------------------------------------
-
-
-def test_bessel_j012_against_mpmath():
-    mpmath = pytest.importorskip("mpmath")
-    x = torch.cat(
-        [
-            torch.linspace(0, 30, 301, dtype=F64),
-            torch.tensor([1e-8, 4.9, 5.0, 5.1, 24.99, 25.0, 80.0, 1e3]),
-            -torch.tensor([0.3, 7.0, 40.0], dtype=F64),
-        ]
-    )
-    out = bessel_j012(x)
-    for n, j in enumerate(out):
-        ref = torch.tensor(
-            [float(mpmath.besselj(n, float(v))) for v in x], dtype=F64
-        )
-        assert (j - ref).abs().max() < 5e-15
-
-
-def test_bessel_j012_float32(device):
-    x = torch.linspace(0, 60, 601, dtype=F64)
-    ref = bessel_j012(x)
-    out = bessel_j012(x.float().to(device))
-    for a, b in zip(out, ref, strict=True):
-        assert a.dtype == torch.float32
-        assert (a.cpu().double() - b).abs().max() < 2e-6
 
 
 @pytest.mark.parametrize("alpha", [0.1, math.radians(60), math.pi / 2])
@@ -96,6 +71,104 @@ def test_quadrature_convergence(alpha):
     assert error(None) < 1e-12
 
 
+# I₀, I₁, I₂ by 30-digit mpmath quadrature of Eq. (2.32) in θ
+# (`mpmath.quad`, tanh-sinh, on 39 subintervals of [0, α]), independent of
+# the change of variable s = √cos θ: (α, k r, kz, (I₀, I₁, I₂)).
+_MPMATH = [
+    (0.2, 3.0, -4.0, (
+        complex(-0.025762388049069623, 0.027569943483217566),
+        complex(-0.00039538739848376108, 0.00041164416105225466),
+        complex(-3.9917034403066641e-6, 4.0997949882595635e-6),
+    )),
+    (0.7, 12.5, 6.0, (
+        complex(-0.0056340383562645738, -0.028947944623722171),
+        complex(-0.0038309127020032134, 0.0027951933324114732),
+        complex(-0.00042502699604022527, 0.0040625689662686347),
+    )),
+    (1.1, 25.0, -30.0, (
+        complex(0.043970735253438099, 0.0110839300114203),
+        complex(-0.0044709045133628862, 0.014849188038342228),
+        complex(-0.0070477580850881278, -0.0021508004769221897),
+    )),
+    (math.pi / 3, 7.0, 15.0, (
+        complex(-0.099000003568155522, 0.075434863613034191),
+        complex(0.025080108586518638, 0.019283360324816628),
+        complex(0.010467004570878374, -0.0065206721526317083),
+    )),
+    (math.pi / 2, 40.0, 60.0, (
+        complex(0.0030669372752628702, 0.022977405480664354),
+        complex(0.0068005886739252333, -0.00065005226174616263),
+        complex(-0.00021673990722399145, -0.0021128418475517111),
+    )),
+    (math.pi / 2, 5.5, -2.5, (
+        complex(-0.050596090846970491, 0.14466799303425131),
+        complex(-0.077653293683865924, 0.039932695609893306),
+        complex(-0.012648914708148421, -0.030281098789178111),
+    )),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("alpha", "kr", "kz", "expected"), _MPMATH)
+def test_integrals_against_mpmath(alpha, kr, kz, expected):
+    """Off the focal plane, against an independent quadrature."""
+    kr_t = torch.tensor(kr, dtype=F64)
+    kz_t = torch.tensor(kz, dtype=F64)
+    out = richards_wolf_integrals(kr_t, kz_t, alpha)
+    for got, ref in zip(out, expected, strict=True):
+        assert abs(complex(got) - ref) < 1e-14
+
+
+@pytest.mark.parametrize("kr_max", [200.0, 1000.0])
+def test_auto_nodes_full_aperture_focal_plane(kr_max):
+    """α = 90° in the focal plane, where the Bessel argument varies
+    fastest near θ = 90°: the automatic node count stays accurate."""
+    alpha = math.pi / 2
+    kr = torch.linspace(0, kr_max, 401, dtype=F64)
+    kz = torch.zeros_like(kr)
+    auto = richards_wolf_integrals(kr, kz, alpha)
+    ref = richards_wolf_integrals(kr, kz, alpha, nodes=int(1.2 * kr_max) + 300)
+    scale = _i0_focus(alpha)
+    for a, b in zip(auto, ref, strict=True):
+        assert float((a - b).abs().max()) < 1e-12 * scale
+
+
+@pytest.mark.parametrize("delta", [20.0, 50.0])
+def test_auto_nodes_large_pupil_phase(delta):
+    """ψ = k δ cos θ is an axial shift: Iₙ(k r, kz; ψ) = Iₙ(k r, kz + kδ).
+    The automatic node count accounts for the variation of ψ."""
+    lam, n, na = 0.52, 1.518, 1.4
+    k = 2 * math.pi * n / lam
+    alpha = math.asin(na / n)
+    z = (torch.arange(41, dtype=F64) - 20) * 0.1
+    r = torch.linspace(0, 1.0, 11, dtype=F64)
+    kr, kz = torch.meshgrid(k * r, k * z, indexing="ij")
+    out = richards_wolf_integrals(
+        kr, kz, alpha, pupil_phase=lambda t: k * delta * torch.cos(t)
+    )
+    ref = richards_wolf_integrals(kr, kz + k * delta, alpha)
+    scale = _i0_focus(alpha)
+    for a, b in zip(out, ref, strict=True):
+        assert float((a - b).abs().max()) < 1e-12 * scale
+
+
+def test_chunked_integrals():
+    """A small memory budget splits the radii into chunks, in both the
+    pointwise and the grid evaluation."""
+    kw = {**OPTICS, "spacing": SPACING, "dtype": F64}
+    shape = (6, 20, 21)
+    kr = torch.linspace(0, 60, 97, dtype=F64)[:, None]
+    kz = torch.linspace(-20, 20, 5, dtype=F64)[None]
+    alpha = math.radians(70)
+    ref_w = richards_wolf(shape, **kw)
+    ref_i = richards_wolf_integrals(kr, kz, alpha)
+    with optix.config(memory=20000):
+        w = richards_wolf(shape, **kw)
+        ints = richards_wolf_integrals(kr, kz, alpha)
+    torch.testing.assert_close(w, ref_w, atol=1e-16, rtol=1e-13)
+    for a, b in zip(ints, ref_i, strict=True):
+        torch.testing.assert_close(a, b, atol=1e-16, rtol=1e-13)
+
+
 def test_conjugate_symmetry():
     """Iₙ(−u, v) = Iₙ*(u, v), Eq. (3.3)."""
     alpha = math.radians(75)
@@ -122,7 +195,7 @@ _TABLE1 = {
         (1.83, 1.94, 2.27, 2.50, 2.63),
         (2.36, 2.50, 2.93, 3.14, 3.23),
         (3.83, 4.15, 4.75, 4.75, 4.70),
-        (7.02, None, 8.10, 8.10, 8.00),  # α = 30°: 7.03 in the table
+        (7.02, 7.03, 8.10, 8.10, 8.00),  # α = 30°: see _SHALLOW
     ],
     "we_phi90": [
         (0.93, 0.93, 0.89, 0.86, 0.84),
@@ -145,10 +218,19 @@ _TABLE1 = {
         (1.40, 1.40, 1.39, 1.38, 1.36),
         (1.83, 1.83, 1.82, 1.82, 1.79),
         (2.36, 2.36, 2.34, 2.33, 2.27),
-        (3.83, None, 3.80, 3.76, 3.70),  # α = 30°: 3.80 in the table
+        (3.83, 3.80, 3.80, 3.76, 3.70),  # α = 30°: see _SHALLOW
         (7.02, 7.02, 7.02, 7.02, 6.95),
     ],
 }
+
+# Two minima at α = 30° are too shallow for the precision of the 1959
+# ordinates: the minimum of ⟨w_e⟩(φ = 0) is at v = 7.254 (table 7.03) and
+# the first minimum of ⟨S_z⟩ at v = 3.830 (table 3.80), but between the two
+# abscissae the curves change by only 0.024 and 0.004 on the table's scale
+# of 100, below the resolution of its ordinates. For these entries the
+# curve at the table's v is compared with its value at the minimum, within
+# 0.03 on the scale of 100. (name, row, column)
+_SHALLOW = {("we_phi0", 5, 1), ("poynting_z", 4, 1)}
 
 
 def _features(profile, v):
@@ -169,7 +251,8 @@ def _features(profile, v):
 def test_table1(column):
     """Table 1 (focal plane, u = 0): within 0.03 in v (the table is
     given to 0.01 and its α → 0 column departs from the exact Airy values
-    by up to 0.01)."""
+    by up to 0.01), or in the ordinate for two shallow minima (see
+    `_SHALLOW`)."""
     deg = _ALPHAS[column]
     alpha = math.radians(deg) if deg > 0 else 1e-3
     v = torch.linspace(0, 9, 9001, dtype=F64)
@@ -183,10 +266,22 @@ def test_table1(column):
         "unpolarized": (a0 + 2 * a1 + a2) / focus,
         "poynting_z": (a0 - a2) / focus,
     }
+    dv = float(v[1] - v[0])
+
+    def at(curve, x):  # linear interpolation on the v grid
+        i = int(x / dv)
+        t = x / dv - i
+        return float((1 - t) * curve[i] + t * curve[i + 1])
+
     for name, rows in _TABLE1.items():
         found = _features(curves[name], v)
         for row, (expected, got) in enumerate(zip(rows, found, strict=False)):
             if expected[column] is None:
+                continue
+            if (name, row, column) in _SHALLOW:
+                curve = curves[name]
+                depth = abs(at(curve, expected[column]) - at(curve, got))
+                assert 100 * depth < 0.03, (name, row, depth)
                 continue
             tol = 0.025 if row < 4 else 0.03
             assert got == pytest.approx(expected[column], abs=tol), (
@@ -206,16 +301,28 @@ def test_table1_low_aperture_is_airy():
         assert a == pytest.approx(b, abs=2e-4)
 
 
-@pytest.mark.parametrize("deg", [30, 60, 90])
-def test_energy_conservation(deg):
-    """Flux of ⟨S_z⟩ (Eq. 3.21) through the focal plane equals the power
-    entering the pupil: ∫₀^∞ (|I₀|² − |I₂|²) v dv = 2 sin⁴α (Parseval on
-    Eq. 2.2, with |a|² = f² l₀² cos θ from Eq. 2.13). The truncated
-    integral converges as 1/V; the tail is extrapolated."""
+@pytest.mark.parametrize(
+    ("deg", "kz", "psi"),
+    [
+        (30, 0.0, None),
+        (60, 0.0, None),
+        (90, 0.0, None),
+        (60, 7.3, None),
+        (75, 3.0, lambda t: 3 * torch.sin(t) ** 4),
+    ],
+)
+def test_energy_conservation(deg, kz, psi):
+    """Net flux of ⟨S_z⟩ (Eq. 3.21) through a plane z = const equals the
+    power entering the pupil: ∫₀^∞ (|I₀|² − |I₂|²) v dv = 2 sin⁴α (Parseval
+    on Eq. 2.2, with |a|² = f² l₀² cos θ from Eq. 2.13), in every plane and
+    for any phase ψ(θ). The truncated integral converges as 1/V; the tail
+    is extrapolated."""
     alpha = math.radians(deg)
     big = 200.0
     v = torch.linspace(0, big, 20001, dtype=F64)
-    i0, _, i2 = richards_wolf_integrals(v / math.sin(alpha), 0.0, alpha)
+    i0, _, i2 = richards_wolf_integrals(
+        v / math.sin(alpha), kz, alpha, pupil_phase=psi
+    )
     f = (i0.abs() ** 2 - i2.abs() ** 2) * v
     cum = torch.cumsum((f[1:] + f[:-1]) / 2 * float(v[1] - v[0]), 0)
     upper = v[1:]
@@ -370,6 +477,74 @@ def test_pupil_phase():
         shape, **kw, pupil_phase=lambda t: k * delta * torch.cos(t)
     )
     torch.testing.assert_close(moved[:-3], base[3:], atol=1e-15, rtol=1e-10)
+
+
+def _rotated_field(e):
+    """e⁽ʸ⁾ from e⁽ˣ⁾ on a square, odd-sized, centred grid: the rotation by
+    90° about the axis, e⁽ʸ⁾(x, y) = R e⁽ˣ⁾(y, −x) with R(a, b) = (−b, a)."""
+    g = e.transpose(-1, -2).flip(-1)  # g(iy, ix) = e(N − 1 − ix, iy)
+    return torch.stack([-g[1], g[0], g[2]])
+
+
+def test_rotated_field_matches_paper_form():
+    """e⁽ʸ⁾ = −iA (I₂ sin 2φ, I₀ − I₂ cos 2φ, −2i I₁ sin φ)."""
+    shape = (5, 17, 17)
+    kw = {**OPTICS, "spacing": (0.1, 0.04, 0.04), "dtype": F64}
+    e = richards_wolf_field(shape, **kw)
+    ey = _rotated_field(e)
+    # On the y axis (φ = π/2), e⁽ʸ⁾ = −iA (0, I₀ + I₂, −2i I₁), i.e. the
+    # x-polarised field on the x axis with x and y exchanged.
+    torch.testing.assert_close(
+        ey[1, :, :, 8], e[0, :, 8, :], atol=1e-16, rtol=0
+    )
+    torch.testing.assert_close(
+        ey[2, :, :, 8], e[2, :, 8, :], atol=1e-16, rtol=0
+    )
+
+
+@pytest.mark.parametrize("phi0", [0.6, -1.1, 2.5])
+def test_polarization_angle(phi0):
+    """Polarisation at φ₀: the field cos φ₀ e⁽ˣ⁾ + sin φ₀ e⁽ʸ⁾ (Eq. 5.1)."""
+    shape = (6, 17, 17)
+    kw = {**OPTICS, "spacing": (0.1, 0.04, 0.04), "dtype": F64}
+    e = richards_wolf_field(shape, **kw)
+    field = math.cos(phi0) * e + math.sin(phi0) * _rotated_field(e)
+    expected = field.abs().square().sum(0) / (16 * math.pi)
+    w = richards_wolf(shape, **kw, polarization=phi0)
+    torch.testing.assert_close(w, expected, atol=1e-16, rtol=1e-12)
+
+
+@pytest.mark.parametrize("p", [(0.3, -0.5, 0.8), (-1.0, 2.0, 0.5)])
+def test_oblique_dipole(p):
+    """A fixed dipole: |p · e⁽ˣ⁾|² + |p · e⁽ʸ⁾|², sensitive to the relative
+    signs of the cross terms."""
+    shape = (6, 17, 17)
+    kw = {**OPTICS, "spacing": (0.1, 0.04, 0.04), "dtype": F64}
+    e = richards_wolf_field(shape, **kw)
+    ey = _rotated_field(e)
+    unit = torch.tensor(p, dtype=F64)
+    unit = (unit / unit.norm()).to(e.dtype)
+    proj = torch.einsum("c,c...->...", unit, e).abs().square()
+    proj = proj + torch.einsum("c,c...->...", unit, ey).abs().square()
+    out = richards_wolf(shape, **kw, emitter=p)
+    torch.testing.assert_close(
+        out, proj / (16 * math.pi), atol=1e-16, rtol=1e-12
+    )
+
+
+def test_pupil_phase_validation():
+    kw = {**OPTICS, "spacing": SPACING, "dtype": F64}
+    with pytest.raises(TypeError, match="real"):
+        richards_wolf((3, 5, 5), **kw, pupil_phase=lambda t: 1j * t)
+    with pytest.raises(ValueError, match="broadcastable"):
+        richards_wolf((3, 5, 5), **kw, pupil_phase=lambda t: t[:2])
+    with pytest.raises(ValueError, match="non-finite"):
+        richards_wolf((3, 5, 5), **kw, pupil_phase=lambda t: 1 / (t - t))
+    # A scalar broadcasts.
+    same = richards_wolf(
+        (3, 5, 5), **kw, pupil_phase=lambda t: torch.tensor(0.4)
+    )
+    torch.testing.assert_close(same, richards_wolf((3, 5, 5), **kw))
 
 
 def test_emitters():

@@ -149,6 +149,10 @@ Lengths share one unit; the Gibson–Lanni defaults are in µm.
 | $\mathrm{OPD}$ | optical path difference between the actual and the design ray | length | `gibson_lanni_opd` | Gibson–Lanni |
 | $\psi$ | phase aberration of the pupil; $\psi = k_0\,\mathrm{OPD}$ | rad | `pupil_phase` | both |
 | $\mathbf{e}$ | electric field near the focus | | `richards_wolf_field` | Richards–Wolf |
+| $I_0$, $I_1$, $I_2$ | the diffraction integrals of the focal field | | `richards_wolf_integrals` | Richards–Wolf |
+| $u$, $v$ | optical coordinates, $u = kz\sin^2\alpha$, $v = k r \sin\alpha$ | | | Richards–Wolf |
+| $\varphi_0$ | azimuth of the electric vector of the incident wave, from the $x$ axis | rad | `polarization` | Richards–Wolf |
+| $\mathbf{p}$ | orientation of an emitting dipole (unit vector) | | `emitter` | Richards–Wolf |
 | $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
 | $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
 | $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
