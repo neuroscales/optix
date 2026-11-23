@@ -1,3 +1,7 @@
+---
+icon: fontawesome/solid/lightbulb
+---
+
 # Concepts
 
 These pages explain the ideas behind optix, without going through every
