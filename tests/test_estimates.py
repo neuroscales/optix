@@ -97,6 +97,30 @@ def test_shading_normalize():
         sh.normalize("median")
 
 
+@pytest.mark.parametrize("units", ["raw", "signal"])
+@pytest.mark.parametrize("mode", ["mean", "geomean"])
+def test_shading_normalize_keeps_model_consistent(units, mode):
+    g = torch.Generator().manual_seed(0)
+    flat = 0.5 + torch.rand(3, 4, generator=g, dtype=torch.float64)
+    dark = torch.rand(3, 4, generator=g, dtype=torch.float64)
+    baseline = torch.tensor([0.3, -0.7, 1.2], dtype=torch.float64)
+    x = torch.rand(3, 3, 4, generator=g, dtype=torch.float64)
+    sh = ShadingEstimate(
+        flat=flat, dark=dark, baseline=baseline,
+        meta={"baseline_units": units},
+    )
+    c = flat.mean() if mode == "mean" else flat.log().mean().exp()
+    y = sh.shade(x)
+    n = sh.normalize(mode)
+    torch.testing.assert_close(n.correct(y), c * x)
+    torch.testing.assert_close(n.shade(c * x), y)
+    if units == "raw":
+        assert torch.equal(n.baseline, baseline)
+    else:
+        torch.testing.assert_close(n.baseline, c * baseline)
+    assert ShadingEstimate(flat=flat).normalize(mode).baseline is None
+
+
 def test_classification_minimal():
     c = Classification(weights=torch.tensor([0.3, 0.7]))
     assert c.parameters is None

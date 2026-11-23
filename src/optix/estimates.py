@@ -367,6 +367,16 @@ class ShadingEstimate(Estimate):
     def normalize(self, mode: str = "mean") -> Self:
         """Rescale the flat field so that its mean (or geometric mean) is 1.
 
+        With c the mean (or geometric mean) of the flat, the flat becomes
+        f / c and the scale c moves into the signal: x̂ = c · x.  The
+        dark is unchanged.  The baseline bᵢ is unchanged when
+        `baseline_units == "raw"` (y = f · x + d + bᵢ), and becomes
+        c · bᵢ when it is `"signal"` (y = f ⊙ (x + bᵢ) + d), so that
+        `shade` and `correct` stay consistent with x̂.  A baseline norm
+        derived from the baseline (BaSiC's `baseline_norm="mean"`)
+        follows automatically; a numeric `norm` passed to `correct` is
+        in the units of the (rescaled) baseline.
+
         Parameters
         ----------
         mode : {"mean", "geomean"}
@@ -374,9 +384,8 @@ class ShadingEstimate(Estimate):
         Returns
         -------
         ShadingEstimate
-            Copy with the rescaled flat and `meta["flat_norm"] = mode`.
-            `dark` and `baseline` are unchanged (the scale moves into
-            the signal `x`).
+            Copy with the rescaled flat (and signal-units baseline) and
+            `meta["flat_norm"] = mode`.
         """
         _need(self, "flat")
         if mode == "mean":
@@ -385,8 +394,14 @@ class ShadingEstimate(Estimate):
             scale = self.flat.log().mean().exp()
         else:
             raise ValueError(f"mode must be 'mean' or 'geomean', got {mode}")
+        baseline = self.baseline
+        if baseline is not None and self.baseline_units == "signal":
+            baseline = baseline * scale.to(baseline)
         return dataclasses.replace(
-            self, flat=self.flat / scale, meta={**self.meta, "flat_norm": mode}
+            self,
+            flat=self.flat / scale,
+            baseline=baseline,
+            meta={**self.meta, "flat_norm": mode},
         )
 
 
