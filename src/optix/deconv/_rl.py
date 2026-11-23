@@ -1,6 +1,5 @@
 """Richardson–Lucy deconvolution, block-wise with halos."""
 
-import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -42,12 +41,15 @@ def rl_step(
     background: Tensor | float = 0.0,
     damping: float = 1.0,
     mu: Tensor | None = None,
+    flat: Tensor | None = None,
 ) -> Tensor:
     """One Richardson–Lucy update on a block.
 
         f ← f · (1 − ε + ε c),   c = Hᵀ[y / (H f + b)] / Hᵀ1,
 
-    with ε = `damping` (ε = 1: the plain update f ← f · c).
+    with ε = `damping` (ε = 1: the plain update f ← f · c). With a flat
+    field β, the model is y ~ Poisson(β·H f + b) and
+    c = Hᵀ[β·y / (β·H f + b)] / Hᵀβ (Snyder et al. 1993, Eq. 15).
 
     Parameters
     ----------
@@ -58,14 +60,17 @@ def rl_step(
     op : PaddedConvolution
         Blur operator H.
     inv_norm : Tensor
-        1 / Hᵀ1 on the object grid, 0 where Hᵀ1 vanishes (object pixels
-        that do not reach the block).
+        1 / Hᵀ1 (1 / Hᵀβ with a flat field) on the object grid, 0 where
+        it vanishes (object pixels that do not reach the block).
     background : Tensor or float
         Background b added to H f (broadcasts to the block).
     damping : float
         Fraction ε ∈ (0, 1] of the multiplicative correction applied.
     mu : Tensor, optional
-        H f + b if already computed (e.g. for a stopping test).
+        H f + b (β·H f + b) if already computed (e.g. for a stopping
+        test).
+    flat : Tensor, optional
+        Flat field β ≥ 0 on the block (detection efficiency per pixel).
 
     Returns
     -------
@@ -73,18 +78,27 @@ def rl_step(
         Updated estimate, non-negative.
     """
     if mu is None:
-        mu = _expected(f, op, background)
-    c = op.adjoint(data / mu) * inv_norm
+        mu = _expected(f, op, background, flat)
+    ratio = data / mu
+    if flat is not None:
+        ratio = ratio * flat
+    c = op.adjoint(ratio) * inv_norm
     if damping != 1.0:
         c = 1.0 - damping + damping * c
     return (f * c).clamp_(min=0)
 
 
 def _expected(
-    f: Tensor, op: PaddedConvolution, background: Tensor | float
+    f: Tensor,
+    op: PaddedConvolution,
+    background: Tensor | float,
+    flat: Tensor | None = None,
 ) -> Tensor:
-    """H f + b, floored at a tiny positive value (FFT round-off)."""
-    mu = op.forward(f) + background
+    """β·H f + b, floored at a tiny positive value (FFT round-off)."""
+    mu = op.forward(f)
+    if flat is not None:
+        mu = mu * flat
+    mu = mu + background
     eps = torch.finfo(mu.dtype)
     floor = max(float(mu.max()) * eps.eps, eps.tiny)
     return mu.clamp_(min=floor)
@@ -124,6 +138,9 @@ def rl_block(
     max_iter: int = 100,
     background: Tensor | float = 0.0,
     damping: float = 1.0,
+    flat: Tensor | None = None,
+    expect: Callable[[Tensor], Tensor] | None = None,
+    variance: Tensor | float = 0.0,
 ) -> tuple[Tensor, int]:
     """Richardson–Lucy iterations on one block.
 
@@ -149,6 +166,16 @@ def rl_block(
     damping : float
         Fraction ε ∈ (0, 1] of the correction applied (see
         [`rl_step`][optix.deconv.utils.rl_step]).
+    flat : Tensor, optional
+        Flat field β of the model y ~ Poisson(β·H f + b), on the block.
+    expect : callable, optional
+        E-step for data observed through extra noise: maps the expected
+        counts μ = β·H f + b to the conditional mean of the counts given
+        the data, used in place of `data` in the update (Snyder et al.
+        1993, Eq. 18). Default: the counts are observed, `data`.
+    variance : Tensor or float
+        Variance of additive Gaussian noise on `data`, used by the χ²
+        test: χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / (μᵢ + σᵢ²).
 
     Returns
     -------
@@ -158,7 +185,7 @@ def rl_block(
     n : int
         Number of updates applied.
     """
-    norm = op.norm
+    norm = op.norm if flat is None else op.adjoint(flat)
     valid = norm > norm.max() * torch.finfo(norm.dtype).eps * 16
     tiny = torch.finfo(norm.dtype).tiny
     inv_norm = torch.where(valid, 1 / norm.clamp(min=tiny), 0)
@@ -167,17 +194,20 @@ def rl_block(
     limit = max_iter if n_iter is None else n_iter
     n = 0
     while n < limit:
-        mu = _expected(f, op, background)
-        if n_iter is None and chi2_probability(data, mu) >= alpha:
-            break
+        mu = _expected(f, op, background, flat)
+        if n_iter is None:
+            p = chi2_probability(data + variance, mu + variance)
+            if p >= alpha:
+                break
         f = rl_step(
             f,
-            data,
+            data if expect is None else expect(mu),
             op,
             inv_norm=inv_norm,
             background=background,
             damping=damping,
             mu=mu,
+            flat=flat,
         )
         n += 1
     return f, n
@@ -185,10 +215,12 @@ def rl_block(
 
 @dataclass
 class _Block:
-    """Per-block inputs: data in counts and background."""
+    """Per-block inputs: data in counts, background, flat, read noise."""
 
     data: Tensor
-    background: Tensor | float
+    background: Tensor | float = 0.0
+    flat: Tensor | None = None
+    variance: Tensor | float = 0.0
 
 
 class RichardsonLucy(Estimator):
@@ -233,27 +265,15 @@ class RichardsonLucy(Estimator):
     iterated over, the spatial axes (as many as the PSF has dims, in
     layout order) are deconvolved.
 
+    Snyder et al. (1993) extend the model to CCD data (flat field,
+    background counts, read noise): see
+    [`Snyder`][optix.deconv.Snyder].
+
     !!! note "Extensions (off by default)"
         - **Camera model:** `fit(data, init=sensor)` with a
           [`SensorEstimate`][optix.estimates.SensorEstimate] converts the
           data to electrons, (y − offset)/gain, before deconvolution; the
           result is then in electrons.
-        - **Background:** `background=b` uses y ~ Poisson(H f + b), and
-          the update Hᵀ[y / (H f + b)] / Hᵀ1.
-        - **Poisson–Gaussian noise:** `poisson_gaussian=True` uses the
-          large-read-noise approximation of Snyder et al. (1993, §3.C):
-          the Gaussian read noise, of mean m and variance σ², is replaced
-          by a Poisson variable of mean σ², so that the data, in electrons
-          and shifted to m = σ², follow
-          y − m + σ² ~ Poisson(H f + b + σ²), and the update is their
-          Eq. (15) with the background μ₀ = b replaced by b + σ²:
-          f ← f · Hᵀ[(y − m + σ²) / (H f + b + σ²)] / Hᵀ1. Here m is the
-          sensor offset, y − m is converted to electrons, (y − m)/gain,
-          and σ² is the read-noise variance in electrons² (variance/gain²).
-          y − m + σ² is clipped at 0 (not specified in the paper). The flat
-          field β(j) of Snyder et al. (Eqs. 6 and 15) is taken as uniform,
-          β = 1; data divided by a flat field beforehand are no longer
-          Poisson counts.
         - **Damping:** `damping=ε` applies a fraction ε ∈ (0, 1] of the
           correction, f ← f + ε(f·c − f), as in Lucy (1974, §III), where
           it is used to prove that the likelihood increases; Lucy
@@ -267,10 +287,6 @@ class RichardsonLucy(Estimator):
         2. Lucy LB. *An iterative technique for the rectification of
            observed distributions.* Astron J **79**(6):745-754, 1974.
            [doi:10.1086/111605](https://doi.org/10.1086/111605)
-        3. Snyder DL, Hammoud AM, White RL. *Image recovery from data
-           acquired with a charge-coupled-device camera.* J Opt Soc Am A
-           **10**(5):1014-1023, 1993.
-           [doi:10.1364/JOSAA.10.001014](https://doi.org/10.1364/JOSAA.10.001014)
 
         ??? quote "BibTeX"
 
@@ -297,18 +313,6 @@ class RichardsonLucy(Estimator):
               year    = {1974},
               doi     = {10.1086/111605}
             }
-            @article{snyder1993image,
-              author  = {Snyder, Donald L. and Hammoud, Abed M. and
-                         White, Richard L.},
-              title   = {Image recovery from data acquired with a
-                         charge-coupled-device camera},
-              journal = {Journal of the Optical Society of America A},
-              volume  = {10},
-              number  = {5},
-              pages   = {1014--1023},
-              year    = {1993},
-              doi     = {10.1364/JOSAA.10.001014}
-            }
             ```
 
     Examples
@@ -332,8 +336,6 @@ class RichardsonLucy(Estimator):
         "n_iter": None,
         "alpha": 0.05,
         "max_iter": 100,
-        "background": None,
-        "poisson_gaussian": False,
         "damping": 1.0,
         "halo": None,
         "block": None,
@@ -347,8 +349,6 @@ class RichardsonLucy(Estimator):
         n_iter: int | None = None,
         alpha: float | None = None,
         max_iter: int | None = None,
-        background: float | Tensor | None = None,
-        poisson_gaussian: bool | None = None,
         damping: float | None = None,
         halo: int | Sequence[int] | None = None,
         block: Sequence[int | None] | None = None,
@@ -374,15 +374,6 @@ class RichardsonLucy(Estimator):
         max_iter : int
             Iteration cap of the χ² stopping rule. Default: 100 (not
             specified in the papers).
-        background : float or Tensor, optional
-            Extension. Background b, in data units (offset excluded);
-            a scalar or a map that broadcasts to `(*group, *spatial)`.
-            Default: none.
-        poisson_gaussian : bool
-            Extension. Shifted-Poisson approximation of the Gaussian read
-            noise (Snyder et al. 1993, §3.C and Eq. 15), with the offset
-            and read-noise variance of the sensor estimate given to
-            [`fit`][optix.Estimator.fit]. Default: False.
         damping : float
             Extension. Fraction ε ∈ (0, 1] of the correction applied.
             Default (Lucy 1974): 1.
@@ -402,12 +393,16 @@ class RichardsonLucy(Estimator):
         self.psf = psf
         self.sensor: SensorEstimate | None = None
         self.level: Tensor | None = None
+        self._check_options()
+
+    def _check_options(self) -> None:
         opts = self.options
+        psf = self.psf
         if psf is not None and psf.ndim not in (2, 3):
             raise ValueError(f"psf must be 2-D or 3-D, got {psf.ndim} dims")
         if opts["n_iter"] is not None and int(opts["n_iter"]) < 0:
             raise ValueError("n_iter must be non-negative")
-        if not 0.0 < float(opts["damping"]) <= 1.0:
+        if not 0.0 < float(opts.get("damping", 1.0)) <= 1.0:
             raise ValueError("damping must be in (0, 1]")
         if not 0.0 < float(opts["alpha"]) < 1.0:
             raise ValueError("alpha must be in (0, 1)")
@@ -450,29 +445,15 @@ class RichardsonLucy(Estimator):
         return self._labeled(data, Layout.default(len(data.shape), ndim))
 
     def _maps(self, data: Labeled, backend: dict) -> dict[str, Tensor | None]:
-        """Sensor and background maps, broadcast to `(*group, *spatial)`."""
+        """Sensor maps, broadcast to `(*group, *spatial)`."""
         shape = data.layout.map_shape(data.array)
-        out: dict[str, Tensor | None] = {
-            "offset": None,
-            "gain": None,
-            "variance": None,
-            "background": None,
-        }
+        out: dict[str, Tensor | None] = {"offset": None, "gain": None}
         sensor = self.sensor
         if sensor is not None:
             for name in ("offset", "gain"):
                 value = getattr(sensor, name)
                 if value is not None:
                     out[name] = torch.broadcast_to(value.to(**backend), shape)
-            if self.options["poisson_gaussian"]:
-                out["variance"] = torch.broadcast_to(
-                    sensor.variance.to(**backend), shape
-                )
-        b = self.options["background"]
-        if b is not None:
-            out["background"] = torch.broadcast_to(
-                torch.as_tensor(b).to(**backend), shape
-            )
         return out
 
     @staticmethod
@@ -487,26 +468,35 @@ class RichardsonLucy(Estimator):
         return tuple(region)
 
     def _prepare(self, chunk: Chunk, maps: dict) -> _Block:
-        """Counts y (electrons with a sensor), background, read noise."""
+        """Counts y (electrons with a sensor)."""
         index = chunk.group + self._region(chunk)
         y = chunk.data
         if maps["offset"] is not None:
             y = y - maps["offset"][index]
-        gain = None if maps["gain"] is None else maps["gain"][index]
-        if gain is not None:
-            y = y / gain
-        b: Tensor | float = 0.0
-        if maps["background"] is not None:
-            b = maps["background"][index]
-            if gain is not None:
-                b = b / gain
-        if maps["variance"] is not None:
-            var = maps["variance"][index]
-            if gain is not None:
-                var = var / gain.square()
-            y = (y + var).clamp(min=0)
-            b = b + var
-        return _Block(y, b)
+        if maps["gain"] is not None:
+            y = y / maps["gain"][index]
+        return _Block(y)
+
+    def _init_from(self, init: object, shape: tuple, like: object) -> None:
+        """Pick the estimates of `init` this estimator uses."""
+        self.sensor = self._pick(init, SensorEstimate, shape=shape, like=like)
+        self._warn_unused(init, SensorEstimate)
+        self.is_faithful = self._faithful_options and self.sensor is None
+
+    def _solve(
+        self, blk: _Block, op: PaddedConvolution, start: float
+    ) -> tuple[Tensor, int]:
+        """Deconvolve one prepared block: estimate on `op.grid`, updates."""
+        n_iter = self.options["n_iter"]
+        return rl_block(
+            blk.data,
+            op,
+            start,
+            n_iter=None if n_iter is None else int(n_iter),
+            alpha=float(self.options["alpha"]),
+            max_iter=int(self.options["max_iter"]),
+            damping=float(self.options["damping"]),
+        )
 
     # -- estimator protocol ----------------------------------------------
     def _fit(
@@ -521,34 +511,25 @@ class RichardsonLucy(Estimator):
         self.layout = data.layout
         backend = self._backend(data)
         shape = data.layout.map_shape(data.array)
-        self.sensor = self._pick(init, SensorEstimate, shape=shape, like=data)
-        self._warn_unused(init, SensorEstimate)
-        if self.sensor is not None and self.sensor.gain is None:
-            if self.sensor.offset is None:
-                raise ValueError("The sensor estimate has no offset or gain")
-        if self.options["poisson_gaussian"] and (
-            self.sensor is None or self.sensor.variance is None
-        ):
-            raise ValueError(
-                "poisson_gaussian=True needs a SensorEstimate with a "
-                "variance, given as fit(data, init=sensor)"
-            )
-        self.is_faithful = self._faithful_options and self.sensor is None
+        self._init_from(init, shape, data)
         psf = self._psf(backend)
         if psf.ndim != len(data.layout.spatial):
             raise ValueError(
                 f"The PSF has {psf.ndim} dims but the layout has "
                 f"{len(data.layout.spatial)} spatial axes"
             )
-        # one pass: per-image mean of y − b (in counts), the start level
+        # one pass: ∑(y − b) / ∑β per image (in counts), the start level
         group, sample, spatial = data.layout.shape_of(data.array)
         total = torch.zeros(group + sample, dtype=torch.float64)
+        weight = torch.zeros(group + sample, dtype=torch.float64)
         maps = self._maps(data, backend)
         for chunk in blocks(data, None, 0, **backend):
             blk = self._prepare(chunk, maps)
             value = (blk.data - blk.background).sum().double().cpu()
             total[chunk.group + chunk.samples] += value
-        level = total / math.prod(spatial)
+            w = blk.data.numel() if blk.flat is None else blk.flat.sum()
+            weight[chunk.group + chunk.samples] += float(w)
+        level = total / weight.clamp(min=torch.finfo(torch.float64).tiny)
         self.level = level.clamp(min=torch.finfo(backend["dtype"]).tiny)
         self.history.extras["iterations"] = []
 
@@ -575,7 +556,6 @@ class RichardsonLucy(Estimator):
         out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
         maps = self._maps(data, backend)
         ops: dict[tuple[int, ...], PaddedConvolution] = {}
-        n_iter = self.options["n_iter"]
         iterations = self.history.extras.setdefault("iterations", [])
         chunks = blocks(
             data,
@@ -593,27 +573,22 @@ class RichardsonLucy(Estimator):
                 ops[key] = PaddedConvolution(psf, key)
             op = ops[key]
             start = float(self.level[chunk.group + chunk.samples].squeeze())
-            f, n = rl_block(
-                blk.data,
-                op,
-                start,
-                n_iter=None if n_iter is None else int(n_iter),
-                alpha=float(self.options["alpha"]),
-                max_iter=int(self.options["max_iter"]),
-                background=blk.background,
-                damping=float(self.options["damping"]),
-            )
+            f, n = self._solve(blk, op, start)
             iterations.append(float(n))
             chunk.store(out, op.crop(f)[chunk.inner])
         flush(out)
         return out
 
     def _extra_state(self) -> dict[str, object]:
-        return {"psf": self.psf, "level": self.level}
+        sensor = None if self.sensor is None else self.sensor._payload()
+        return {"psf": self.psf, "level": self.level, "sensor": sensor}
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
         self.psf = state.get("psf")
         self.level = state.get("level")
+        sensor = state.get("sensor")
+        if sensor is not None:
+            self.sensor = SensorEstimate._from_payload(sensor)
 
 
 def richardson_lucy(
@@ -647,7 +622,7 @@ def richardson_lucy(
         Axis roles.
     **options
         Options of [`RichardsonLucy`][optix.deconv.RichardsonLucy]
-        (`n_iter`, `background`, `damping`, `halo`, `faithful`, ...).
+        (`n_iter`, `damping`, `halo`, `faithful`, ...).
 
     Returns
     -------
