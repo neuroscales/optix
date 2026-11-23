@@ -10,6 +10,7 @@
       members:
         - WaveletFFT
         - GeneralStripeRemover
+        - VSNR
 
 ## Transforms
 
@@ -21,6 +22,7 @@
       members:
         - wavelet_fft
         - general_stripe_remover
+        - vsnr
 
 ## Utilities
 
@@ -47,3 +49,9 @@
         - lattice_diff_adjoint
         - stripe_offset
         - general_stripe_objective
+        - vsnr_solve
+        - VSNRSolution
+        - operator_norm
+        - dirac
+        - line
+        - gaussian_stripe

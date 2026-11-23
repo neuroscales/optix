@@ -1,11 +1,11 @@
 # Photon-transfer curve
 
 !!! info "At a glance"
-    **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`; DSNU, PRNU, linearity in `meta`) \
-    **Noise model:** Poisson-Gaussian \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** no (two images per level, a dark stack) \
-    **Reference:** European Machine Vision Association, EMVA Standard 1288 Release 4.0 Linear, 2021, [emva.org](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf)
+    - **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`; DSNU, PRNU, linearity in `meta`)
+    - **Noise model:** Poisson-Gaussian
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** no (two images per level, a dark stack)
+    - **Reference:** European Machine Vision Association, EMVA Standard 1288 Release 4.0 Linear, 2021, [emva.org](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf)
 
 ## Overview
 
@@ -60,14 +60,18 @@ The photon-transfer curve ([EMVA 1288 R4.0 Linear, Eq. (15)](https://www.emva.or
     \qquad \sigma_q^2 = \tfrac{1}{12}\ \text{DN}^2
     $$
 
-| optix | [EMVA 1288](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) | meaning |
-|---|---|---|
-| $ | $ | overall system gain (ADU = DN per e⁻) |
-| $ | $\mu_{y.\text{dark}}$ | dark mean (offset) |
-| $\mathbb{E}[y]$, $\operatorname{var}[y]$ | $\mu_y$, $\sigma_y^2$ | mean and temporal variance |
-| $\sigma^2$ | ^2 \sigma_d^2$ ($\sigma_d$ in e⁻) | read-noise variance |
-| $\sigma^2 + \tfrac{1}{12}$ | $\sigma_{y.\text{dark}}^2$ | dark temporal variance |
-| $\lambda$ | $\mu_e = \eta\,\mu_p$ | mean photoelectrons |
+Here $L$ is the number of illumination levels and $P$ the number of pixels.
+
+| optix | [EMVA 1288](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) | Meaning | Shape |
+|---|---|---|---|
+| $g$ | $K$ | overall system gain (DN per e⁻) | scalar, one per group (per pixel with `per_pixel=True`) |
+| $o$ | $\mu_{y.\text{dark}}$ | dark mean (offset) | $\mathbb{R}^P$, per pixel (the dark mean image) |
+| $\mathbb{E}[y]$, $\operatorname{var}[y]$ | $\mu_y$, $\sigma_y^2$ | spatially averaged mean and temporal variance | scalars, one pair per level and group |
+| $\sigma^2$ | $K^2 \sigma_d^2$ ($\sigma_d$ in e⁻) | read-noise variance | scalar, one per group |
+| $\sigma^2 + \tfrac{1}{12}$ | $\sigma_{y.\text{dark}}^2$ | dark temporal variance | scalar, one per group |
+| $\tfrac{1}{12}$ | $\sigma_q^2$ | quantisation-noise variance (DN²) | scalar, one for the whole stack |
+| $\lambda$ | $\mu_e = \eta\,\mu_p$ | mean photoelectrons | scalar, one per level |
+| $\eta$ | $\eta$ | quantum efficiency | scalar, one per group |
 
 Assumptions: linear response below saturation, noise independent between
 pixels and frames, dark values at the same exposure time as the levels, one
@@ -82,28 +86,42 @@ The strategy is a straight-line fit on summary statistics.
   fixed pattern) with the standard's mean-difference correction.
 - **Saturation** is the brightest level with at most 0.2 % of pixels at the
   maximum value.
-- **Gain** $: least squares of $\sigma_y^2 - \sigma_{y.\text{dark}}^2$ on
+- **Gain** $K$: least squares of $\sigma_y^2 - \sigma_{y.\text{dark}}^2$ on
   $\mu_y - \mu_{y.\text{dark}}$, with free slope and intercept, over levels up
   to 70 % of saturation (Eq. (50)). A cubic B-spline fit checks that the local
-  slopes stay within 3 % of $ (Eq. (51)).
+  slopes stay within 3 % of $K$ (Eq. (51)).
 - **Read noise** $\sigma^2 = \sigma_{y.\text{dark}}^2 - \sigma_q^2$ (Eq. (53)).
   When $\sigma_{y.\text{dark}}^2 < 0.24$ DN², only an upper limit is reported (Eq. (54)).
 - **Non-uniformities** from highpass-filtered mean images, with the temporal
   noise of the mean subtracted: DSNU from the dark, PRNU from the level nearest
   50 % saturation (Section 8).
 
+Statistically, the temporal statistics are method-of-moments estimates of the
+mean and variance of each level, and the gain is the ordinary least-squares
+estimate of the slope of the mean-variance line, which is the maximum-likelihood
+estimate if the variance estimates have equal Gaussian errors (a weighted fit
+would account for their growth with the level).
+
 ## Algorithm
 
-```text
-Input: levels (>= 2 images each), dark stack, optional exposure per level
-Stream every stack once: pair statistics and per-pixel moments
-mu_i, var_i: dark-subtracted mean and temporal variance of each level
-Saturation: brightest level with <= saturation_fraction pixels at max
-K: OLS of var_i on mu_i for mu_i <= fit_range * saturation
-Linearity: B-spline slopes (spline_intervals) vs K
-Read noise, DSNU, PRNU; with exposure: responsivity, QE, linearity error
-Return offset = dark mean image, variance = read noise (DN^2), gain = K
-```
+**Input:** for each level $l = 1, \ldots, L$, at least two frames in
+$\mathbb{R}^P$; a dark stack; optionally the photon exposure of each level;
+`fit_range` $= 0.7$, `saturation_fraction` $= 0.002$, `spline_intervals` $= 6$. \
+**Output:** `offset` (dark mean image, $\mathbb{R}^P$), `variance` $= \sigma^2$
+(DN²) and `gain` $= K$, one per group; DSNU, PRNU and linearity in `meta`.
+
+1. **Stream** every stack once, accumulating pair statistics and per-pixel moments.
+2. **Temporal statistics:** for each level, the dark-subtracted mean
+   $\mu_l = \mu_y - \mu_{y.\text{dark}}$ and variance
+   $v_l = \sigma_y^2 - \sigma_{y.\text{dark}}^2$.
+3. **Saturation:** the brightest level with at most `saturation_fraction` of
+   pixels at the maximum value.
+4. **Gain:** $K$ by least squares of $v_l$ on $\mu_l$ over the levels with
+   $\mu_l \le$ `fit_range` $\times$ saturation.
+5. **Linearity check:** B-spline slopes (`spline_intervals`) compared with $K$.
+6. **Read noise** $\sigma^2 = \sigma_{y.\text{dark}}^2 - \sigma_q^2$, then DSNU
+   and PRNU; with exposures, responsivity, quantum efficiency and linearity error.
+7. **Return** the `SensorEstimate`.
 
 ## Faithful mode and extensions
 

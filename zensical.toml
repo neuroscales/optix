@@ -2,6 +2,7 @@
 nav = [
   {"Home" = "index.md"},
   {"Getting started" = [
+    "getting-started/index.md",
     "getting-started/installation.md",
     "getting-started/quick-tour.md",
   ]},
@@ -26,27 +27,38 @@ nav = [
     {"Shading" = [
       "algorithms/shading/basic.md",
       "algorithms/shading/cidre.md",
+      "algorithms/shading/likar-entropy.md",
+      "algorithms/shading/kask.md",
       "algorithms/shading/illumination-function.md",
       "algorithms/shading/gamma-mixture.md",
+    ]},
+    {"Background" = [
+      "algorithms/background/rolling-ball.md",
     ]},
     {"Deconvolution" = [
       "algorithms/deconv/richardson-lucy.md",
       "algorithms/deconv/biggs-andrews.md",
       "algorithms/deconv/snyder.md",
+      "algorithms/deconv/nagy-oleary.md",
+      "algorithms/deconv/denis.md",
       "algorithms/deconv/wiener.md",
       "algorithms/deconv/tikhonov.md",
       "algorithms/deconv/wiener-butterworth.md",
+      "algorithms/deconv/multiview.md",
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
       "algorithms/destripe/general-stripe-remover.md",
+      "algorithms/destripe/vsnr.md",
     ]},
     {"Point-spread function" = [
       "algorithms/psf/bead-psf.md",
+      "algorithms/psf/gibson-lanni.md",
     ]},
     "algorithms/_template.md",
   ]},
   {"Contributing" = [
+    "contributing/index.md",
     "contributing/style.md",
   ]},
   {"API reference" = [
@@ -58,6 +70,7 @@ nav = [
     "reference/stats.md",
     "reference/filters.md",
     "reference/basis.md",
+    "reference/background.md",
     "reference/special.md",
     "reference/sensor.md",
     "reference/shading.md",
@@ -87,6 +100,7 @@ extra_javascript = [
 [project.theme]
 features = [
   "content.code.copy",
+  "content.tabs.link",
   "navigation.indexes",
 ]
 
@@ -112,6 +126,7 @@ toggle.icon = "lucide/moon"
 toggle.name = "Switch to system preference"
 
 [project.theme.icon]
+logo = "fontawesome/solid/microscope"
 repo = "fontawesome/brands/github"
 
 [project.plugins.mkdocstrings.handlers.python]

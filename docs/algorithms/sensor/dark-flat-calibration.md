@@ -1,11 +1,11 @@
 # Dark/flat calibration
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark`) and, with a dark stack, `SensorEstimate` (`offset`, `variance`) \
-    **Noise model:** none \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** none: standard practice, optix convention
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark`) and, with a dark stack, `SensorEstimate` (`offset`, `variance`)
+    - **Noise model:** none
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** none: standard practice, optix convention
 
 ## Overview
 
@@ -34,38 +34,61 @@ calibration: do not correct by both.
 ## Probabilistic model
 
 There is no noise model: the references are reduced per pixel and the noise is
-assumed to average out.
+assumed to average out. With $P$ the number of pixels, frames
+$\mathbf{y}_i, \mathbf{x}_i \in \mathbb{R}^P$ and $M$ frames per reference stack,
 
 $$
 \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d}, \qquad
-\hat{\mathbf{d}} = \operatorname{stat}_m \mathbf{y}_m^{\text{dark}}, \qquad
-\hat{\mathbf{f}} = \frac{\mathbf{F} - \hat{\mathbf{d}}}{\operatorname{mean}_p(\mathbf{F} - \hat{\mathbf{d}})},
+\hat{\mathbf{d}} = \hat{\mathbf{y}}^{\text{dark}}, \qquad
+\hat{\mathbf{f}} = \frac{\hat{\mathbf{y}}^{\text{flat}} - \hat{\mathbf{d}}}{\frac{1}{P}\sum_{p=1}^{P}\bigl(\hat{y}^{\text{flat}}_p - \hat{d}_p\bigr)},
 $$
 
-with $\mathbf{F} = \operatorname{stat}_m \mathbf{y}_m^{\text{flat}}$ and
-$\operatorname{stat}$ the per-pixel temporal mean or median. There is no paper,
-so no native-notation tab.
+where $\hat{\mathbf{y}}$ is the per-pixel mean or median over the frames of a
+reference stack: the sample mean
+$\bar{\mathbf{y}} = \frac{1}{M}\sum_{m=1}^{M}\mathbf{y}_m$ with
+`statistic="mean"`, or the sample median
+$\tilde{\mathbf{y}} = \operatorname{median}_m \mathbf{y}_m$ (pixel-wise) with
+`statistic="median"`. There is no paper, so no native-notation tab.
+
+| Symbol | Meaning | Shape |
+|---|---|---|
+| $\mathbf{y}_i$ | recorded frame $i$ (ADU) | $\mathbb{R}^P$, per frame |
+| $\mathbf{x}_i$ | latent image of frame $i$, without shading | $\mathbb{R}^P$, per frame |
+| $\mathbf{f}$ | flat field: relative sensitivity, mean $1$ | $\mathbb{R}^P$, per pixel, shared by the frames of a group |
+| $\mathbf{d}$ | dark: offset, dark current and stray light (ADU) | $\mathbb{R}^P$, per pixel, shared by the frames of a group |
+| $\mathbf{y}_m^{\text{dark}}$, $\mathbf{y}_m^{\text{flat}}$ | frame $m$ of the dark and flat reference stacks | $\mathbb{R}^P$, per frame |
+| $\hat{\mathbf{y}}^{\text{dark}}$, $\hat{\mathbf{y}}^{\text{flat}}$ | per-pixel mean or median of each reference stack | $\mathbb{R}^P$, per pixel |
+| $P$, $M$ | numbers of pixels and of reference frames | scalars, whole stack |
 
 ## Inference / derivation
 
 The correction is
 $\hat{\mathbf{x}}_i = (\mathbf{y}_i - \hat{\mathbf{d}}) / \hat{\mathbf{f}}
-= \dfrac{\mathbf{y}_i - \mathbf{D}}{\mathbf{F} - \mathbf{D}}\,\operatorname{mean}(\mathbf{F} - \mathbf{D})$.
+= \dfrac{\mathbf{y}_i - \hat{\mathbf{d}}}{\hat{\mathbf{y}}^{\text{flat}} - \hat{\mathbf{d}}}\,\frac{1}{P}\sum_p \bigl(\hat{y}^{\text{flat}}_p - \hat{d}_p\bigr)$
+(pixel-wise division). Statistically, the mean reduction is the method-of-moments
+(and Gaussian maximum-likelihood) estimate of each pixel's expected value, and
+the median is its robust counterpart, the maximum-likelihood estimate under
+Laplace noise, insensitive to a few outlying frames.
 The overall scale shared by $\mathbf{f}$ and $\mathbf{x}_i$ is fixed by dividing
 the flat by its spatial mean (per group), which keeps corrected intensities in
 ADU; `meta["flat_norm"]` records `"mean"` or `"none"`.
 
 ## Algorithm
 
-```text
-Input: flat stack, dark (stack, map, ShadingEstimate, SensorEstimate or none), statistic, normalize
-1. F = per-pixel statistic of the flat stack.
-2. D = per-pixel statistic of the dark stack; or the given map;
-   or ShadingEstimate.dark; or SensorEstimate.offset; or 0.
-3. f = F − D; if normalize == "mean": f = f / spatial mean of f (per group).
-Return ShadingEstimate(flat=f, dark=D) and, for a dark stack,
-       SensorEstimate(offset=D, variance=temporal variance of the dark stack)
-```
+**Input:** flat frames $\mathbf{y}_1^{\text{flat}}, \ldots, \mathbf{y}_M^{\text{flat}} \in \mathbb{R}^P$;
+`dark` (a stack, a map, a `ShadingEstimate`, a `SensorEstimate` or none);
+`statistic="mean"`, `normalize="mean"`. \
+**Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$ and $\hat{\mathbf{d}}$ and, for
+a dark stack, `SensorEstimate` with offset $\hat{\mathbf{d}}$ and read variance.
+
+1. **Flat reduction.** $\hat{\mathbf{y}}^{\text{flat}}$ is the per-pixel mean
+   $\bar{\mathbf{y}}$ or median $\tilde{\mathbf{y}}$ of the flat stack.
+2. **Dark.** $\hat{\mathbf{d}}$ is the same statistic of the dark stack; or the
+   given map; or `ShadingEstimate.dark`; or `SensorEstimate.offset`; or $\mathbf{0}$.
+3. **Flat.** $\hat{\mathbf{f}} = \hat{\mathbf{y}}^{\text{flat}} - \hat{\mathbf{d}}$;
+   if `normalize="mean"`, divide it by its spatial mean (per group).
+4. **Sensor** (dark stack only): the read variance is the per-pixel temporal
+   variance of the dark stack.
 
 ## Faithful mode and extensions
 

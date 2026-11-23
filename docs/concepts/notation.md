@@ -57,6 +57,9 @@ never `rₙ_k`.
 | $\mathbf{x}_i$ | latent image: frame $i$ without shading | ADU | result of `apply` |
 | $\mathbf{f}$ | flat field (multiplicative) | dimensionless | `ShadingEstimate.flat` |
 | $\mathbf{d}$ | dark field (additive, camera offset included) | ADU | `ShadingEstimate.dark` |
+| $\mathbf{s}_b$ | background profile, mean 1, when the background has its own profile | dimensionless | `ShadingEstimate.dark` ÷ its mean |
+| $\beta_i$, $\bar\beta$ | mean background intensity of frame $i$; its mean over frames | ADU | `KaskFlatField.background_level_` |
+| $\kappa_{\text{n}}$ | noise constant of a channel: local variance over local mean on the background; it equals the gain $g$ only when the offset $o$ is 0, and is $g\,(\bar y - o)/\bar y$ otherwise (written $\kappa$ in docstrings) | ADU | `meta["noise_constant"]` |
 | $b_i$, $\mathbf{b}$ | baseline of frame $i$; all baselines | ADU | `ShadingEstimate.baseline` |
 | $\lambda$ | expected number of photoelectrons | e⁻ | `signal` of `simulate_sensor` |
 | $n$ | actual number of photoelectrons (Poisson) | e⁻ | |
@@ -122,6 +125,45 @@ And the dark field is not the camera offset: it is offset + dark current +
 stray light. This is the reason why corrections never subtract both
 `ShadingEstimate.dark` and `SensorEstimate.offset`.
 
+## Optics
+
+The symbols of the models of the optics (`optix.psf`), such as the
+[Gibson–Lanni](../algorithms/psf/gibson-lanni.md) and Richards–Wolf PSFs.
+Lengths share one unit; the Gibson–Lanni defaults are in µm.
+
+| Symbol | Meaning | Unit | In code | Used by |
+|---|---|---|---|---|
+| $\mathrm{NA}$ | numerical aperture of the objective, $n \sin\alpha$ | | `numerical_aperture` | both |
+| $\lambda_0$ | wavelength of the light in vacuum | length | `wavelength` | both |
+| $k_0$ | wave number in vacuum, $2\pi/\lambda_0$ | 1 / length | | Gibson–Lanni |
+| $k$ | wave number in a medium of index $n$, $n k_0$ | 1 / length | | Richards–Wolf |
+| $n$ | refractive index of the medium in which the focus is formed | | `refractive_index` | Richards–Wolf |
+| $n_s$, $n_g$, $n_i$ | refractive index of the specimen, the coverslip, the immersion medium | | `specimen_index`, `coverslip_index`, `immersion_index` | Gibson–Lanni |
+| $n_g^*$, $n_i^*$ | the same, under the design conditions of the objective | | `design_coverslip_index`, `design_immersion_index` | Gibson–Lanni |
+| $t_s$ | depth of the source below the coverslip | length | `depth` | Gibson–Lanni |
+| $t_g$, $t_i$ | thickness of the coverslip, of the immersion layer | length | `coverslip_thickness` | Gibson–Lanni |
+| $t_g^*$, $t_i^*$ | the same, under the design conditions | length | `design_coverslip_thickness`, `design_immersion_thickness` | Gibson–Lanni |
+| $\alpha$ | angular semi-aperture of the objective, $\arcsin(\mathrm{NA}/n)$ | rad | | Richards–Wolf |
+| $\theta$, $\varphi$ | angle of a ray to the optical axis; azimuth around the axis | rad | | both |
+| $\rho$ | radius in the pupil (back focal plane), normalised to 1 at the edge of the aperture: $\rho = n \sin\theta / \mathrm{NA}$ | | `rho` | Gibson–Lanni |
+| $r$ | lateral distance from the optical axis, in object space | length | `radius`; `radial` is $k r$ | both |
+| $z$ | position along the optical axis, from the Gaussian focus, positive away from the lens | length | `axial` is $k z$ | Richards–Wolf |
+| $\Delta z$ | defocus: displacement of the stage from the paraxial focus of the source, positive for a thicker immersion layer | length | `defocus` | Gibson–Lanni |
+| $\mathrm{OPD}$ | optical path difference between the actual and the design ray | length | `gibson_lanni_opd` | Gibson–Lanni |
+| $\psi$ | phase aberration of the pupil; $\psi = k_0\,\mathrm{OPD}$ | rad | `pupil_phase` | both |
+| $\mathbf{e}$ | electric field near the focus | | `richards_wolf_field` | Richards–Wolf |
+| $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
+| $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
+| $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
+
+Some letters have another meaning elsewhere on this page: here $n$ is a
+refractive index, not a number of photoelectrons; $\lambda_0$ is a wavelength,
+where $\lambda$ alone is the expected number of photoelectrons; $\theta$,
+$\rho$ and $\psi$ are not the basis coefficients, the Stirling residual and the
+digamma function. A paper that writes the wavelength $\lambda$ and the vacuum
+wave number $k$ is mapped to $\lambda_0$ and $k_0$ on its page. Docstrings
+write `λ₀`, `k₀`.
+
 ## Bases and regularisation
 
 | Symbol | Meaning | In code |
@@ -133,6 +175,44 @@ stray light. This is the reason why corrections never subtract both
 | $h$, $\ell$ | grid spacing; order of the energy $\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$ | `dct_bending(order=)` |
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
+| $\lambda$ | weight of a regulariser (a subscript tells several apart: $\lambda_f$, $\lambda_d$); distinct from the photoelectron count by context | `regularization` |
+| $\mathbf{L}_x$, $\mathbf{L}_y$ | second-difference operators along $x$ and $y$ | |
+
+## Shift-variant blur
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $S$, $s$ | number of terms of the blur, term index | |
+| $\mathbf{h}_s$, $\mathbf{H}_s$ | kernel of term $s$; convolution with it | `ShiftVariantPSF.kernels` |
+| $\mathbf{w}_s$, $\mathbf{W}_s$ | pixel weights of term $s$; $\operatorname{diag}(\mathbf{w}_s)$ | `ShiftVariantConvolution.weights` |
+| $\mathbf{r}_s$ | position of the grid node of term $s$ | `centres` |
+| $\mathbf{K}$ | matrix of the un-shifted PSFs, one column per source pixel | |
+| $\boldsymbol{\varphi}_s$ | (multi)linear interpolation weights of node $s$ | `interpolation_weights` |
+| $\mathbf{C}$ | matrix of the kernels $\mathbf{h}_s$ of the optimal local approximation, one per column | `DenisPSF.kernels` |
+| $\tau$, $\mathbf{C}_\tau$ | truncation level; block-circulant preconditioner of Nagy and O'Leary, not to be confused with $\mathbf{C}$ | `tau`, `RegionPreconditioner` |
+| $\mathbf{e}_k$ | residual of the conjugate-gradient iteration $k$ | |
+
+The letter $\tau$ has a second meaning in the distributions below, the
+precision of a Normal; the context tells which is meant.
+
+## Morphology
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\boldsymbol{\beta}$ | background of an image, the opening of $\mathbf{y}$ | `output="background"` |
+| $\mathbf{u}$ | offset (integer displacement) within a structuring element | |
+| $B(\mathbf{u})$ | structuring element: its grey level at offset $\mathbf{u}$, $-\infty$ outside its support | `ball`, `footprint` |
+| $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
+| $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
+
+## Intensity histograms
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $G$ | number of grey levels | `levels` |
+| $h(n)$, $p(n)$ | histogram of the grey levels $n = 1 \ldots G$, and its normalisation; $h$ is local to this section (it is the grid spacing elsewhere) | |
+| $H(\cdot)$ | Shannon entropy of a histogram, in nats; an operator name in upright type, not a set | `meta["entropy"]` |
+| $\mathbf{a}$, $\mathbf{m}$ | coefficients of the polynomial dark and flat fields: the paper's notation, not to be confused with the mean $m$ of a Normal | `meta["coefficients"]` |
 
 ## Stripes
 
@@ -165,6 +245,38 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\rho(a)$, $\delta(a)$, $\varphi(u)$ | Stirling residual, $\log a - \psi(a)$, $u - 1 - \log u$ | `stirling_residual`, `log_minus_digamma`, `ratio_minus_log` |
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
+
+## Stationary noise
+
+Noise made of known patterns convolved with white noise, as in
+[VSNR](../algorithms/destripe/vsnr.md). The first rows are the stripe symbols
+shared with the other destriping pages.
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{s}$ | stripe or stationary noise component of a frame, $\mathbf{y} = \mathbf{x} + \mathbf{s}$ | |
+| $\theta$ | direction of the stripes (in degrees in code), not the difference of two means nor the coefficients $\boldsymbol{\Theta}$ | `angle` |
+| $\nabla$ | forward differences along the two axes of a frame | |
+| $\lVert \nabla \mathbf{x} \rVert_{2,1}$ | isotropic total variation: sum over pixels of the Euclidean norm of the gradient | |
+| $\iota_{S}$ | indicator of a set $S$: $0$ inside, $\infty$ outside | |
+| $\mathbf{k}_i$ | known pattern $i$ of the noise: a kernel centred on its middle pixel (unrelated to the digamma function $\psi$) | `filters` |
+| $\boldsymbol{\lambda}_i$ | white noise convolved with $\mathbf{k}_i$, so that $\mathbf{s} = \sum_i \boldsymbol{\lambda}_i * \mathbf{k}_i$ (unrelated to the photoelectrons $\lambda$) | `VSNRSolution.weights` |
+| $*$ | convolution with periodic boundaries | |
+| $\phi_i$, $\alpha_i$ | prior of $\boldsymbol{\lambda}_i$ and its weight | `prior`, `alpha` |
+| $\epsilon$, $h_\epsilon$ | Huber parameter and function; $\lVert \cdot \rVert_{2,1}^{\epsilon}$ is the total variation with $h_\epsilon$ in place of the norm (unrelated to the read noise $\varepsilon$) | `eps` |
+| $\vartheta$ | over-relaxation of a primal-dual scheme (unrelated to $\theta$) | |
+## Views
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $v$, $V$ | view index; number of views | `MultiviewRL(psfs)` |
+| $\mathbf{y}_v$ | recorded image of view $v$ | the views `data` |
+| $\mathbf{h}_v$, $\mathbf{A}_v$ | PSF of view $v$; its blur | `psfs` |
+| $\check{\mathbf{h}}_v$ | mirrored PSF, $\check{h}(\mathbf{r}) = h(-\mathbf{r})$ (kernel of $\mathbf{A}_v^\top$) | |
+| $\mathbf{h}_{b,v}$, $\mathbf{B}_v$ | back-projection kernel of view $v$ and its convolution | `MultiviewRL.kernels` |
+| $\mathbf{c}_v$ | multiplicative correction of view $v$ | |
+| $\mathbf{w}_v$, $k$ | weight image of view $v$; sum of the weights over the views | `weights`, `weight_sum` |
+| $\rho_v$ | reach of view $v$ on the margin of the object domain | |
 
 ## Indices and layouts
 

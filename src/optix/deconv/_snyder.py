@@ -196,10 +196,11 @@ class Snyder(RichardsonLucy):
 
         Parameters
         ----------
-        psf : Tensor
+        psf : Tensor or ShiftVariantPSF
             Point spread function p, `(*K)` with 2 or 3 dims, in the
             order of the spatial axes of the layout, centred at index
-            `K // 2`. Normalised to unit sum.
+            `K // 2`. Normalised to unit sum. Or a shift-variant PSF
+            model (see [`RichardsonLucy`][optix.deconv.RichardsonLucy]).
         noise : {"exact", "shifted-poisson"}
             Read-noise treatment: the exact conditional mean F of
             Eq. (21) (default), or the shifted-Poisson approximation of
