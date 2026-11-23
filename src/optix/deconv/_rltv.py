@@ -41,8 +41,9 @@ def tv_curvature(
     ndim : int
         Number of trailing (spatial) axes.
     epsilon : float, optional
-        Floor ε of |∇f|. Default: the round-off level of f,
-        ε = eps · max|f| (eps the machine epsilon of its dtype).
+        Floor ε of |∇f|. Default: the single-precision round-off level
+        of f, ε = 2⁻²³ · max|f|, the same whatever the working dtype, so
+        that float32 and float64 runs solve the same problem.
 
     Returns
     -------
@@ -56,8 +57,9 @@ def tv_curvature(
         norm.addcmul_(g, g)
     norm.sqrt_()
     if epsilon is None:
-        info = torch.finfo(f.dtype)
-        epsilon = max(float(f.abs().max()) * info.eps, info.tiny)
+        info = torch.finfo(torch.float32)
+        tiny = torch.finfo(f.dtype).tiny
+        epsilon = max(float(f.abs().max()) * info.eps, tiny)
     norm.clamp_(min=float(epsilon))
     div = torch.zeros_like(f)
     for d, g in zip(dims, grad, strict=True):

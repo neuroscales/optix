@@ -216,6 +216,14 @@ def test_lazy_zarr_input_and_output(tmp_path):
     torch.testing.assert_close(torch.from_numpy(dst[:]), ref)
 
 
+def test_default_epsilon_does_not_depend_on_dtype():
+    f = torch.rand(16, 16, dtype=F64) * 100
+    a = tv_curvature(f, 2)
+    b = tv_curvature(f.float(), 2).double()
+    # same ε in both dtypes: only float32 round-off remains
+    assert float((a - b).abs().max()) < 1e-3
+
+
 def test_float32_matches_float64():
     _, psf, data = boxes_2d(seed=5)
     a = richardson_lucy_tv(data, psf, n_iter=30, dtype=F64)
