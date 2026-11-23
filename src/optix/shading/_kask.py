@@ -1,5 +1,6 @@
 """Separate background and foreground flat fields (Kask et al., 2016)."""
 
+import heapq
 import itertools
 import math
 import warnings
@@ -149,8 +150,15 @@ class _Model:
         coef = coef.solution[:, 0]
         return (self.basis @ coef).reshape(data.shape), coef
 
-    def full(self, t: Tensor, params: Tensor) -> Tensor:
-        """Profile at full resolution, normalised to mean 1."""
+    def scaled(self, factor: float) -> "_Model":
+        """The same model with R multiplied by `factor`."""
+        out = object.__new__(_Model)
+        out.__dict__.update(self.__dict__)
+        out.strength = self.strength * factor
+        return out
+
+    def full(self, t: Tensor, params: Tensor, raw: bool = False) -> Tensor:
+        """Profile at full resolution, normalised to mean 1 (or not)."""
         if self.kind == "regularization":
             out = self.grid.upsample(t)
         else:
@@ -158,16 +166,19 @@ class _Model:
             out = sum(
                 c * m for c, m in zip(params, _monomials(u, v), strict=True)
             )
-        return out / out.mean()
+        return out if raw else out / out.mean()
 
 
 def _global_fit(E: Tensor, model: _Model) -> tuple[Tensor, Tensor, Tensor]:
     """Fit E_k ≈ a_k · T over images k (NaN = undefined), mean(T) = 1.
 
-    Minimises ∑_k ∑_ij (E_kij / a_k − T_ij)² + R ∑_ij (Lxx² + Lyy²) over
-    the defined pixels by alternating the per-image scales a_k (least
-    squares) and the profile, a smooth fit of the mean normalised image
-    weighted by the number of images defining each pixel. Returns
+    Alternates two steps until T is stable: the levels a_k by least
+    squares, a_k = argmin ∑_ij (E_kij − a_k T_ij)²; then the profile, the
+    smooth fit (Eq. 5) of the mean normalised image ē = mean_k(E_k / a_k),
+    weighted by the number W_ij of images defining each pixel,
+    T = argmin ∑_ij W_ij (ē_ij − T_ij)² + R ∑_ij (Lxx² + Lyy²),
+    renormalised to mean 1. This is not coordinate descent on a single
+    objective; its fixed point is the profile of the set. Returns
     (T, a, parameters of T).
     """
     valid = torch.isfinite(E)
@@ -217,13 +228,17 @@ def _random_error(E: Tensor, model: _Model, subsets: int) -> float:
     The images are split into S contiguous subsets fitted separately; with
     T̄ the mean of their profiles, each deviation T_s − T̄ has (S − 1)
     times the variance of the error of the full estimate, so the error
-    range is mean_s range(T_s − T̄) / √(S − 1).
+    range is mean_s range(T_s − T̄) / √(S − 1). The deviation term of a
+    subset fit sums over n_s ≈ n/S images, so its R is scaled by n_s/n
+    to smooth as much as the full fit.
     """
     n = E.shape[0]
     if subsets < 2 or n < subsets:
         return math.inf
     parts = torch.arange(n, device=E.device).tensor_split(subsets)
-    profiles = torch.stack([_global_fit(E[p], model)[0] for p in parts])
+    profiles = torch.stack(
+        [_global_fit(E[p], model.scaled(len(p) / n))[0] for p in parts]
+    )
     dev = profiles - profiles.mean(0)
     span = dev.flatten(1).amax(1) - dev.flatten(1).amin(1)
     return float(span.mean() / math.sqrt(subsets - 1))
@@ -291,11 +306,22 @@ def _initial_profile(x: Tensor, size: int) -> Tensor:
 
 
 def _background_mask(
-    x: Tensor, profile: Tensor, opts: dict
+    x: Tensor,
+    profile: Tensor,
+    opts: dict,
+    kappa: Callable[[Tensor], Tensor] | Tensor | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """Noise-based background segmentation. Returns (mask, κ)."""
+    """Noise-based background segmentation. Returns (mask, κ).
+
+    κ is the mode of the frame's noise image when `kappa` is None, a
+    function of that mode when callable (e.g. a running estimate over
+    the series), or the given constant.
+    """
     noise = _noise_image(x, profile, opts["window"])
-    kappa = _mode(noise)
+    if kappa is None or callable(kappa):
+        mode = _mode(noise)
+        kappa = mode if kappa is None else kappa(mode)
+    kappa = torch.as_tensor(kappa, dtype=x.dtype, device=x.device)
     mask = noise < opts["noise_threshold"] * kappa
     level = _box_mean(x / profile, opts["window"])
     if bool(mask.any()):
@@ -321,6 +347,30 @@ def _level(x: Tensor, profile: Tensor, mask: Tensor) -> Tensor:
 
 
 # -- estimator ----------------------------------------------------------------
+class _RunningMedian:
+    """Median of a stream of scalars (two heaps)."""
+
+    def __init__(self) -> None:
+        self.low: list[float] = []  # max-heap (negated)
+        self.high: list[float] = []
+
+    def __len__(self) -> int:
+        return len(self.low) + len(self.high)
+
+    def add(self, value: float) -> None:
+        heapq.heappush(self.low, -value)
+        heapq.heappush(self.high, -heapq.heappop(self.low))
+        if len(self.high) > len(self.low):
+            heapq.heappush(self.low, -heapq.heappop(self.high))
+
+    def median(self) -> float:
+        if not self:
+            return math.nan
+        if len(self.low) > len(self.high):
+            return -self.low[0]
+        return 0.5 * (self.high[0] - self.low[0])
+
+
 class _GroupState:
     """Binned images of one group, accumulated frame by frame."""
 
@@ -328,6 +378,7 @@ class _GroupState:
         self.bg_sum, self.bg_count, self.accepted = [], [], []
         self.fg_sum, self.fg_count = [], []
         self.profile: Tensor | None = None
+        self.kappa = _RunningMedian()
         self.n_bg = 0
         self.next_refit = _WARMUP
 
@@ -351,64 +402,81 @@ class KaskFlatField(Estimator):
        of the background profile (division by the current profile
        estimate; before one exists, by a centred profile 1 − c·ρ² whose
        curvature c minimises the noise level). It is ≈ κ, a constant of
-       the detection channel, in the background (Eq. 4) and much higher
-       on objects. Background pixels lie below an upper threshold on the
-       noise image; an intensity threshold then removes flat bright
-       regions inside objects.
+       the detection channel estimated from the series (`kappa`), in the
+       background (Eq. 4) and much higher on objects. Background pixels
+       lie below an upper threshold on the noise image; an intensity
+       threshold then removes flat bright regions inside objects.
     2. **Foreground segmentation.** The image is cut into blocks; in each,
        pixels above the block mean plus `foreground_sigma` expected
        standard deviations √(κ · mean) are foreground.
     3. **Binning.** Both segmented images are averaged in blocks into
-       `bins` (17 × 16 pixels in the paper); blocks without a segmented
-       pixel are undefined.
+       `bins` (17 × 16 pixels in the paper, from its blocks of 80 × 64
+       pixels); blocks without a segmented pixel are undefined.
     4. **Background profile.** Images with less than
        `min_background_fraction` background are discarded. The others are
-       fitted globally (E_k ≈ a_k · S_b), images with an abnormally high
-       mean square deviation from the fit are discarded, and the fit and
-       the filter are repeated until no outlier remains.
+       fitted globally (E_k ≈ a_k · S_b, step 6), images with an
+       abnormally high mean square deviation from the fit are discarded,
+       and the fit and the filter are repeated until no outlier remains.
     5. **Foreground profile.** Consecutive sets of `group_size` binned
        foreground images are outlier-filtered and averaged; the background
        B̄ · S_b is subtracted from each average (B̄ the mean background
        level of its images), and the averages are fitted globally.
-    6. **Smoothing (Eq. 5).** Each global fit minimises
-       ∑_k ∑_ij (E_kij / a_k − T_ij)² + R ∑_ij (Lxx_ij² + Lyy_ij²) on the
-       binned grid, with R given by `regularization` (0.2 for the
-       background and 20 for the foreground in the paper), or fits a
-       fourth-order polynomial (`model="polynomial"`). The deviation
-       term sums over all the images of the set, each divided by its
-       level a_k; Lxx and Lyy are second differences between
-       neighbouring bins, at interior bins only. Not specified in the
-       paper: Eq. 5 is written for a single image.
+    6. **Global fit and smoothing (Eq. 5).** A global fit alternates the
+       levels a_k, by least squares (min ∑_ij (E_kij − a_k T_ij)²), and
+       the profile T, the smooth fit of ē = mean_k(E_k / a_k) weighted by
+       the number W_ij of images defining each bin,
+       min ∑_ij W_ij (ē_ij − T_ij)² + R ∑_ij (Lxx_ij² + Lyy_ij²),
+       renormalised to mean 1, until T is stable. R is given by
+       `regularization` (0.2 for the background and 20 for the
+       foreground in the paper); `model="polynomial"` fits a
+       fourth-order polynomial instead. Lxx and Lyy are second
+       differences between neighbouring bins, at interior bins only.
+       Not specified in the paper: Eq. 5 is written for a single image,
+       and the paper does not give the objective of the global fit.
+       With W_ij = K, the deviation term is ∑_k ‖E_k / a_k − T‖² up to
+       a constant, so R does not depend on the number of images K.
     7. **Quality control.** The data are split into `subsets` fitted
-       separately; the spread of their profiles gives the range of the
-       random error of the profile. A profile whose error exceeds
-       `max_error` is not applied (replaced by 1, with a warning); the
-       foreground profile is only estimated when the background profile
-       passes.
+       separately (with R scaled by their share of the images, so that
+       they smooth as much as the full fit); the spread of their
+       profiles gives the range of the random error of the profile. A
+       profile whose error exceeds `max_error` is not applied (replaced
+       by 1, with a warning); the foreground profile is only estimated
+       when the background profile passes.
 
     !!! note "Estimates"
         `"shading"`: `flat` is the foreground profile S_f (mean 1,
         `meta["flat_norm"] == "mean"`), and `dark` the background
-        profile scaled to the mean background level of the fitted
-        images, B̄ · S_b, in ADU (it includes the camera offset). The
+        profile scaled to the mean background level of the images used
+        in the background fit, B̄ · S_b, in ADU (it includes the camera
+        offset); the levels of discarded images are not averaged. The
         background of each image is rescaled: `apply` estimates B̂ per
         image (`meta["dark_scaling"] == "per-frame"`), whereas
         [`ShadingEstimate.correct`][optix.estimates.ShadingEstimate.correct]
         subtracts `dark` as is. `meta` also holds the random errors,
-        the numbers of images used and B̄. The background level of every
-        fitted image is in `background_level_` (`(*group, n)`).
+        the numbers of images used, B̄ and κ (`noise_constant`). The
+        background level of every image is in `background_level_`
+        (`(*group, n)`).
 
     !!! note "Streaming"
         Frames are segmented one at a time, in storage order, and only
-        their binned images are kept (2 · h · w values per frame). The
+        their binned images are kept (4 · h · w values per frame: the
+        sums and counts of the background and foreground pixels of each
+        bin). κ is a running median of the frames' modes. The
         provisional background profile used to segment later frames is
         refitted when the number of background images reaches 10, 20,
         40, … (not specified in the paper), so the result depends on
         the frame order but not on the batch size.
 
     !!! note "Settings not specified in the paper"
-        κ is the position of the highest peak of the histogram of the
-        logarithm of each frame's noise image. The initial curvatures are
+        κ is the median over the frames of the mode of each frame's noise
+        image (the position of the highest peak of the histogram of its
+        logarithm); while streaming, each frame uses the median of the
+        modes of the frames seen so far. The paper fixes the block size
+        (80 × 64 or 64 × 64 pixels), the estimator the number of bins:
+        `bins=(16, 17)` gives the paper's blocks on 1360 × 1024 frames
+        only; on other sizes the blocks, and so the pixels behind each
+        bin and the foreground threshold, differ from the paper, while R
+        keeps its per-bin meaning. The initial curvatures are
         c ∈ {0, 0.05, …, 0.6}, with ρ² = 1 at the corners. Profiles are
         brought from bins to pixels by linear interpolation between bin
         centres (the polynomial is evaluated at the pixels). The random
@@ -457,6 +525,7 @@ class KaskFlatField(Estimator):
         "outlier_factor": 3.0,
         "subsets": 4,
         "max_error": (0.02, 0.04),
+        "kappa": "series",
     }
     recommended = dict(paper)
 
@@ -475,6 +544,7 @@ class KaskFlatField(Estimator):
         outlier_factor: float | None = None,
         subsets: int | None = None,
         max_error: tuple[float | None, float | None] | None = None,
+        kappa: str | float | None = None,
         faithful: bool = True,
         dtype: object = None,
         device: object = None,
@@ -494,13 +564,15 @@ class KaskFlatField(Estimator):
         bins : (int, int)
             Shape (rows, columns) of the binned images, which is also the
             grid of foreground-segmentation blocks. Paper: 17 × 16 pixels
-            (x × y), i.e. (16, 17), from blocks of 80 × 64 pixels.
+            (x × y), i.e. (16, 17), from blocks of 80 × 64 pixels of
+            1360 × 1024 frames. The paper fixes the block size; the
+            number of bins is fixed here, whatever the image size.
         window : int
             Odd side of the window of the local mean and variance of the
             noise image. Paper: 9.
         noise_threshold : float
-            Upper threshold on the noise image, in units of κ (the mode of
-            the noise image of each frame). Not specified in the paper.
+            Upper threshold on the noise image, in units of κ (see
+            `kappa`). Not specified in the paper.
         intensity_threshold : float
             Pixels whose local mean (after division by the profile)
             exceeds this factor times the median over the noise-selected
@@ -526,6 +598,16 @@ class KaskFlatField(Estimator):
             background and foreground profiles; None disables the check.
             The paper gives 2 % as an example for the background; the
             foreground limit is not specified in the paper.
+        kappa : {"series", "per-frame"} or float
+            Noise constant κ (var/mean of the background), a constant of
+            the detection channel in the paper. `"series"` (paper)
+            estimates one κ per group from the series: the median of the
+            modes of the frames' noise images, a running median while
+            streaming (each frame is segmented with the median of the
+            modes so far) and the final median in `apply`. A float
+            gives κ directly. `"per-frame"` (extension) uses the mode of
+            each frame's own noise image, which follows frame-to-frame
+            changes of var/mean, e.g. from a camera offset.
         faithful, dtype, device, layout
             See [`Estimator`][optix.Estimator].
         """
@@ -540,15 +622,36 @@ class KaskFlatField(Estimator):
             raise ValueError("bins must be at least 3 along each axis")
         if int(o["group_size"]) < 1:
             raise ValueError("group_size must be positive")
+        if isinstance(o["kappa"], str):
+            if o["kappa"] not in ("series", "per-frame"):
+                raise ValueError(f"Unknown kappa {o['kappa']!r}")
+        elif not float(o["kappa"]) > 0:
+            raise ValueError("kappa must be positive")
 
     # -- per-frame accumulation -------------------------------------------
+    def _kappa(self, state: _GroupState) -> object:
+        """κ rule for `_background_mask` while fitting (see `kappa`)."""
+        k = self.options["kappa"]
+        if k == "per-frame":
+            return None
+        if k != "series":
+            return float(k)
+
+        def running(mode: Tensor) -> float:
+            if bool(torch.isfinite(mode)):
+                state.kappa.add(float(mode))
+            value = state.kappa.median()
+            return float(mode) if math.isnan(value) else value
+
+        return running
+
     def _accumulate(self, x: Tensor, state: _GroupState, grid: _Grid) -> None:
         o = self.options
         if state.profile is None:
             profile = _initial_profile(x, o["window"])
         else:
             profile = state.profile
-        bg, kappa = _background_mask(x, profile, o)
+        bg, kappa = _background_mask(x, profile, o, self._kappa(state))
         fg = _foreground_mask(x, kappa, grid, o["foreground_sigma"])
         f64 = torch.float64
         for mask, s, c in (
@@ -616,11 +719,17 @@ class KaskFlatField(Estimator):
         bg_model, fg_model = self._model(grid, 0), self._model(grid, 1)
         # background profile
         Tb = torch.ones(grid.bins, dtype=torch.float64, device=dev)
+        accepted = torch.tensor(state.accepted, device=dev)
+        fitted = accepted.clone()
         if state.n_bg > 0:
             E = self._binned(state.bg_sum, state.bg_count, state.accepted)
             keep = _outliers(E, bg_model, o["outlier_factor"])
+            fitted[accepted.nonzero()[:, 0][~keep]] = False
             Tb, _, params = _global_fit(E[keep], bg_model)
-            out["background"] = bg_model.full(Tb, params)
+            raw = bg_model.full(Tb, params, raw=True)
+            out["background"] = raw / raw.mean()
+            # bins in the units of the pixel profile (mean 1 over pixels)
+            Tb = Tb / raw.mean()
             out["background_error"] = _random_error(
                 E[keep], bg_model, o["subsets"]
             )
@@ -634,6 +743,9 @@ class KaskFlatField(Estimator):
         den = (c * Tb).sum((1, 2))
         levels = torch.where(den > 0, s.sum((1, 2)) / den, math.nan)
         out["levels"] = levels
+        out["fitted"] = (
+            fitted if bool(fitted.any()) else torch.ones_like(fitted)
+        )
         if not bg_ok:
             return out
         # foreground profile
@@ -700,7 +812,7 @@ class KaskFlatField(Estimator):
             if state is None or not state.accepted:
                 raise ValueError("KaskFlatField needs at least one image")
             p = self._profiles(state, grid, group)
-            level = p["levels"].nanmean()
+            level = p["levels"][p["fitted"]].nanmean()
             level = torch.nan_to_num(level, nan=0.0)
             flats.append(p["foreground"])
             darks.append(level * p["background"])
@@ -713,6 +825,9 @@ class KaskFlatField(Estimator):
             ):
                 meta.setdefault(key, []).append(p[key])
             meta.setdefault("background_level", []).append(float(level))
+            meta.setdefault("noise_constant", []).append(
+                self._final_kappa(state)
+            )
             if verbose:
                 print(
                     f"KaskFlatField group {group}: background error "
@@ -740,6 +855,14 @@ class KaskFlatField(Estimator):
             )
         }
 
+    def _final_kappa(self, state: _GroupState) -> float:
+        k = self.options["kappa"]
+        if k == "per-frame":
+            return math.nan
+        if k == "series":
+            return state.kappa.median()
+        return float(k)
+
     def _apply(
         self, data: ArrayLike, out: WritableArrayLike | None
     ) -> WritableArrayLike:
@@ -758,6 +881,13 @@ class KaskFlatField(Estimator):
         profile = torch.where(mean > 0, dark / mean, torch.ones_like(dark))
         fallback = mean[..., 0, 0]
         opts = self.options
+        kappas = est.meta.get("noise_constant")
+        if opts["kappa"] == "per-frame" or kappas is None:
+            kappas = torch.full(group_shape, math.nan, dtype=torch.float64)
+        else:
+            kappas = torch.tensor(kappas, dtype=torch.float64).reshape(
+                group_shape
+            )
 
         def fn(chunk: object, batch: Tensor) -> Tensor:
             p = profile[chunk.group].to(batch)
@@ -765,7 +895,9 @@ class KaskFlatField(Estimator):
             frames = batch.reshape(-1, *spatial)
             res = torch.empty_like(frames)
             for i, x in enumerate(frames):
-                mask, _ = _background_mask(x, p, opts)
+                k = float(kappas[chunk.group])
+                k = None if math.isnan(k) else k
+                mask, _ = _background_mask(x, p, opts, k)
                 b = _level(x, p, mask)
                 if not bool(torch.isfinite(b)):
                     b = fallback[chunk.group].to(batch)

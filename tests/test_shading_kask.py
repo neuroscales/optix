@@ -5,6 +5,7 @@ import torch
 
 import optix
 from optix.io import Layout, labeled
+from optix.models import random_sensor, simulate_sensor
 from optix.shading import KaskFlatField
 from optix.shading._kask import (
     _CURVATURES,
@@ -36,11 +37,23 @@ BACKGROUND = dome(0.3, 0.05, -0.05)
 FOREGROUND = dome(0.5, -0.15, 0.2)
 
 
-def simulate(n, *, seed=0, density=0.003, amp=(2000.0, 2500.0), full=()):
-    """Poisson images N = S_f · U + B · S_b with bright disks (U).
+def simulate(
+    n,
+    *,
+    seed=0,
+    density=0.003,
+    amp=(2000.0, 2500.0),
+    full=(),
+    level=(80.0, 40.0),
+    sensor=None,
+):
+    """Images N = S_f · U + B · S_b with bright disks (U).
 
     Frames listed in `full` are covered by a bright textured layer (no
-    background).
+    background). B is uniform in [level[0], level[0] + level[1]]. The
+    noise is Poisson (gain 1, no offset), or that of `sensor`
+    ([`simulate_sensor`][optix.models.simulate_sensor], U and B in
+    electrons).
     """
     g = torch.Generator().manual_seed(seed)
     H, W = SHAPE
@@ -58,10 +71,12 @@ def simulate(n, *, seed=0, density=0.003, amp=(2000.0, 2500.0), full=()):
             u = torch.where(disk, a, u)
         if k in full:
             u = 500 + 400 * torch.rand(SHAPE, generator=g, dtype=F64)
-        b = 80 + 40 * float(torch.rand(1, generator=g))
-        frames.append(
-            torch.poisson(FOREGROUND * u + b * BACKGROUND, generator=g)
-        )
+        b = level[0] + level[1] * float(torch.rand(1, generator=g))
+        rate = FOREGROUND * u + b * BACKGROUND
+        if sensor is None:
+            frames.append(torch.poisson(rate, generator=g))
+        else:
+            frames.append(simulate_sensor(rate, sensor, seed=seed * 1000 + k))
         signals.append(u)
         levels.append(b)
     return (
@@ -232,7 +247,54 @@ def test_apply_eq3(fitted):
 def test_low_background_images_discarded():
     data, *_ = simulate(40, seed=2, full=(3, 11, 20))
     est = KaskFlatField(dtype=F64, max_error=(None, None)).fit(data)
-    assert est.estimates["shading"].meta["background_images"] == 37
+    meta = est.estimates["shading"].meta
+    assert meta["background_images"] == 37
+    # B̄ averages the levels of the fitted images only
+    used = torch.ones(40, dtype=torch.bool)
+    used[[3, 11, 20]] = False
+    expected = float(est.background_level_[used].nanmean())
+    assert meta["background_level"] == pytest.approx(expected, rel=1e-9)
+
+
+def test_noise_constant_series():
+    """κ is one constant per group, estimated from the series (paper)."""
+    data, *_ = simulate(24, seed=8)
+    est = KaskFlatField(dtype=F64, max_error=(None, None)).fit(data)
+    kappa = est.estimates["shading"].meta["noise_constant"]
+    assert kappa == pytest.approx(1.0, rel=0.1)  # Poisson, gain 1
+    assert est.options["kappa"] == KaskFlatField.paper["kappa"] == "series"
+    fixed = KaskFlatField(dtype=F64, max_error=(None, None), kappa=kappa)
+    a = est.estimates["shading"]
+    b = fixed.fit(data).estimates["shading"]
+    torch.testing.assert_close(a.dark, b.dark, rtol=0.01, atol=0)
+    per = KaskFlatField(dtype=F64, max_error=(None, None), kappa="per-frame")
+    per.fit(data)
+    assert not per.is_faithful
+    assert per.estimates["shading"].meta["noise_constant"] is None
+    assert per.apply(data[:2]).shape == data[:2].shape
+    with pytest.raises(ValueError):
+        KaskFlatField(kappa="global")
+    with pytest.raises(ValueError):
+        KaskFlatField(kappa=-1.0)
+
+
+def test_camera_sensor():
+    """Gain ≠ 1, a camera offset and read noise (optix.models)."""
+    gain, offset, level = 2.0, 100.0, 60.0
+    sensor = random_sensor(
+        SHAPE, offset=offset, offset_sd=0.0, gain=gain, seed=0, dtype=F64
+    )
+    data, signal, _ = simulate(
+        96, seed=9, amp=(1000.0, 1250.0), level=(level, 0.0), sensor=sensor
+    )
+    est = KaskFlatField(dtype=F64, max_error=(None, None)).fit(data)
+    s = est.estimates["shading"]
+    # var/mean of the background: g · B S_b / (o + g · B S_b) < g
+    kappa = s.meta["noise_constant"]
+    assert 0.5 * gain < kappa < gain
+    dark = offset + gain * level * BACKGROUND  # in ADU
+    assert rms(s.dark, dark) < 0.005
+    assert rms(s.flat, FOREGROUND) < 0.03
 
 
 def test_quality_control():
