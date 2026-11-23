@@ -48,6 +48,7 @@ nav = [
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
+      "algorithms/destripe/vsnr.md",
     ]},
     {"Point-spread function" = [
       "algorithms/psf/bead-psf.md",

@@ -234,6 +234,25 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
 
+## Stationary noise
+
+Noise made of known patterns convolved with white noise, as in
+[VSNR](../algorithms/destripe/vsnr.md). The first rows are the stripe symbols
+shared with the other destriping pages.
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{s}$ | stripe or stationary noise component of a frame, $\mathbf{y} = \mathbf{x} + \mathbf{s}$ | |
+| $\theta$ | direction of the stripes (in degrees in code), not the difference of two means nor the coefficients $\boldsymbol{\Theta}$ | `angle` |
+| $\nabla$ | forward differences along the two axes of a frame | |
+| $\lVert \nabla \mathbf{x} \rVert_{2,1}$ | isotropic total variation: sum over pixels of the Euclidean norm of the gradient | |
+| $\iota_{S}$ | indicator of a set $S$: $0$ inside, $\infty$ outside | |
+| $\mathbf{k}_i$ | known pattern $i$ of the noise: a kernel centred on its middle pixel (unrelated to the digamma function $\psi$) | `filters` |
+| $\boldsymbol{\lambda}_i$ | white noise convolved with $\mathbf{k}_i$, so that $\mathbf{s} = \sum_i \boldsymbol{\lambda}_i * \mathbf{k}_i$ (unrelated to the photoelectrons $\lambda$) | `VSNRSolution.weights` |
+| $*$ | convolution with periodic boundaries | |
+| $\phi_i$, $\alpha_i$ | prior of $\boldsymbol{\lambda}_i$ and its weight | `prior`, `alpha` |
+| $\epsilon$, $h_\epsilon$ | Huber parameter and function; $\lVert \cdot \rVert_{2,1}^{\epsilon}$ is the total variation with $h_\epsilon$ in place of the norm (unrelated to the read noise $\varepsilon$) | `eps` |
+| $\vartheta$ | over-relaxation of a primal-dual scheme (unrelated to $\theta$) | |
 ## Views
 
 | Symbol | Meaning | In code |

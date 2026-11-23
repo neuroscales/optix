@@ -9,6 +9,7 @@
       show_root_toc_entry: false
       members:
         - WaveletFFT
+        - VSNR
 
 ## Transforms
 
@@ -19,6 +20,7 @@
       show_root_toc_entry: false
       members:
         - wavelet_fft
+        - vsnr
 
 ## Utilities
 
@@ -41,3 +43,9 @@
         - waverec2
         - max_level
         - stripe_damping
+        - vsnr_solve
+        - VSNRSolution
+        - operator_norm
+        - dirac
+        - line
+        - gaussian_stripe
