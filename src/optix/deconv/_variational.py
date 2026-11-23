@@ -100,7 +100,7 @@ class _Variational(_BlockDeconvolution):
         peak = getattr(self, "peak", None)
         return None if peak is None else tuple(peak.shape)
 
-    def _block_input(self, chunk: Chunk) -> tuple[int, ...]:
+    def _block_input(self, chunk: Chunk) -> tuple[int | slice, ...]:
         """Index of the chunk's image in the per-image tensors."""
         return chunk.group + chunk.samples
 

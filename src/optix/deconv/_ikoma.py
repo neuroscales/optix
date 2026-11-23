@@ -487,7 +487,7 @@ class Ikoma(_Variational):
         self,
         blk: _Problem,
         op: PaddedConvolution,
-        index: tuple[int, ...],
+        index: tuple[int | slice, ...],
         trace: dict | None = None,
     ) -> tuple[Tensor, int]:
         nu = float(self.nu[index].squeeze())
