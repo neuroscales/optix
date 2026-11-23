@@ -37,8 +37,17 @@ of its paper.
 Docstrings write maths in UTF-8, not LaTeX, so that they read well in
 `help()`, in an editor and in the API reference alike (see the
 [style guide](../contributing/style.md)). Bold is not available there, so the
-case carries the meaning: `y_i = f ⊙ (x_i + b_i) + d`, `A x`, `Φ θ`. The
+case carries the meaning: `yᵢ = f ⊙ (xᵢ + bᵢ) + d`, `A x`, `Φ θ`. The
 symbols are the same as on this page.
+
+Indices and exponents use Unicode subscripts and superscripts wherever they
+exist: `xᵢ`, `bᵢ`, `σ²`, `Φᵀ`, `τ⁻¹`, `x̂ᵢ`, `rₙₖ`, `α₀`, `10⁻⁶`. Superscripts
+cover the digits, `⁺ ⁻ ⁼ ⁽ ⁾`, almost every lowercase letter and `ᵀ`.
+Subscripts cover only the digits, `₊ ₋ ₌ ₍ ₎` and the letters
+`ₐ ₑ ₕ ᵢ ⱼ ₖ ₗ ₘ ₙ ₒ ₚ ᵣ ₛ ₜ ᵤ ᵥ ₓ`; for any other index (`y_{ig}`,
+`x_{max}`, `b_g`), fall back to `_` with braces when it spans several
+characters. Do not mix the two styles within one symbol: `r_{nk}` or `rₙₖ`,
+never `rₙ_k`.
 
 ## Image formation
 

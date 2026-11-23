@@ -74,6 +74,9 @@ Docstrings use the numpy format and are rendered by mkdocstrings.
 - **Maths in UTF-8, not LaTeX.** Write `σ² = g²λ + …` in a docstring, since it is
   read in editors and in `help()` as often as on the web. LaTeX is for docs pages
   only.
+  Use Unicode subscripts and superscripts where they exist (`xᵢ`, `σ²`, `Φᵀ`,
+  `rₙₖ`), `_{…}` otherwise, and the symbols of the
+  [notation page](../concepts/notation.md#in-docstrings).
 - **Cross-references use mkdocstrings syntax**, never Sphinx roles: `` [`name`][] ``
   for a name in scope, or `` [`name`][optix.x.Name] `` with the full path. Do not
   write `` :class:`Name` `` or `` :func:`name` ``.
