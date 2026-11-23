@@ -17,22 +17,21 @@ __all__ = ["Histogram"]
 class Histogram(Reducer):
     """Per-pixel fixed-range histogram with underflow and overflow bins.
 
+    !!! note
+        Integer counts make the result exactly independent of chunking and
+        order. A zero-width range (`hi == lo`, dead pixels) puts every value
+        equal to `lo` into the first regular bin.
+
+        The state holds (bins + 2) · ∏(item) counts: 64 bins on a
+        2048 × 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
+        warning is emitted when it exceeds the configured chunk `memory`.
+
     Attributes
     ----------
     counts : (bins + 2, *item) Tensor
         `counts[0]` counts values below `lo`, `counts[-1]` values
         above `hi` (and NaNs), `counts[1:-1]` the regular bins. A value
         equal to `hi` goes into the last regular bin.
-
-    Notes
-    -----
-    Integer counts make the result exactly independent of chunking and
-    order. A zero-width range (`hi == lo`, dead pixels) puts every value
-    equal to `lo` into the first regular bin.
-
-    The state holds (bins + 2) · ∏(item) counts: 64 bins on a
-    2048 × 2048 image is about 2.2 GB in int64 (1.1 GB in int32). A
-    warning is emitted when it exceeds the configured chunk `memory`.
     """
 
     _state = ("counts", "lo", "hi")

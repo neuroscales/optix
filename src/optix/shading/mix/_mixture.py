@@ -161,6 +161,23 @@ class GammaMixture(Estimator):
     model it is identified only through the shape of the signal
     distribution.
 
+    !!! note
+        Memory and streaming: the fit reads the data in batches of frames,
+        once per iteration (plus one pass per halved step), and twice more
+        for the initialisation (once by strips of rows holding every frame,
+        for per-pixel order statistics, and once by frame batches).
+
+        The data-driven initialisation takes the per-pixel order statistic
+        of rank ½·`bg_fraction`·N as c and its distance to the rank
+        0.1587·`bg_fraction`·N as the standard deviation of the background
+        (clamped to [¼, 4] times its median); values more than `threshold`
+        standard deviations above c are labelled as tissue. The flat field
+        is initialised from their mean excess over the threshold, and the
+        classes by a k-means on the log of the tissue values.
+
+        The fit stops when the bound improves by less than `tol` per data
+        point, or after `max_iterations` iterations.
+
     Attributes
     ----------
     estimates : dict
@@ -183,24 +200,6 @@ class GammaMixture(Estimator):
         on the basis when a given flat field is held fixed).
     quantization_ : Tensor
         `(*group,)` width Δ of the quantisation bins used by the fit.
-
-    Notes
-    -----
-    Memory and streaming: the fit reads the data in batches of frames,
-    once per iteration (plus one pass per halved step), and twice more
-    for the initialisation (once by strips of rows holding every frame,
-    for per-pixel order statistics, and once by frame batches).
-
-    The data-driven initialisation takes the per-pixel order statistic
-    of rank ½·`bg_fraction`·N as c and its distance to the rank
-    0.1587·`bg_fraction`·N as the standard deviation of the background
-    (clamped to [¼, 4] times its median); values more than `threshold`
-    standard deviations above c are labelled as tissue. The flat field
-    is initialised from their mean excess over the threshold, and the
-    classes by a k-means on the log of the tissue values.
-
-    The fit stops when the bound improves by less than `tol` per data
-    point, or after `max_iterations` iterations.
 
     Examples
     --------
