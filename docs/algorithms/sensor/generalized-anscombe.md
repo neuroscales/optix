@@ -64,14 +64,16 @@ units ($\alpha = 1$, $\mu = 0$, Gaussian standard deviation $\sigma/\alpha$):
     \mathcal{I}_\sigma : \mathbb{E}\{f(z) \mid y, \sigma\} \longmapsto y
     $$
 
-| optix | [Mäkitalo & Foi 2013](https://doi.org/10.1109/TIP.2012.2202675) | meaning |
-|---|---|---|
-| $y$ | $z$ | observation (ADU) |
-| $g$ | $\alpha$ | gain |
-| $o$ | $\mu$ | offset (mean of the Gaussian part) |
-| $\sigma^2$ | $\sigma^2$ | read-noise variance |
-| $g\,\lambda$ | $y$ | expected signal above offset |
-| $d$ | $D$ | transformed (denoised) data |
+| optix | [Mäkitalo & Foi 2013](https://doi.org/10.1109/TIP.2012.2202675) | Meaning | Shape |
+|---|---|---|---|
+| $y$ | $z$ | recorded value (ADU) | scalar, per pixel and per frame |
+| $g$ | $\alpha$ | gain (ADU per electron) | scalar, one per group (per pixel with `per_pixel=True`) |
+| $o$ | $\mu$ | offset, mean of the Gaussian part | scalar, one per group (per pixel with `per_pixel=True`) |
+| $\sigma^2$ | $\sigma^2$ | read-noise variance (ADU²) | scalar, one per group (per pixel with `per_pixel=True`) |
+| $g\,\lambda$ | $y$ | expected signal above the offset | scalar, per pixel |
+| $f(y)$ | $f(z)$ | stabilised value, noise variance about 1 | scalar, per pixel and per frame |
+| $d$ | $D$ | denoised stabilised value, input of the inverse | scalar, per pixel |
+| $\mathcal{I}_{\sigma/g}$ | $\mathcal{I}_\sigma$ | exact unbiased inverse at normalised noise level | function, one per value of $\sigma/g$ |
 
 Assumptions: the parameters are known and, by default, the same for every pixel
 (the means of the maps of the estimate); no clipping. The stabilisation is
@@ -90,18 +92,29 @@ interpolation, and switches to the closed-form approximation of
 [Mäkitalo & Foi 2011](https://doi.org/10.1109/TIP.2011.2121085) above the table.
 The closed-form, asymptotic and algebraic inverses are available too.
 
+Statistically, $f$ is a delta-method variance-stabilising transform, and the
+exact unbiased inverse is a method-of-moments estimator: it returns the
+parameter $y$ whose model expectation $\mathbb{E}\{f(z) \mid y\}$ equals the
+denoised value $d$. Under a Gaussian posterior for $f(z)$ it is the inverse of
+the posterior-mean map, not a full Bayesian estimate of $y$.
+
 ## Algorithm
 
-```text
-Input: data Y, sensor estimate (g, o, sigma^2) or alpha, sigma, mu
-apply:   D = f(Y)                          (pointwise)
-inverse: s2 = (sigma / g)^2
-         "exact":       interpolate the table of E{f | y, s2}^-1
-                        (built once, float64, CPU); closed form above it
-         "closed-form": Eq. (21);  "asymptotic": D^2/4 - 1/8 - s2
-         "algebraic":   D^2/4 - 3/8 - s2 (biased)
-         return g * y + o
-```
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$ ($P$
+pixels per frame); camera parameters $(g, o, \sigma^2)$ from a `SensorEstimate`
+or from `alpha`, `sigma`, `mu`; `inverse="exact"`. \
+**Output:** `apply`: stabilised frames $f(\mathbf{y}_i) \in \mathbb{R}^P$;
+`inverse`: an estimate of $\mathbb{E}[\mathbf{y}] \in \mathbb{R}^P$ in ADU.
+
+1. **Forward** (`apply`), pointwise: $d = f(y)$.
+2. **Inverse** (`inverse`), pointwise, with $s^2 = (\sigma/g)^2$:
+    1. `"exact"`: interpolate the inverse of the table of
+       $\mathbb{E}\{f \mid y, s^2\}$ (built once in float64 on the CPU), with
+       the closed form above the table;
+    2. `"closed-form"`: Eq. (21);
+    3. `"asymptotic"`: $\hat y = d^2/4 - 1/8 - s^2$;
+    4. `"algebraic"`: $\hat y = d^2/4 - 3/8 - s^2$ (biased).
+3. **Return** $g\,\hat y + o$.
 
 ## Faithful mode and extensions
 
