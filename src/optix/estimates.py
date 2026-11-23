@@ -501,8 +501,8 @@ class PupilEstimate(Estimate):
     The pupil is sampled on the discrete Fourier grid of the lateral
     image grid it was estimated from: k = (i − K // 2) / (K · Δ) along
     each axis, so that k = 0 is at index `K // 2`. `meta` records the
-    optics (`wavelength`, `na`, `n`) and the voxel size `spacing`
-    `(Δz, Δy, Δx)` they refer to.
+    optics (`wavelength`, `numerical_aperture`, `refractive_index`) and
+    the voxel size `spacing` `(Δz, Δy, Δx)` they refer to.
 
     Attributes
     ----------

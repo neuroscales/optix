@@ -8,7 +8,13 @@ from torch import Tensor
 
 from .._estimator import Estimator, Tags
 from ..estimates import PSFEstimate, PupilEstimate
-from ..io import ArrayLike, Labeled, WritableArrayLike, as_tensor
+from ..io import (
+    ArrayLike,
+    Labeled,
+    WritableArrayLike,
+    as_tensor,
+    chunk_length,
+)
 from ._ops import gaussian_filter
 from ._zernike import unwrap_phase, zernike, zernike_fit
 
@@ -26,6 +32,9 @@ __all__ = [
 ]
 
 _DOI = "10.1111/j.0022-2720.2004.01393.x"
+# frequencies where the calculated OTF is below this fraction of its value
+# at k = 0 are left out of the rescaling fit (the ratio is noise there)
+_OTF_FLOOR = 1e-3
 
 
 # -- grids and transforms ------------------------------------------------
@@ -35,9 +44,12 @@ def _check_optics(wavelength: float, na: float, n: float | None) -> None:
     if not wavelength > 0:
         raise ValueError(f"wavelength must be positive, got {wavelength}")
     if not na > 0:
-        raise ValueError(f"na must be positive, got {na}")
+        raise ValueError(f"numerical_aperture must be positive, got {na}")
     if n is not None and not na < n:
-        raise ValueError(f"na ({na}) must be smaller than n ({n})")
+        raise ValueError(
+            f"numerical_aperture ({na}) must be smaller than the "
+            f"refractive index ({n})"
+        )
 
 
 class _Grid:
@@ -115,7 +127,7 @@ def pupil_coordinates(
     spacing: Sequence[float],
     *,
     wavelength: float,
-    na: float,
+    numerical_aperture: float,
     dtype: torch.dtype | None = None,
     device: torch.device | str | None = None,
 ) -> tuple[Tensor, Tensor]:
@@ -134,7 +146,7 @@ def pupil_coordinates(
         Lateral pixel size `(Δy, Δx)`, in the units of `wavelength`.
     wavelength : float
         Vacuum wavelength λ of the detected light.
-    na : float
+    numerical_aperture : float
         Numerical aperture.
     dtype, device : optional
         Floating dtype and device (default: torch's default dtype, CPU).
@@ -148,7 +160,7 @@ def pupil_coordinates(
         shape,
         spacing,
         wavelength,
-        na,
+        numerical_aperture,
         None,
         dtype=dtype or torch.get_default_dtype(),
         device=None if device is None else torch.device(device),
@@ -161,8 +173,8 @@ def vectorial_factors(
     spacing: Sequence[float],
     *,
     wavelength: float,
-    na: float,
-    n: float,
+    numerical_aperture: float,
+    refractive_index: float,
     dtype: torch.dtype | None = None,
     device: torch.device | str | None = None,
 ) -> Tensor:
@@ -204,7 +216,7 @@ def vectorial_factors(
     shape, spacing : (int, int), (float, float)
         Lateral image grid (see
         [`pupil_coordinates`][optix.psf.utils.pupil_coordinates]).
-    wavelength, na, n : float
+    wavelength, numerical_aperture, refractive_index : float
         Vacuum wavelength, numerical aperture and immersion refractive
         index.
     dtype, device : optional
@@ -218,8 +230,8 @@ def vectorial_factors(
         shape,
         spacing,
         wavelength,
-        na,
-        n,
+        numerical_aperture,
+        refractive_index,
         dtype=dtype or torch.get_default_dtype(),
         device=None if device is None else torch.device(device),
     )
@@ -350,8 +362,8 @@ def pupil_psf(
     *,
     spacing: Sequence[float],
     wavelength: float,
-    na: float,
-    n: float,
+    numerical_aperture: float,
+    refractive_index: float,
     vectorial: bool = False,
     bead_diameter: float | None = None,
     otf_sigma: float | None = None,
@@ -389,7 +401,10 @@ def pupil_psf(
 
     !!! note "Orientation"
         z increases with the section index. Flipping the axis (z → −z)
-        changes the pupil into its complex conjugate rotated by 180°.
+        changes the pupil into its complex conjugate rotated by 180°
+        about index `K // 2`, i.e. P(k) → P*(−k). For even K the row and
+        column at index 0 have no partner: the rotation is
+        `torch.roll(P.flip(-2, -1), (1, 1), (-2, -1))`, not a plain flip.
 
     !!! references "References"
         1. Hanser BM, Gustafsson MGL, Agard DA, Sedat JW.
@@ -420,7 +435,7 @@ def pupil_psf(
         Defocus of each section, in the units of `wavelength`.
     spacing : (float, float)
         Lateral pixel size `(Δy, Δx)` of the image grid.
-    wavelength, na, n : float
+    wavelength, numerical_aperture, refractive_index : float
         Vacuum wavelength λ, numerical aperture and immersion refractive
         index.
     vectorial : bool
@@ -444,8 +459,8 @@ def pupil_psf(
         pupil.shape[-2:],
         spacing,
         wavelength,
-        na,
-        n,
+        numerical_aperture,
+        refractive_index,
         dtype=real,
         device=pupil.device,
     )
@@ -472,7 +487,7 @@ def zernike_pupil(
     shape: Sequence[int],
     spacing: Sequence[float],
     wavelength: float,
-    na: float,
+    numerical_aperture: float,
     dtype: torch.dtype | None = None,
     device: torch.device | str | None = None,
 ) -> Tensor:
@@ -495,7 +510,7 @@ def zernike_pupil(
         a flat phase.
     shape, spacing : (int, int), (float, float)
         Lateral image grid `(Y, X)` and pixel size.
-    wavelength, na : float
+    wavelength, numerical_aperture : float
         Vacuum wavelength and numerical aperture.
     dtype, device : optional
         Floating dtype (default: that of the coefficients, else torch's
@@ -517,7 +532,13 @@ def zernike_pupil(
         device = like.device
     device = None if device is None else torch.device(device)
     grid = _Grid(
-        shape, spacing, wavelength, na, None, dtype=dtype, device=device
+        shape,
+        spacing,
+        wavelength,
+        numerical_aperture,
+        None,
+        dtype=dtype,
+        device=device,
     )
 
     def expand(coef: object) -> Tensor:
@@ -538,8 +559,8 @@ def zernike_psf(
     shape: Sequence[int],
     spacing: Sequence[float],
     wavelength: float,
-    na: float,
-    n: float,
+    numerical_aperture: float,
+    refractive_index: float,
     vectorial: bool = False,
     bead_diameter: float | None = None,
     otf_sigma: float | None = None,
@@ -582,7 +603,7 @@ def zernike_psf(
         Output shape `(Z, Y, X)`.
     spacing : (float, float, float)
         Voxel size `(Δz, Δy, Δx)`, in the units of `wavelength`.
-    wavelength, na, n : float
+    wavelength, numerical_aperture, refractive_index : float
         Vacuum wavelength, numerical aperture and immersion refractive
         index.
     vectorial, bead_diameter, otf_sigma, normalize
@@ -601,7 +622,7 @@ def zernike_psf(
         shape=(ny, nx),
         spacing=(dy, dx),
         wavelength=wavelength,
-        na=na,
+        numerical_aperture=numerical_aperture,
     )
     real = pupil.real.dtype
     z = (torch.arange(nz, dtype=real, device=pupil.device) - nz // 2) * dz
@@ -610,8 +631,8 @@ def zernike_psf(
         z,
         spacing=(dy, dx),
         wavelength=wavelength,
-        na=na,
-        n=n,
+        numerical_aperture=numerical_aperture,
+        refractive_index=refractive_index,
         vectorial=vectorial,
         bead_diameter=bead_diameter,
         otf_sigma=otf_sigma,
@@ -625,8 +646,8 @@ def fit_otf_rescaling(
     *,
     spacing: Sequence[float],
     wavelength: float,
-    na: float,
-    n: float,
+    numerical_aperture: float,
+    refractive_index: float,
 ) -> float:
     """Width of the empirical Gaussian OTF rescaling.
 
@@ -637,7 +658,7 @@ def fit_otf_rescaling(
         g(k) = exp(−|k|² / (2σ²))
 
     over the OTF support of a wide-field microscope of numerical
-    aperture `na`, i.e. |k_r| ≤ 2 NA/λ and
+    aperture `numerical_aperture`, i.e. |k_r| ≤ 2 NA/λ and
     |k_z| ≤ √((n/λ)² − (|k_r| − NA/λ)²) − √((n/λ)² − (NA/λ)²).
     Hanser et al. (2004) fit on the support of a smaller aperture than
     the objective's (NA 1.15 for an NA 1.3 objective), where the
@@ -650,7 +671,11 @@ def fit_otf_rescaling(
         frequency"; its exact form is not specified. Here g is isotropic
         in the 3D frequency |k|, with unit value at k = 0 (so the PSF sum
         is kept), and σ is found by a golden-section search of the
-        least-squares criterion.
+        least-squares criterion. Frequencies where the calculated OTF is
+        below 10⁻³ of its value at k = 0 are left out of the fit, since
+        the ratio is dominated by noise there (not specified in the
+        paper, which restricts the fit to the support of a smaller
+        aperture for the same reason).
 
     !!! references "References"
         1. Hanser BM, Gustafsson MGL, Agard DA, Sedat JW.
@@ -678,7 +703,7 @@ def fit_otf_rescaling(
         grid.
     spacing : (float, float, float)
         Voxel size `(Δz, Δy, Δx)`.
-    wavelength, na, n : float
+    wavelength, numerical_aperture, refractive_index : float
         Vacuum wavelength, numerical aperture of the fit support, and
         immersion refractive index.
 
@@ -687,7 +712,7 @@ def fit_otf_rescaling(
     float
         σ in cycles per unit length (`inf` when no attenuation fits).
     """
-    _check_optics(wavelength, na, n)
+    _check_optics(wavelength, numerical_aperture, refractive_index)
     measured = torch.as_tensor(measured, dtype=torch.float64)
     calculated = torch.as_tensor(calculated, dtype=torch.float64)
     if measured.shape != calculated.shape or measured.ndim != 3:
@@ -701,12 +726,12 @@ def fit_otf_rescaling(
     ]
     kr = (fy[None, :, None].square() + fx[None, None, :].square()).sqrt()
     kz = fz[:, None, None].abs()
-    big, edge = n / wavelength, na / wavelength
+    big, edge = refractive_index / wavelength, numerical_aperture / wavelength
     bound = (big**2 - (kr - edge).square()).clamp(min=0).sqrt() - math.sqrt(
         big**2 - edge**2
     )
     mask = (kr <= 2 * edge) & (kz <= bound)
-    mask &= oc > 1e-12
+    mask &= oc > _OTF_FLOOR
     ratio = (om / torch.where(mask, oc, 1))[mask]
     k2 = (kr.square() + kz.square()).expand_as(mask)[mask]
     kmax = float(k2.max()) if k2.numel() else 1.0
@@ -741,9 +766,9 @@ def index_mismatch_aberration(
     *,
     depth: float,
     wavelength: float,
-    na: float,
-    n1: float,
-    n2: float,
+    numerical_aperture: float,
+    immersion_index: float,
+    specimen_index: float,
     dtype: torch.dtype | None = None,
     device: torch.device | str | None = None,
 ) -> Tensor:
@@ -799,10 +824,13 @@ def index_mismatch_aberration(
     depth : float
         Depth d of the source below the cover glass, in the units of
         `wavelength`.
-    wavelength, na : float
+    wavelength, numerical_aperture : float
         Vacuum wavelength and numerical aperture.
-    n1, n2 : float
-        Design immersion index n₁ and sample (mounting medium) index n₂.
+    immersion_index : float
+        Refractive index n₁ of the immersion medium the objective is
+        designed for.
+    specimen_index : float
+        Refractive index n₂ of the specimen (mounting medium).
     dtype, device : optional
 
     Returns
@@ -814,11 +842,12 @@ def index_mismatch_aberration(
         shape,
         spacing,
         wavelength,
-        na,
-        n1,
+        numerical_aperture,
+        immersion_index,
         dtype=dtype or torch.get_default_dtype(),
         device=None if device is None else torch.device(device),
     )
+    n1, n2 = float(immersion_index), float(specimen_index)
     s1 = (grid.k2.sqrt() * wavelength / n1).clamp(max=1)
     s2 = n1 * s1 / n2
     ok = grid.support & (s2 < 1)
@@ -858,6 +887,107 @@ def _metrics(calc: Tensor, meas: Tensor, amp: Tensor) -> Tensor:
     return torch.stack([imse, corr, amp_err], -1)
 
 
+class _StackReader:
+    """Reads z-slabs of one group of a `(*group, Z, Y, X)` stack.
+
+    Only basic slices are taken from the storage (any array-like, or the
+    array of a [`Labeled`][optix.io.Labeled] whose layout gives the axis
+    roles), so a zarr-backed stack is never loaded whole.
+    """
+
+    def __init__(self, data: object, backend: dict) -> None:
+        self.backend = backend
+        if isinstance(data, Labeled):
+            raw, layout = data.array, data.layout
+            ndim = len(raw.shape)
+            group, sample, spatial = layout.positions(ndim)
+            if sample:
+                raise ValueError(
+                    "PhaseRetrieval takes one stack per group: average the "
+                    "sample axes first (e.g. with BeadPSF)"
+                )
+            if len(spatial) != 3:
+                raise ValueError("PhaseRetrieval needs 3 spatial axes")
+            perm = layout.permutation(ndim)
+        else:
+            raw = data
+            ndim = len(raw.shape)
+            if ndim < 3:
+                raise ValueError("PhaseRetrieval needs a (…, Z, Y, X) stack")
+            group, spatial = (
+                tuple(range(ndim - 3)),
+                (ndim - 3, ndim - 2, ndim - 1),
+            )
+            perm = tuple(range(ndim))
+        self.raw, self.perm = raw, perm
+        self.group_axes, self.z_axis = group, spatial[0]
+        self.groups = tuple(int(raw.shape[a]) for a in group)
+        self.ngroups = math.prod(self.groups)
+        self.shape = tuple(int(raw.shape[a]) for a in spatial)
+        probe = self.read(0, 0, 1)
+        self.dtype, self.device = probe.dtype, probe.device
+
+    def read(self, g: int, z0: int, z1: int) -> Tensor:
+        """Sections `z0:z1` of group `g` (flat index), `(z1 − z0, Y, X)`."""
+        index = [slice(None)] * len(self.raw.shape)
+        rest = g
+        pairs = list(zip(self.group_axes, self.groups, strict=True))
+        for axis, size in reversed(pairs):
+            rest, i = divmod(rest, size)
+            index[axis] = slice(i, i + 1)
+        index[self.z_axis] = slice(z0, z1)
+        x = as_tensor(self.raw[tuple(index)], **self.backend)
+        x = x.permute(self.perm)
+        return x.reshape(x.shape[-3:])
+
+
+class _Agreement:
+    """Mergeable sums of the iMSE and the correlation of two images.
+
+    Means and centred (co)moments are merged pairwise (Chan et al.), in
+    float64, so the correlation does not cancel catastrophically.
+    """
+
+    def __init__(self) -> None:
+        self.n = 0
+        self.mc = self.mm = 0.0
+        self.cc = self.ccm = self.cm = 0.0
+        self.diff2 = self.meas2 = 0.0
+
+    def update(self, calc: Tensor, meas: Tensor) -> None:
+        c, m = calc.double().flatten(), meas.double().flatten()
+        nb = c.numel()
+        if nb == 0:
+            return
+        mc, mm = float(c.mean()), float(m.mean())
+        dc, dm = c - mc, m - mm
+        cc, mmm, cm = (
+            float(dc.square().sum()),
+            float(dm.square().sum()),
+            float((dc * dm).sum()),
+        )
+        na, n = self.n, self.n + nb
+        ddc, ddm = mc - self.mc, mm - self.mm
+        w = na * nb / n
+        self.cc += cc + ddc * ddc * w
+        self.ccm += mmm + ddm * ddm * w
+        self.cm += cm + ddc * ddm * w
+        self.mc += ddc * nb / n
+        self.mm += ddm * nb / n
+        self.n = n
+        self.diff2 += float((c - m).square().sum())
+        self.meas2 += float(m.square().sum())
+
+    @property
+    def imse(self) -> float:
+        return self.diff2 / self.meas2 if self.meas2 > 0 else math.nan
+
+    @property
+    def correlation(self) -> float:
+        den = math.sqrt(self.cc * self.ccm)
+        return self.cm / den if den > 0 else math.nan
+
+
 class PhaseRetrieval(Estimator):
     """Pupil function retrieved from a bead z-stack, and its Zernike fit.
 
@@ -875,7 +1005,8 @@ class PhaseRetrieval(Estimator):
        intensity, keeping its phase.
     4. Transform back and refocus by e^{−2πi k_z z_j}.
     5. Average the refocused pupils over the sections.
-    6. Set P = 0 outside the pupil (NA constraint); optionally smooth.
+    6. Set P = 0 outside the pupil (NA constraint), and smooth it (see
+       the warning below).
     7. Repeat from 2 for a fixed number of iterations (25 in the paper).
 
     The magnitude and the phase of the final pupil are then expanded in
@@ -905,6 +1036,12 @@ class PhaseRetrieval(Estimator):
     smoothing); `history.objective` is −iMSE. The final values over the
     whole stack are in `meta["imse"]` / `meta["correlation"]`.
 
+    **Memory.** The stack is read in z-slabs, one group at a time: a pass
+    for the per-section maxima (only when `focus` is None), the selected
+    sections, and a pass for the whole-stack iMSE and correlation, which
+    are accumulated from mergeable sums. Only the selected sections and
+    the pupils of all groups are held in memory during the iteration.
+
     !!! note "Choices not specified in the paper"
         - iMSE = ∑(I_calc − I_meas)² / ∑ I_meas² over the voxels compared.
         - The data are scaled so that the mean energy of the selected
@@ -912,11 +1049,8 @@ class PhaseRetrieval(Estimator):
           pixels); the retrieved magnitude is then close to 1.
         - Negative intensities (after background subtraction) are set to
           0 before the square root.
-        - The smoothing filter (step 6) is a Gaussian of `smoothing`
-          pupil pixels applied to the real and imaginary parts, off by
-          default; the paper does not give its form. The paper's
-          optional stopping criterion is not implemented (fixed number
-          of iterations).
+        - The paper's optional stopping criterion is not implemented
+          (fixed number of iterations).
         - The arbitrary global phase of the result is set so that ∑P is
           real and positive.
         - Zernike indexing and normalisation are Noll's (1976), whom the
@@ -925,6 +1059,16 @@ class PhaseRetrieval(Estimator):
           [`unwrap_phase`][optix.psf.utils.unwrap_phase] (path not
           specified in the paper); the fits are unweighted over the
           pupil pixels.
+
+    !!! warning "Departure from the paper: smoothing"
+        Hanser et al. (2004) applied a smoothing filter to the pupil at
+        every iteration (step 6) to suppress noise, noting that less
+        frequent or no smoothing may suit low-noise data. The paper does
+        not specify the filter, so it cannot be reproduced: the default
+        (`smoothing=None`, also in faithful mode) runs without smoothing.
+        `smoothing=σ` applies a Gaussian of standard deviation σ pupil
+        pixels to the real and imaginary parts of the pupil at each
+        iteration; it is an extension (`is_faithful` is then False).
 
     !!! note "Sampling"
         The pupil grid is the Fourier grid of the lateral field of view:
@@ -969,8 +1113,8 @@ class PhaseRetrieval(Estimator):
         *,
         spacing: Sequence[float] | None = None,
         wavelength: float | None = None,
-        na: float | None = None,
-        n: float | None = None,
+        numerical_aperture: float | None = None,
+        refractive_index: float | None = None,
         offsets: Sequence[float] | str | None = None,
         focus: int | None = None,
         iterations: int | None = None,
@@ -991,9 +1135,9 @@ class PhaseRetrieval(Estimator):
             `wavelength` (µm for the default `offsets`). Required.
         wavelength : float
             Vacuum wavelength λ of the detected light. Required.
-        na : float
+        numerical_aperture : float
             Numerical aperture. Required.
-        n : float
+        refractive_index : float
             Refractive index of the immersion medium. Required.
         offsets : sequence of float or "all"
             Defocus of the sections used, relative to `focus`; each
@@ -1006,7 +1150,10 @@ class PhaseRetrieval(Estimator):
             Number of iterations. Paper: 25.
         smoothing : float, optional
             Standard deviation, in pupil pixels, of a Gaussian smoothing
-            of the pupil at each iteration. Default: none.
+            of the pupil at each iteration. Default: none. The paper
+            smooths at each iteration with a filter it does not specify,
+            so faithful mode leaves smoothing off (see the warning
+            above); any value is an extension.
         zernike_terms : int
             Number of Noll-ordered Zernike terms fitted. Paper: 79.
         unwrap : bool
@@ -1024,12 +1171,21 @@ class PhaseRetrieval(Estimator):
         super().__init__(faithful=faithful, dtype=dtype, device=device)
         self._resolve(faithful, locals())
         opt = self.options
-        for name in ("spacing", "wavelength", "na", "n"):
+        for name in (
+            "spacing",
+            "wavelength",
+            "numerical_aperture",
+            "refractive_index",
+        ):
             if opt[name] is None:
                 raise ValueError(f"PhaseRetrieval needs `{name}`")
         if len(opt["spacing"]) != 3:
             raise ValueError("spacing must be (Δz, Δy, Δx)")
-        _check_optics(float(opt["wavelength"]), float(opt["na"]), opt["n"])
+        _check_optics(
+            float(opt["wavelength"]),
+            float(opt["numerical_aperture"]),
+            opt["refractive_index"],
+        )
         if isinstance(opt["offsets"], str):
             if opt["offsets"] != "all":
                 raise ValueError(
@@ -1051,7 +1207,7 @@ class PhaseRetrieval(Estimator):
         )
 
     # -- data -----------------------------------------------------------
-    def _stack(self, data: object) -> tuple[Tensor, tuple[int, ...]]:
+    def _reader(self, data: object) -> "_StackReader":
         backend = self._backend(data)
         if isinstance(data, Estimator):
             data = data.estimates.get("psf")
@@ -1059,51 +1215,24 @@ class PhaseRetrieval(Estimator):
                 raise ValueError("the estimator has no 'psf' estimate")
         if isinstance(data, PSFEstimate):
             data = data.psf
-        if isinstance(data, Labeled):
-            raw, layout = data.array, data.layout
-            group, sample, spatial = layout.positions(len(raw.shape))
-            if sample:
-                raise ValueError(
-                    "PhaseRetrieval takes one stack per group: average the "
-                    "sample axes first (e.g. with BeadPSF)"
-                )
-            if len(spatial) != 3:
-                raise ValueError("PhaseRetrieval needs 3 spatial axes")
-            x = as_tensor(raw[...], **backend)
-            x = x.permute(layout.permutation(x.ndim))
-        else:
-            x = as_tensor(data[...], **backend)
-            if x.ndim < 3:
-                raise ValueError("PhaseRetrieval needs a (…, Z, Y, X) stack")
-        groups = tuple(x.shape[:-3])
-        return x.reshape(-1, *x.shape[-3:]), groups
+        return _StackReader(data, backend)
 
-    def _sections(self, stack: Tensor) -> tuple[list[int], list[list[int]]]:
+    def _sections(self, focus: int, nz: int) -> list[int]:
         opt = self.options
-        nz = stack.shape[1]
         dz = float(opt["spacing"][0])
-        if opt["focus"] is None:
-            focus = stack.flatten(2).amax(-1).argmax(-1).tolist()
-        else:
-            focus = [int(opt["focus"])] * stack.shape[0]
-        chosen = []
-        for f in focus:
-            if not 0 <= f < nz:
-                raise ValueError(f"focus {f} is outside the stack (Z={nz})")
-            if opt["offsets"] == "all":
-                idx = list(range(nz))
-            else:
-                idx = [f + round(float(o) / dz) for o in opt["offsets"]]
-            bad = [i for i in idx if not 0 <= i < nz]
-            if bad:
-                raise ValueError(
-                    f"offsets {opt['offsets']} from section {f} fall "
-                    f"outside the stack (Z={nz}, Δz={dz})"
-                )
-            if len(set(idx)) != len(idx):
-                raise ValueError(f"offsets select repeated sections: {idx}")
-            chosen.append(idx)
-        return focus, chosen
+        if not 0 <= focus < nz:
+            raise ValueError(f"focus {focus} is outside the stack (Z={nz})")
+        if opt["offsets"] == "all":
+            return list(range(nz))
+        idx = [focus + round(float(o) / dz) for o in opt["offsets"]]
+        if any(not 0 <= i < nz for i in idx):
+            raise ValueError(
+                f"offsets {opt['offsets']} from section {focus} fall "
+                f"outside the stack (Z={nz}, Δz={dz})"
+            )
+        if len(set(idx)) != len(idx):
+            raise ValueError(f"offsets select repeated sections: {idx}")
+        return idx
 
     # -- fit ------------------------------------------------------------
     def _fit(
@@ -1116,31 +1245,53 @@ class PhaseRetrieval(Estimator):
     ) -> None:
         self._warn_unused(init)
         opt = self.options
-        stack, groups = self._stack(data)
-        real = stack.dtype
+        reader = self._reader(data)
+        real, device = reader.dtype, reader.device
+        nz, ny, nx = reader.shape
         dz, dy, dx = (float(s) for s in opt["spacing"])
         grid = _Grid(
-            stack.shape[-2:],
+            (ny, nx),
             (dy, dx),
             float(opt["wavelength"]),
-            float(opt["na"]),
-            float(opt["n"]),
+            float(opt["numerical_aperture"]),
+            float(opt["refractive_index"]),
             dtype=real,
-            device=stack.device,
+            device=device,
         )
         support = grid.support
-        focus, chosen = self._sections(stack)
-        ng = stack.shape[0]
-        rows = torch.arange(ng, device=stack.device)[:, None]
-        index = torch.tensor(chosen, device=stack.device)
-        meas = stack[rows, index].clamp(min=0)  # (G, J, Y, X)
+        complex_dtype = _complex(torch.zeros((), dtype=real)).dtype
+        # z-slab length of the streaming passes (a few complex temporaries)
+        slab = chunk_length(
+            (ny, nx), dtype=complex_dtype, overhead=6, maximum=nz
+        )
+
+        # sections: one group at a time, reading only the chosen ones
+        focus, chosen, meas = [], [], []
+        for g in range(reader.ngroups):
+            if opt["focus"] is None:
+                peak = torch.cat(
+                    [
+                        reader.read(g, z0, min(z0 + slab, nz)).amax((-2, -1))
+                        for z0 in range(0, nz, slab)
+                    ]
+                )
+                f = int(peak.argmax())
+            else:
+                f = int(opt["focus"])
+            idx = self._sections(f, nz)
+            focus.append(f)
+            chosen.append(idx)
+            meas.append(torch.cat([reader.read(g, i, i + 1) for i in idx]))
+        meas = torch.stack(meas).clamp(min=0)  # (G, J, Y, X)
+        ng = meas.shape[0]
+        index = torch.tensor(chosen, device=device)
         energy = meas.sum((-2, -1)).mean(-1)
         scale = support.sum().to(real) / energy.clamp(
             min=torch.finfo(real).tiny
         )
         meas = meas * scale[:, None, None, None]
         amp = meas.sqrt()
-        offsets = index - torch.tensor(focus, device=stack.device)[:, None]
+        offsets = index - torch.tensor(focus, device=device)[:, None]
         defocus = grid.defocus(offsets.to(real) * dz)  # (G, J, Y, X)
         pupil = support.to(defocus.dtype).expand(ng, -1, -1).clone()
         sigma = opt["smoothing"]
@@ -1176,6 +1327,7 @@ class PhaseRetrieval(Estimator):
             if callback is not None:
                 callback(self)
         self.history.reason = f"{iterations} iterations"
+        del field, calc, amp, meas, defocus
 
         total = pupil.sum((-2, -1))
         norm = total.abs()
@@ -1184,15 +1336,18 @@ class PhaseRetrieval(Estimator):
         )
         pupil = pupil * rotate[:, None, None]
 
-        # final quality over the whole stack
-        nz = stack.shape[1]
-        zs = (
-            torch.arange(nz, device=stack.device)[None]
-            - torch.tensor(focus, device=stack.device)[:, None]
-        )
-        whole = stack.clamp(min=0) * scale[:, None, None, None]
-        calc = _ifft2c(pupil[:, None] * grid.defocus(zs.to(real) * dz))
-        final = _metrics(calc.abs().square(), whole, whole.sqrt())
+        # final quality over the whole stack, streamed in z-slabs
+        imse, corr = [], []
+        for g in range(ng):
+            acc = _Agreement()
+            for z0 in range(0, nz, slab):
+                z1 = min(z0 + slab, nz)
+                whole = reader.read(g, z0, z1).clamp(min=0) * scale[g]
+                zs = torch.arange(z0, z1, device=device) - focus[g]
+                calc = _ifft2c(pupil[g] * grid.defocus(zs.to(real) * dz))
+                acc.update(calc.abs().square(), whole)
+            imse.append(acc.imse)
+            corr.append(acc.correlation)
 
         terms = int(opt["zernike_terms"])
         phase = pupil.angle()
@@ -1204,22 +1359,22 @@ class PhaseRetrieval(Estimator):
         phase_coef = zernike_fit(
             phase, grid.rho, grid.theta, terms=terms, support=support
         )
-        size = pupil.shape[-2:]
+        groups = reader.groups
         self.estimates = {
             "pupil": PupilEstimate(
-                pupil=pupil.reshape(groups + size),
+                pupil=pupil.reshape(groups + (ny, nx)),
                 zernike_magnitude=mag_coef.reshape(groups + (terms,)),
                 zernike_phase=phase_coef.reshape(groups + (terms,)),
                 meta={
                     "wavelength": float(opt["wavelength"]),
-                    "na": float(opt["na"]),
-                    "n": float(opt["n"]),
+                    "numerical_aperture": float(opt["numerical_aperture"]),
+                    "refractive_index": float(opt["refractive_index"]),
                     "spacing": [dz, dy, dx],
                     "focus": focus,
                     "sections": chosen,
                     "scale": scale.tolist(),
-                    "imse": final[:, 0].tolist(),
-                    "correlation": final[:, 1].tolist(),
+                    "imse": imse,
+                    "correlation": corr,
                     "zernike": "noll",
                 },
             )
@@ -1270,7 +1425,8 @@ def phase_retrieval(
         or a fitted [`BeadPSF`][optix.psf.BeadPSF] or its estimate.
     **options
         Options of [`PhaseRetrieval`][optix.psf.PhaseRetrieval]
-        (`spacing`, `wavelength`, `na` and `n` are required).
+        (`spacing`, `wavelength`, `numerical_aperture` and
+        `refractive_index` are required).
 
     Returns
     -------

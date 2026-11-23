@@ -33,7 +33,9 @@ FOCUS = SHAPE[0] // 2
 
 
 def optics(**extra):
-    return dict(wavelength=LAM, na=NA, n=N, **extra)
+    return dict(
+        wavelength=LAM, numerical_aperture=NA, refractive_index=N, **extra
+    )
 
 
 def truth(dtype=F64):
@@ -128,7 +130,7 @@ def test_zernike_orthonormal_under_noll_normalisation():
 
 def test_zernike_fit_recovers_coefficients():
     rho, theta = pupil_coordinates(
-        (96, 96), (0.1, 0.1), wavelength=LAM, na=NA, dtype=F64
+        (96, 96), (0.1, 0.1), wavelength=LAM, numerical_aperture=NA, dtype=F64
     )
     coef = torch.randn(
         2, 21, generator=torch.Generator().manual_seed(1), dtype=F64
@@ -149,7 +151,7 @@ def test_zernike_fit_recovers_coefficients():
 
 def test_unwrap_phase_recovers_smooth_phase():
     rho, theta = pupil_coordinates(
-        (64, 64), (0.1, 0.1), wavelength=LAM, na=NA, dtype=F64
+        (64, 64), (0.1, 0.1), wavelength=LAM, numerical_aperture=NA, dtype=F64
     )
     support = rho <= 1
     phase = 6.0 * zernike(4, rho, theta) + 4.0 * zernike(8, rho, theta)
@@ -166,7 +168,7 @@ def test_unwrap_phase_recovers_smooth_phase():
 
 def test_pupil_coordinates_centre_and_edge():
     rho, theta = pupil_coordinates(
-        (64, 80), (0.1, 0.12), wavelength=LAM, na=NA, dtype=F64
+        (64, 80), (0.1, 0.12), wavelength=LAM, numerical_aperture=NA, dtype=F64
     )
     assert rho[32, 40] == 0
     dk = 1 / (80 * 0.12)
@@ -175,7 +177,9 @@ def test_pupil_coordinates_centre_and_edge():
     )
     assert theta[32, 41] == 0
     with pytest.raises(ValueError):
-        pupil_coordinates((8, 8), (0.1, 0.1), wavelength=-1, na=NA)
+        pupil_coordinates(
+            (8, 8), (0.1, 0.1), wavelength=-1, numerical_aperture=NA
+        )
 
 
 def test_aberration_free_focus_is_airy():
@@ -187,7 +191,7 @@ def test_aberration_free_focus_is_airy():
         shape=(nx, nx),
         spacing=(dx, dx),
         wavelength=LAM,
-        na=NA,
+        numerical_aperture=NA,
         dtype=F64,
     )
     psf = pupil_psf(pupil, 0.0, spacing=(dx, dx), **optics(), normalize=False)
@@ -212,7 +216,7 @@ def test_aberration_free_defocus():
         shape=(nx, nx),
         spacing=(dx, dx),
         wavelength=LAM,
-        na=NA,
+        numerical_aperture=NA,
         dtype=F64,
     )
     z = torch.linspace(-2, 2, 41, dtype=F64)
@@ -246,7 +250,9 @@ def test_pupil_psf_is_unit_sum_and_centred():
 
 def test_vectorial_factors_sum_of_squares():
     f = vectorial_factors((64, 64), (0.1, 0.1), **optics(), dtype=F64)
-    rho, _ = pupil_coordinates((64, 64), (0.1, 0.1), wavelength=LAM, na=NA)
+    rho, _ = pupil_coordinates(
+        (64, 64), (0.1, 0.1), wavelength=LAM, numerical_aperture=NA
+    )
     total = f.square().sum(0)
     support = rho <= 1
     torch.testing.assert_close(
@@ -260,10 +266,15 @@ def test_vectorial_factors_sum_of_squares():
         shape=(64, 64),
         spacing=(0.1, 0.1),
         wavelength=LAM,
-        na=0.2,
+        numerical_aperture=0.2,
         dtype=F64,
     )
-    kw = dict(spacing=(0.1, 0.1), wavelength=LAM, na=0.2, n=N)
+    kw = dict(
+        spacing=(0.1, 0.1),
+        wavelength=LAM,
+        numerical_aperture=0.2,
+        refractive_index=N,
+    )
     scalar = pupil_psf(pupil, [0.0, 1.0], **kw)
     vector = pupil_psf(pupil, [0.0, 1.0], vectorial=True, **kw)
     assert (scalar - vector).abs().max() < 1e-2 * scalar.max()
@@ -302,8 +313,8 @@ def test_otf_corrections_and_rescaling_fit():
         plain,
         spacing=(0.2, 0.1, 0.1),
         wavelength=LAM,
-        na=1.15,
-        n=N,
+        numerical_aperture=1.15,
+        refractive_index=N,
     )
     assert abs(fitted - sigma) < 1e-3 * sigma
     assert math.isinf(
@@ -312,21 +323,30 @@ def test_otf_corrections_and_rescaling_fit():
             plain,
             spacing=(0.2, 0.1, 0.1),
             wavelength=LAM,
-            na=1.15,
-            n=N,
+            numerical_aperture=1.15,
+            refractive_index=N,
         )
     )
 
 
 def test_index_mismatch_aberration():
-    grid = dict(shape=(64, 64), spacing=(0.1, 0.1), wavelength=LAM, na=NA)
+    grid = dict(
+        shape=(64, 64),
+        spacing=(0.1, 0.1),
+        wavelength=LAM,
+        numerical_aperture=NA,
+    )
     rho, _ = pupil_coordinates(**grid)
     support = rho <= 1
-    psi = index_mismatch_aberration(**grid, depth=10.0, n1=N, n2=N, dtype=F64)
+    psi = index_mismatch_aberration(
+        **grid, depth=10.0, immersion_index=N, specimen_index=N, dtype=F64
+    )
     torch.testing.assert_close(psi, support.to(psi.dtype))
     # Eqs. 4-8 as printed, off axis
     n1, n2, d = 1.515, 1.47, 12.0
-    psi = index_mismatch_aberration(**grid, depth=d, n1=n1, n2=n2, dtype=F64)
+    psi = index_mismatch_aberration(
+        **grid, depth=d, immersion_index=n1, specimen_index=n2, dtype=F64
+    )
     kx = (torch.arange(64, dtype=F64) - 32) / 6.4
     for i in (33, 40, 45):
         t1 = math.asin(LAM * float(kx[i]) / n1)
@@ -349,7 +369,9 @@ def test_index_mismatch_aberration():
     expected = 2 * n2 / (n1 + n2) * (n1 / n2) ** 2
     assert abs(float(psi[32, 32].abs()) - expected) < 1e-12
     # beyond the critical angle (water) the rays are dropped
-    psi = index_mismatch_aberration(**grid, depth=d, n1=n1, n2=1.2)
+    psi = index_mismatch_aberration(
+        **grid, depth=d, immersion_index=n1, specimen_index=1.2
+    )
     s1 = rho * NA / n1
     assert (psi[support & (n1 * s1 > 1.2)] == 0).all()
     assert (psi[support & (n1 * s1 < 1.19)] != 0).all()
@@ -401,7 +423,9 @@ def test_starting_guess_is_unit_disk():
     data = synthetic()
     est = PhaseRetrieval(spacing=SPACING, **optics(), iterations=0).fit(data)
     pupil = est.estimates["pupil"].pupil
-    rho, _ = pupil_coordinates(SHAPE[1:], SPACING[1:], wavelength=LAM, na=NA)
+    rho, _ = pupil_coordinates(
+        SHAPE[1:], SPACING[1:], wavelength=LAM, numerical_aperture=NA
+    )
     torch.testing.assert_close(pupil, (rho <= 1).to(pupil.dtype))
     assert len(est.history.objective) == 1
 
@@ -460,7 +484,9 @@ def test_retrieved_pupil_layout():
     data = synthetic()
     e = phase_retrieval(data, spacing=SPACING, **optics(), focus=FOCUS)
     assert isinstance(e, PupilEstimate)
-    rho, _ = pupil_coordinates(SHAPE[1:], SPACING[1:], wavelength=LAM, na=NA)
+    rho, _ = pupil_coordinates(
+        SHAPE[1:], SPACING[1:], wavelength=LAM, numerical_aperture=NA
+    )
     assert (e.pupil[rho > 1] == 0).all()
     total = e.pupil.sum()
     assert abs(float(total.imag)) < 1e-5 * float(total.abs())
@@ -527,9 +553,16 @@ def test_options_presets_and_validation():
     e = smooth.fit(synthetic()).estimates["pupil"]
     assert torch.isfinite(e.zernike_phase).all()
     with pytest.raises(ValueError, match="needs `wavelength`"):
-        PhaseRetrieval(spacing=SPACING, na=NA, n=N)
+        PhaseRetrieval(
+            spacing=SPACING, numerical_aperture=NA, refractive_index=N
+        )
     with pytest.raises(ValueError):
-        PhaseRetrieval(spacing=SPACING, wavelength=LAM, na=1.6, n=N)
+        PhaseRetrieval(
+            spacing=SPACING,
+            wavelength=LAM,
+            numerical_aperture=1.6,
+            refractive_index=N,
+        )
     with pytest.raises(NotImplementedError):
         est.apply(synthetic())
 
@@ -564,3 +597,123 @@ def test_truncated_zernike_psf_on_another_grid():
     assert ref.shape == (9, 80, 96)
     for psf in (full, short):
         assert (psf - ref).abs().max() < 2e-2 * ref.max()
+
+
+# -- orientation, unwrapping, layouts and streaming -------------------------
+
+
+def test_z_flip_conjugates_and_rotates_the_pupil():
+    """PSF(P, z) = PSF(P*(−k), −z), with −k a rotation about K // 2."""
+    phase = torch.zeros(15, dtype=F64)
+    phase[4], phase[7], phase[9] = 0.5, 0.8, 0.6  # astigmatism, coma, trefoil
+    kw = dict(shape=(64, 64), spacing=(0.08, 0.08), wavelength=LAM)
+    pupil = zernike_pupil([1.0], phase, **kw, numerical_aperture=1.2)
+    z = torch.linspace(-2, 2, 9, dtype=F64)
+    psf_kw = dict(
+        spacing=(0.08, 0.08),
+        wavelength=LAM,
+        numerical_aperture=1.2,
+        refractive_index=N,
+    )
+    ref = pupil_psf(pupil, z, **psf_kw)
+    rotated = torch.roll(pupil.conj().flip(-2, -1), (1, 1), (-2, -1))
+    flipped = pupil_psf(rotated, -z, **psf_kw)
+    torch.testing.assert_close(flipped, ref, atol=1e-12 * ref.max(), rtol=0)
+    # the conjugate alone is not enough for an asymmetric pupil
+    conj = pupil_psf(pupil.conj(), -z, **psf_kw)
+    assert (conj - ref).abs().max() > 0.1 * ref.max()
+
+
+def test_unwrap_phase_many_wraps_near_the_edge():
+    shape, spacing = (256, 256), (0.1, 0.1)
+    rho, theta = pupil_coordinates(
+        shape, spacing, wavelength=LAM, numerical_aperture=NA, dtype=F64
+    )
+    support = rho <= 1
+    phase = 10.0 * zernike(4, rho, theta) + 1.5 * zernike(11, rho, theta)
+    phase = (phase - phase[128, 128]) * support
+    wrapped = torch.remainder(phase + math.pi, 2 * math.pi) - math.pi
+    wrapped = wrapped * support
+    # the outer half of a radius holds several wraps
+    row = wrapped[128, 128:][support[128, 128:]]
+    jumps = (row.diff().abs() > math.pi).nonzero().flatten()
+    assert len(jumps) >= 4
+    assert int((jumps > row.numel() // 2).sum()) >= 4
+    out = unwrap_phase(wrapped, support)
+    torch.testing.assert_close(out, phase, atol=1e-9, rtol=0)
+
+
+def test_permuted_layout_with_groups():
+    from optix.io import Layout, labeled
+
+    data = synthetic()
+    kw = dict(
+        spacing=SPACING, **optics(), offsets=(-1, 1), iterations=3, dtype=F64
+    )
+    stacked = torch.stack([data, torch.roll(data, 1, 0)])
+    ref = PhaseRetrieval(**kw).fit(stacked).estimates["pupil"]
+    storage = stacked.permute(3, 0, 1, 2)  # (x, g, z, y)
+    lab = labeled(storage, Layout("xgzy", spatial="zyx", group="g"))
+    got = PhaseRetrieval(**kw).fit(lab).estimates["pupil"]
+    torch.testing.assert_close(got.pupil, ref.pupil)
+    assert got.meta["focus"] == ref.meta["focus"]
+    assert got.meta["focus"][1] == got.meta["focus"][0] + 1
+
+
+class _SpyArray:
+    """Array-like that records the indices it is read with."""
+
+    def __init__(self, array):
+        self.array, self.shape, self.dtype = array, array.shape, array.dtype
+        self.reads = []
+
+    def __getitem__(self, index):
+        self.reads.append(index)
+        return self.array[index]
+
+
+def test_streaming_reads_slabs_and_matches_whole_stack_metrics():
+    import optix
+
+    data = synthetic(2.5e7)
+    spy = _SpyArray(data)
+    kw = dict(spacing=SPACING, **optics(), iterations=5, dtype=F64)
+    with optix.config(memory=4 * 128 * 128 * 16 * 6):  # 4-section slabs
+        e = PhaseRetrieval(**kw).fit(spy).estimates["pupil"]
+    lengths = []
+    for index in spy.reads:
+        assert all(isinstance(i, slice) for i in index)
+        lengths.append(index[0].stop - index[0].start)
+    assert max(lengths) <= 4
+    # focus pass + probe + J sections + final pass, nothing more
+    assert sum(lengths) == 2 * SHAPE[0] + 1 + 4
+
+    ref = PhaseRetrieval(**kw).fit(data).estimates["pupil"]
+    torch.testing.assert_close(e.pupil, ref.pupil)
+    # whole-stack quality computed directly
+    meas = data.clamp(min=0) * e.meta["scale"][0]
+    calc = pupil_psf(
+        e.pupil,
+        (torch.arange(SHAPE[0], dtype=F64) - e.meta["focus"][0]) * SPACING[0],
+        spacing=SPACING[1:],
+        **optics(),
+        normalize=False,
+    )
+    imse = float((calc - meas).square().sum() / meas.square().sum())
+    corr = float(
+        torch.corrcoef(torch.stack([calc.flatten(), meas.flatten()]))[0, 1]
+    )
+    assert abs(e.meta["imse"][0] - imse) < 1e-10 * imse
+    assert abs(e.meta["correlation"][0] - corr) < 1e-12
+
+
+@pytest.mark.parametrize("photons", [None, 2.5e7])
+def test_retrieval_at_the_paper_iterations(photons):
+    """25 iterations (faithful default) get close to the true pupil."""
+    data = synthetic(photons)
+    e = PhaseRetrieval(spacing=SPACING, **optics(), dtype=F64).fit(data)
+    e = e.estimates["pupil"]
+    mag, phase = truth()
+    err = (e.zernike_phase[1:15] - phase[1:15]).abs().max()
+    assert err < 0.1  # 200 iterations: < 2e-3 (see above)
+    assert e.meta["correlation"][0] > 0.99
