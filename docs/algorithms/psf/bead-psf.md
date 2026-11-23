@@ -1,11 +1,11 @@
 # Bead PSF
 
 !!! info "At a glance"
-    **Estimates:** `PSFEstimate` (`psf`, `fwhm`, `count`, `centers`) \
-    **Noise model:** Poisson-Gaussian (only through robust thresholds; no likelihood) \
-    **Streaming:** halo \
-    **Needs many frames:** no (many beads, in one or several images) \
-    **Reference:** none; a standard procedure without a single reference publication
+    - **Estimates:** `PSFEstimate` (`psf`, `fwhm`, `count`, `centers`)
+    - **Noise model:** Poisson-Gaussian (only through robust thresholds; no likelihood)
+    - **Streaming:** halo
+    - **Needs many frames:** no (many beads, in one or several images)
+    - **Reference:** none; a standard procedure without a single reference publication
 
 ## Overview
 
@@ -34,8 +34,10 @@ constant background and noise (see
     \mathbf{y}_n = a_n\, \mathbf{S}_{\mathbf{c}_n} \mathbf{h} + b_n + \boldsymbol{\varepsilon}_n ,
     $$
 
-    with $\mathbf{S}_{\mathbf{c}}$ the shift that moves the centre of
-    $\mathbf{h}$ (index `K // 2`) to $\mathbf{c}$.
+    with $\mathbf{y}_n, \mathbf{h} \in \mathbb{R}^{K}$ crops of $K$ voxels
+    (shape `2·radius + 1` per spatial axis, $d$ axes), $\mathbf{c}_n \in \mathbb{R}^d$,
+    and $\mathbf{S}_{\mathbf{c}} \in \mathbb{R}^{K\times K}$ the shift that
+    moves the centre of $\mathbf{h}$ (index `K // 2`) to $\mathbf{c}$.
 
 === "optix docstring"
 
@@ -46,14 +48,17 @@ constant background and noise (see
     with $T_n$ the sub-voxel shift that moves the centre $c_n$ to index
     `K // 2` and $N$ the post-processing and normalisation.
 
-| optix | optix docstring |
-|---|---|
-| $\mathbf{y}_n$ (crop of bead $n$) | $y_n$ |
-| $\mathbf{h}$ (PSF) | $h$ |
-| $b_n$ (background) | $b_n$ |
-| $\mathbf{c}_n$ (centre) | $c_n$ |
-| $\mathbf{S}_{\mathbf{c}_n}^{-1}$ (alignment) | $T_n$ |
-| $w_n$ (weight) | $w_n$ |
+| optix | optix docstring | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_n$ | $y_n$ | crop around bead $n$ | $\mathbb{R}^K$, per bead |
+| $\mathbf{h}$ | $h$ | PSF, unit sum | $\mathbb{R}^K$, one per group |
+| $a_n$ | | bead brightness | scalar, per bead |
+| $b_n$ | $b_n$ | local background | scalar, per bead |
+| $\mathbf{c}_n$ | $c_n$ | sub-voxel centre | $\mathbb{R}^d$, per bead |
+| $\boldsymbol{\varepsilon}_n$ | | noise | $\mathbb{R}^K$, per bead |
+| $\mathbf{S}_{\mathbf{c}_n}^{-1}$ | $T_n$ | alignment shift | $\mathbb{R}^{K\times K}$, per bead |
+| $w_n$ | $w_n$ | averaging weight | scalar, per bead |
+| | $N$ | post-processing and normalisation | one per group |
 
 There is no paper, so the second tab gives the notation of the class
 docstring. The background $b_n$ is a scalar per bead, broadcast over its crop.
@@ -79,6 +84,12 @@ w_n = \begin{cases}
 $$
 
 which is unbiased for $\mathbf{h}$ when the centres and backgrounds are exact.
+With brightness weights it is the least-squares (Gaussian maximum-likelihood)
+estimate of $\mathbf{h}$ given the aligned crops, up to normalisation; the
+centres are themselves least-squares (Gaussian-fit) or method-of-moments
+(centroid) estimates, and the background median and MAD threshold are robust
+M-estimates. The pipeline is a plug-in estimator: each nuisance parameter is
+fixed at its estimate rather than marginalised.
 
 ## Inference / derivation
 
@@ -111,21 +122,30 @@ The strategy is detect, reject, register, average:
 
 ## Algorithm
 
-```text
-Input: data Y, radius = 8, sigma = 1, threshold = 5, min_distance = 2
-Pass 1, per group: μ, σ = median and 1.4826·MAD of a 10⁵ sample of G_sigma * y
-Pass 2, block by block (halo covering crop + neighbours):
-    peaks = local maxima of G_sigma * y in windows of min_distance, above μ + threshold·σ
-    keep peaks in the block core whose crop fits, holds no other peak, is unsaturated
-    for each bead n:
-        b_n = median of the crop faces
-        c_n = Gaussian fit (or centroid) of y_n − b_n; reject if |c_n − K//2| > 2
-        a_n = aligned crop, shifted by K//2 − c_n; reject if Σ a_n ≤ 0
-        add a_n / Σ a_n (equal) or a_n (brightness) to the group sum
-    stop collecting a group once max_beads beads are kept
-Per group: symmetrise, taper, clip at 0, normalise to unit sum; measure FWHM
-Return PSFEstimate(psf, fwhm, count, centers)
-```
+**Input:** bead images; `radius = 8`; `sigma = 1`; `threshold` $t = 5$;
+`min_distance = 2` \
+**Output:** `PSFEstimate(psf, fwhm, count, centers)`, one PSF
+$\hat{\mathbf{h}} \in \mathbb{R}^K$ per group.
+
+1. **Noise level**, per group: median $\mu$ and $\sigma = 1.4826\,\mathrm{MAD}$
+   of a sample of $10^5$ values of the smoothed data $G_{\texttt{sigma}} * \mathbf{y}$.
+2. **For each block** (with a halo covering a crop and its neighbours):
+    1. **detect** the local maxima of $G_{\texttt{sigma}} * \mathbf{y}$ in
+       windows of half-width `min_distance` above $\mu + t\sigma$;
+    2. **keep** the peaks in the block core whose crop fits, holds no other
+       peak and is not saturated;
+    3. **for each bead** $n$:
+        1. background $b_n$: median of the crop faces;
+        2. centre $\mathbf{c}_n$: Gaussian fit (or centroid) of
+           $\mathbf{y}_n - b_n$; reject if more than 2 voxels from the
+           central voxel;
+        3. align: $\mathbf{z}_n = \mathbf{S}_{\mathbf{c}_n}^{-1}(\mathbf{y}_n - b_n)$;
+           reject if $\mathbf{1}^\top\mathbf{z}_n \le 0$;
+        4. add $\mathbf{z}_n / \mathbf{1}^\top\mathbf{z}_n$ (equal) or
+           $\mathbf{z}_n$ (brightness) to the group sum;
+    4. stop collecting a group once `max_beads` beads are kept.
+3. **Post-process**, per group: symmetrise, taper, clip at 0, normalise to
+   unit sum; measure the FWHM.
 
 Fails with an error when a group has no accepted bead.
 
