@@ -33,6 +33,8 @@ nav = [
       "algorithms/deconv/richardson-lucy.md",
       "algorithms/deconv/biggs-andrews.md",
       "algorithms/deconv/snyder.md",
+      "algorithms/deconv/nagy-oleary.md",
+      "algorithms/deconv/denis.md",
       "algorithms/deconv/wiener.md",
       "algorithms/deconv/tikhonov.md",
       "algorithms/deconv/wiener-butterworth.md",

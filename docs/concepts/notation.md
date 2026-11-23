@@ -134,6 +134,17 @@ stray light. This is the reason why corrections never subtract both
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
 
+## Shift-variant blur
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $S$, $s$ | number of terms of the blur, term index | |
+| $\mathbf{h}_s$, $\mathbf{H}_s$ | kernel of term $s$; convolution with it | `ShiftVariantPSF.kernels` |
+| $\mathbf{w}_s$, $\mathbf{W}_s$ | pixel weights of term $s$; $\operatorname{diag}(\mathbf{w}_s)$ | `ShiftVariantConvolution.weights` |
+| $\mathbf{r}_s$ | position of the grid node of term $s$ | `centres` |
+| $\mathbf{K}$ | matrix of the un-shifted PSFs, one column per source pixel | |
+| $\tau$, $\mathbf{C}_\tau$ | truncation level; block-circulant preconditioner | `tau`, `RegionPreconditioner` |
+
 ## Distributions
 
 These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).
