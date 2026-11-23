@@ -122,6 +122,27 @@ And the dark field is not the camera offset: it is offset + dark current +
 stray light. This is the reason why corrections never subtract both
 `ShadingEstimate.dark` and `SensorEstimate.offset`.
 
+## Optics
+
+Used by the models of the optics of the microscope, such as the
+[Richards–Wolf](../algorithms/psf/richards-wolf.md) PSF.
+
+| Symbol | Meaning | Unit | In code |
+|---|---|---|---|
+| $\lambda_0$ | vacuum wavelength of the light | length | `wavelength` |
+| $n$ | refractive index of the immersion medium (image space) | | `refractive_index` |
+| $\mathrm{NA}$ | numerical aperture, $n \sin\alpha$ | | `numerical_aperture` |
+| $\alpha$ | angular semi-aperture of the objective, $\arcsin(\mathrm{NA}/n)$ | rad | |
+| $k$ | wave number in the medium, $2\pi n / \lambda_0$ | 1 / length | |
+| $\theta$, $\varphi$ | polar angle of a ray, measured from the optical axis; azimuth around it | rad | |
+| $\rho$, $z$ | distance from the optical axis; position along it, from the focus | length | |
+| $\psi(\theta)$ | phase of the pupil function (aberration) | rad | `pupil_phase` |
+
+In this table $n$ is the refractive index, not the number of photoelectrons of
+the camera model, and $\theta$, $\rho$ are not the basis coefficients and the
+Stirling residual used elsewhere; the context tells which is meant. A paper that
+writes the wavelength as $\lambda$ is mapped to $\lambda_0$ on its page.
+
 ## Bases and regularisation
 
 | Symbol | Meaning | In code |
