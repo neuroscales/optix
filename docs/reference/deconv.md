@@ -11,6 +11,7 @@ Deconvolution with a known point spread function.
       show_root_toc_entry: false
       members:
         - RichardsonLucy
+        - Snyder
         - BiggsAndrews
 
 ## Transforms

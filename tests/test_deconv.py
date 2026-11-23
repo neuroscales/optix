@@ -300,7 +300,6 @@ def test_faithful_flags():
     psf = gaussian_psf(5, 1.0)
     assert RichardsonLucy(psf).is_faithful
     assert RichardsonLucy(psf, n_iter=3).is_faithful is False
-    assert RichardsonLucy(psf, background=1.0).is_faithful is False
     assert RichardsonLucy(psf, damping=0.5).is_faithful is False
     data = torch.ones(16, 16, dtype=F64)
     sensor = SensorEstimate(offset=torch.tensor(0.0), gain=torch.tensor(1.0))
@@ -308,6 +307,14 @@ def test_faithful_flags():
     assert est.is_faithful is False
     with pytest.raises(ValueError):
         RichardsonLucy(psf, damping=0.0)
+
+
+def test_snyder_options_are_not_in_richardson_lucy():
+    """Background and read noise are Snyder et al. (1993): see Snyder."""
+    psf = gaussian_psf(5, 1.0)
+    for kw in ({"background": 1.0}, {"poisson_gaussian": True}):
+        with pytest.raises(TypeError):
+            RichardsonLucy(psf, **kw)
 
 
 def test_extensions_reduce_to_faithful():
@@ -319,12 +326,7 @@ def test_extensions_reduce_to_faithful():
         gain=torch.tensor(1.0),
         variance=torch.tensor(0.0),
     )
-    for kw in (
-        {"background": 0.0},
-        {"damping": 1.0},
-        {"sensor": sensor},
-        {"sensor": sensor, "poisson_gaussian": True},
-    ):
+    for kw in ({"damping": 1.0}, {"sensor": sensor}):
         out = richardson_lucy(data, psf, n_iter=10, **kw)
         torch.testing.assert_close(out, ref, msg=str(kw))
 
@@ -345,50 +347,6 @@ def test_sensor_converts_to_electrons():
             RichardsonLucy(psf, n_iter=1).fit(
                 adu, init=ShadingEstimate(flat=torch.ones(40, 36))
             )
-
-
-def test_background_improves_estimate():
-    psf = gaussian_psf(9, 1.5)
-    truth, gen = scene((64, 64), seed=8, base=0.0)
-    b = 30.0
-    data = torch.poisson(blur(truth, psf) + b, generator=gen)
-    plain = richardson_lucy(data, psf, n_iter=30)
-    with_b = richardson_lucy(data, psf, n_iter=30, background=b)
-    assert float((with_b - truth).norm()) < float((plain - truth).norm())
-
-
-def test_poisson_gaussian_shift():
-    """y + σ² ~ Poisson(H f + σ²): the shifted data are used."""
-    psf = gaussian_psf(7, 1.2)
-    truth, gen = scene((48, 48), seed=9, base=2.0)
-    var = 25.0  # electrons²
-    data = torch.poisson(blur(truth, psf), generator=gen)
-    data = data + var**0.5 * torch.randn(data.shape, generator=gen, dtype=F64)
-    sensor = SensorEstimate(
-        offset=torch.tensor(0.0),
-        gain=torch.tensor(1.0),
-        variance=torch.tensor(var),
-    )
-    out = richardson_lucy(
-        data,
-        psf,
-        n_iter=10,
-        sensor=sensor,
-        poisson_gaussian=True,
-        dtype=F64,
-    )
-    op = PaddedConvolution(psf, data.shape)
-    f, _ = rl_block(
-        (data + var).clamp(min=0),
-        op,
-        float(data.mean()),
-        n_iter=10,
-        background=var,
-    )
-    torch.testing.assert_close(out, op.crop(f))
-    assert (out >= 0).all()
-    with pytest.raises(ValueError, match="poisson_gaussian"):
-        RichardsonLucy(psf, poisson_gaussian=True).fit(data)
 
 
 def test_damping_keeps_flux_and_likelihood():
@@ -420,6 +378,11 @@ def test_save_load(tmp_path):
     est.save(tmp_path / "rl.pt")
     new = load(tmp_path / "rl.pt")
     torch.testing.assert_close(new.apply(data), est.apply(data))
+    sensor = SensorEstimate(offset=torch.tensor(3.0), gain=torch.tensor(2.0))
+    est = RichardsonLucy(psf, n_iter=4).fit(data + 3, init=sensor)
+    est.save(tmp_path / "rl_sensor.pt")
+    new = load(tmp_path / "rl_sensor.pt")
+    torch.testing.assert_close(new.apply(data + 3), est.apply(data + 3))
 
 
 def test_labeled_input():
