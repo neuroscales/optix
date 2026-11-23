@@ -163,22 +163,6 @@ def gibson_lanni_opd(
     √(n² − s²) − n = −s² / (√(n² − s²) + n), s = NA ρ, so that no large
     terms cancel.
 
-    Parameters
-    ----------
-    rho : float or Tensor
-        Normalised pupil radius ρ (1 at the edge of the aperture).
-    defocus : float or Tensor
-        Δz; broadcast against `rho`.
-    **optics
-        `numerical_aperture` (required), `depth`, refractive indices and
-        thicknesses, as in [`gibson_lanni`][optix.psf.gibson_lanni].
-
-    Returns
-    -------
-    Tensor
-        OPD, in the units of the lengths (µm), in float64 (float32 on
-        MPS).
-
     !!! references "References"
 
         1. Gibson SF, Lanni F. *Experimental test of an analytical model
@@ -203,6 +187,22 @@ def gibson_lanni_opd(
               doi     = {10.1364/JOSAA.8.001601}
             }
             ```
+
+    Parameters
+    ----------
+    rho : float or Tensor
+        Normalised pupil radius ρ (1 at the edge of the aperture).
+    defocus : float or Tensor
+        Δz; broadcast against `rho`.
+    **optics
+        `numerical_aperture` (required), `depth`, refractive indices and
+        thicknesses, as in [`gibson_lanni`][optix.psf.gibson_lanni].
+
+    Returns
+    -------
+    Tensor
+        OPD, in the units of the lengths (µm), in float64 (float32 on
+        MPS).
     """
     _check_optics_keys(optics)
     p = _optics(**optics)
@@ -414,27 +414,6 @@ def gibson_lanni_profile(
     See [`gibson_lanni`][optix.psf.gibson_lanni] for the methods and
     the parameters.
 
-    Parameters
-    ----------
-    radius : float or Tensor
-        (R,) lateral distances r from the source, in µm.
-    defocus : float or Tensor
-        (Z,) defocus values Δz, in µm.
-    wavelength : float
-        Emission wavelength in vacuum, in µm.
-    method, nodes, rtol, basis, samples
-        See [`gibson_lanni`][optix.psf.gibson_lanni].
-    dtype, device : optional
-        Working dtype and device. Default: configuration.
-    **optics
-        `numerical_aperture` (required), `depth`, refractive indices and
-        thicknesses, as in [`gibson_lanni`][optix.psf.gibson_lanni].
-
-    Returns
-    -------
-    (Z, R) Tensor
-        Intensity.
-
     !!! references "References"
 
         1. Gibson SF, Lanni F. *Experimental test of an analytical model
@@ -474,6 +453,27 @@ def gibson_lanni_profile(
               doi     = {10.1364/JOSAA.34.001029}
             }
             ```
+
+    Parameters
+    ----------
+    radius : float or Tensor
+        (R,) lateral distances r from the source, in µm.
+    defocus : float or Tensor
+        (Z,) defocus values Δz, in µm.
+    wavelength : float
+        Emission wavelength in vacuum, in µm.
+    method, nodes, rtol, basis, samples
+        See [`gibson_lanni`][optix.psf.gibson_lanni].
+    dtype, device : optional
+        Working dtype and device. Default: configuration.
+    **optics
+        `numerical_aperture` (required), `depth`, refractive indices and
+        thicknesses, as in [`gibson_lanni`][optix.psf.gibson_lanni].
+
+    Returns
+    -------
+    (Z, R) Tensor
+        Intensity.
     """
     _check_optics_keys(optics)
     p = _optics(**optics)
@@ -624,6 +624,46 @@ def gibson_lanni(
     instead averages s points per axis inside each voxel (integration
     over the voxel; an extension, not in Gibson & Lanni).
 
+    !!! references "References"
+
+        1. Gibson SF, Lanni F. *Experimental test of an analytical model
+           of aberration in an oil-immersion objective lens used in
+           three-dimensional light microscopy.* J Opt Soc Am A
+           **8**(10):1601–1613, 1991.
+           [doi:10.1364/JOSAA.8.001601](https://doi.org/10.1364/JOSAA.8.001601)
+        2. Li J, Xue F, Blu T. *Fast and accurate three-dimensional point
+           spread function computation for fluorescence microscopy.*
+           J Opt Soc Am A **34**(6):1029–1034, 2017.
+           [doi:10.1364/JOSAA.34.001029](https://doi.org/10.1364/JOSAA.34.001029)
+
+        ??? quote "BibTeX"
+
+            ```bibtex
+            @article{gibson1991experimental,
+              author  = {Gibson, Sarah Frisken and Lanni, Frederick},
+              title   = {Experimental test of an analytical model of
+                         aberration in an oil-immersion objective lens
+                         used in three-dimensional light microscopy},
+              journal = {Journal of the Optical Society of America A},
+              volume  = {8},
+              number  = {10},
+              pages   = {1601--1613},
+              year    = {1991},
+              doi     = {10.1364/JOSAA.8.001601}
+            }
+            @article{li2017fast,
+              author  = {Li, Jizhou and Xue, Feng and Blu, Thierry},
+              title   = {Fast and accurate three-dimensional point spread
+                         function computation for fluorescence microscopy},
+              journal = {Journal of the Optical Society of America A},
+              volume  = {34},
+              number  = {6},
+              pages   = {1029--1034},
+              year    = {2017},
+              doi     = {10.1364/JOSAA.34.001029}
+            }
+            ```
+
     Parameters
     ----------
     shape : sequence of int
@@ -678,46 +718,6 @@ def gibson_lanni(
     -------
     (K_z, K_y, K_x) Tensor or PSFEstimate
         PSF normalised to unit sum, centred at `K // 2`.
-
-    !!! references "References"
-
-        1. Gibson SF, Lanni F. *Experimental test of an analytical model
-           of aberration in an oil-immersion objective lens used in
-           three-dimensional light microscopy.* J Opt Soc Am A
-           **8**(10):1601–1613, 1991.
-           [doi:10.1364/JOSAA.8.001601](https://doi.org/10.1364/JOSAA.8.001601)
-        2. Li J, Xue F, Blu T. *Fast and accurate three-dimensional point
-           spread function computation for fluorescence microscopy.*
-           J Opt Soc Am A **34**(6):1029–1034, 2017.
-           [doi:10.1364/JOSAA.34.001029](https://doi.org/10.1364/JOSAA.34.001029)
-
-        ??? quote "BibTeX"
-
-            ```bibtex
-            @article{gibson1991experimental,
-              author  = {Gibson, Sarah Frisken and Lanni, Frederick},
-              title   = {Experimental test of an analytical model of
-                         aberration in an oil-immersion objective lens
-                         used in three-dimensional light microscopy},
-              journal = {Journal of the Optical Society of America A},
-              volume  = {8},
-              number  = {10},
-              pages   = {1601--1613},
-              year    = {1991},
-              doi     = {10.1364/JOSAA.8.001601}
-            }
-            @article{li2017fast,
-              author  = {Li, Jizhou and Xue, Feng and Blu, Thierry},
-              title   = {Fast and accurate three-dimensional point spread
-                         function computation for fluorescence microscopy},
-              journal = {Journal of the Optical Society of America A},
-              volume  = {34},
-              number  = {6},
-              pages   = {1029--1034},
-              year    = {2017},
-              doi     = {10.1364/JOSAA.34.001029}
-            }
-            ```
     """
     optics = {
         "numerical_aperture": numerical_aperture,

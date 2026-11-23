@@ -114,24 +114,9 @@ def gauss_legendre(
     float64 on the CPU (results are cached by `n`); they are then cast
     and moved.
 
-    Parameters
-    ----------
-    n : int
-        Number of nodes (≥ 1).
-    dtype, device : optional
-        Output dtype and device (default: from the configuration).
-
-    Returns
-    -------
-    nodes : (n,) Tensor
-        Quadrature nodes, increasing.
-    weights : (n,) Tensor
-        Quadrature weights.
-
-    Notes
-    -----
-    `sum(weights * f(nodes))` ≈ ∫₋₁¹ f(x) dx, exactly for polynomials of
-    degree ≤ 2n − 1.
+    !!! note
+        `sum(weights * f(nodes))` ≈ ∫₋₁¹ f(x) dx, exactly for polynomials
+        of degree ≤ 2n − 1.
 
     !!! references "References"
 
@@ -148,6 +133,20 @@ def gauss_legendre(
               year      = {1964}
             }
             ```
+
+    Parameters
+    ----------
+    n : int
+        Number of nodes (≥ 1).
+    dtype, device : optional
+        Output dtype and device (default: from the configuration).
+
+    Returns
+    -------
+    nodes : (n,) Tensor
+        Quadrature nodes, increasing.
+    weights : (n,) Tensor
+        Quadrature weights.
     """
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")

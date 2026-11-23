@@ -55,16 +55,6 @@ def bessel_j0(x: Tensor) -> Tensor:
     accurate to rounding (~10⁻¹⁶), where torch's float64 J₀ has errors up
     to ~5·10⁻⁷. Other dtypes go to torch unchanged.
 
-    Parameters
-    ----------
-    x : Tensor
-        Argument.
-
-    Returns
-    -------
-    Tensor
-        J₀(x), same shape and dtype.
-
     !!! references "References"
 
         1. Watson GN. *A Treatise on the Theory of Bessel Functions*,
@@ -95,6 +85,16 @@ def bessel_j0(x: Tensor) -> Tensor:
               doi     = {10.1137/130932132}
             }
             ```
+
+    Parameters
+    ----------
+    x : Tensor
+        Argument.
+
+    Returns
+    -------
+    Tensor
+        J₀(x), same shape and dtype.
     """
     return _bessel(0, x)
 
@@ -106,16 +106,6 @@ def bessel_j1(x: Tensor) -> Tensor:
     where it is computed accurately from Bessel's integral (see
     [`bessel_j0`][optix.special.bessel_j0]).
 
-    Parameters
-    ----------
-    x : Tensor
-        Argument.
-
-    Returns
-    -------
-    Tensor
-        J₁(x), same shape and dtype.
-
     !!! references "References"
 
         1. Watson GN. *A Treatise on the Theory of Bessel Functions*,
@@ -146,5 +136,15 @@ def bessel_j1(x: Tensor) -> Tensor:
               doi     = {10.1137/130932132}
             }
             ```
+
+    Parameters
+    ----------
+    x : Tensor
+        Argument.
+
+    Returns
+    -------
+    Tensor
+        J₁(x), same shape and dtype.
     """
     return _bessel(1, x)
