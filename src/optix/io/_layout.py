@@ -35,6 +35,9 @@ class Layout:
     Every axis has exactly one role; axes that are not named default to
     `sample`.
 
+    !!! note
+        A per-axis `spacing` (voxel size) may be added later.
+
     Parameters
     ----------
     axes : str or sequence of str, optional
@@ -75,10 +78,6 @@ class Layout:
 
     >>> Layout.default(4, 2)
     Layout(axes=None, spatial=(-2, -1), sample=None, group=())
-
-    Notes
-    -----
-    A per-axis `spacing` (voxel size) may be added later.
     """
 
     axes: tuple[str, ...] | None = None

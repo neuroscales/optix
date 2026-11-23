@@ -44,24 +44,23 @@ class SegmentStats:
     `noise` (for example detail coefficients, giving the local standard
     deviation).
 
+    !!! note
+        Each update computes the segment sums in float64 (temporaries the
+        size of the selected entries only) and centres the noise on its
+        segment mean before squaring. It then merges them with Pebay's
+        pairwise formulas ([`Moments`][optix.stats.Moments]). The result
+        does not depend on chunking, up to round-off, and is the same for
+        float32 and float64 inputs, up to their precision.
+
+        Only sufficient statistics of the sample standard deviation are kept.
+        Median-based estimators (such as the MAD) are not mergeable.
+
     Attributes
     ----------
     value : Moments
         Order-1 moments of `value`, with state of shape `(segments,)`.
     noise : Moments
         Order-2 moments of `noise`, with state of shape `(segments,)`.
-
-    Notes
-    -----
-    Each update computes the segment sums in float64 (temporaries the
-    size of the selected entries only) and centres the noise on its
-    segment mean before squaring. It then merges them with Pebay's
-    pairwise formulas ([`Moments`][optix.stats.Moments]). The result
-    does not depend on chunking, up to round-off, and is the same for
-    float32 and float64 inputs, up to their precision.
-
-    Only sufficient statistics of the sample standard deviation are kept.
-    Median-based estimators (such as the MAD) are not mergeable.
     """
 
     def __init__(self, segments: int) -> None:

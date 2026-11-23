@@ -126,6 +126,17 @@ def wavelet_fft(
             }
             ```
 
+    !!! note
+        The defaults (db10, L = 4, σ = 1.5) are the paper's suggestions for
+        typical data (Section 3.8: σ = 1.5 and L = 4 remove the visible
+        stripes of the Lena image and of the tomography data of Section 4.2,
+        and db10–db15 is the recommended wavelet size). Heavier or wider
+        stripes need a larger L or σ (σ = 7 and L = 8 for the FIB-nt image of
+        Section 4.1).
+
+        The filter is linear and stateless, and costs O(N·F) for N pixels
+        and a filter of length F.
+
     Parameters
     ----------
     data : Tensor
@@ -157,18 +168,6 @@ def wavelet_fft(
     -------
     Tensor
         Destriped frames, of the shape of `data`.
-
-    Notes
-    -----
-    The defaults (db10, L = 4, σ = 1.5) are the paper's suggestions for
-    typical data (Section 3.8: σ = 1.5 and L = 4 remove the visible
-    stripes of the Lena image and of the tomography data of Section 4.2,
-    and db10–db15 is the recommended wavelet size). Heavier or wider
-    stripes need a larger L or σ (σ = 7 and L = 8 for the FIB-nt image of
-    Section 4.1).
-
-    The filter is linear and stateless, and costs O(N·F) for N pixels
-    and a filter of length F.
     """
     w, level, sigmas, chosen = _check(wavelet, level, sigma, levels)
     if axis not in (-2, -1, data.ndim - 2, data.ndim - 1) or data.ndim < 2:

@@ -106,17 +106,17 @@ class DefectivePixels(CalibrationEstimator):
     with z(x) = (x − med x)/(1.4826·MAD x) the robust z-score over the
     pixels of a group ([`robust_z`][optix.sensor.utils.robust_z]).
 
-    Attributes
-    ----------
-    masks : dict of str to Tensor
-        The individual boolean `(*group, *spatial)` masks.
-
     !!! note
         `fit(darks)`. Estimates: `"sensor"` with `defective` (union of the
         masks), `offset` and `variance` (dark mean and variance).
         [`apply`][optix.Estimator.apply] replaces defective
         pixels with the median of their good neighbours
         ([`replace_defective`][optix.sensor.replace_defective]).
+
+    Attributes
+    ----------
+    masks : dict of str to Tensor
+        The individual boolean `(*group, *spatial)` masks.
     """
 
     tags = Tags(

@@ -29,15 +29,14 @@ class Gamma(Distribution):
 
     p(x) = b^a x^(a − 1) exp(−b x) / Γ(a) with shape a and rate b.
 
-    Notes
-    -----
-    Give `shape` with exactly one of `rate`, `scale` or `mean`;
-    the given pair is stored, everything else is derived on access. The
-    canonical parameters of
-    [`functional`][optix.distributions.functional] are `(shape, rate)`.
+    !!! note
+        Give `shape` with exactly one of `rate`, `scale` or `mean`;
+        the given pair is stored, everything else is derived on access. The
+        canonical parameters of
+        [`functional`][optix.distributions.functional] are `(shape, rate)`.
 
-    Exponential family: T(x) = (log x, x), η = (a − 1, −b),
-    A = log Γ(a) − a log b, h(x) = 1.
+        Exponential family: T(x) = (log x, x), η = (a − 1, −b),
+        A = log Γ(a) − a log b, h(x) = 1.
     """
 
     _forms = {

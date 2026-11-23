@@ -242,29 +242,14 @@ class CIDRE(Estimator):
 
         I = (I_o − z) / v · v̄        (+ z̄ for "zero-light preserved")
 
-    Attributes
-    ----------
-    estimates : dict
-        `{"shading": ShadingEstimate}` with `flat` = v and `dark` = z,
-        shaped `(*group, *spatial)`. v is relative to the target
-        distribution Q and is stored as produced
-        (`meta["flat_norm"] == "none"`); z includes the camera offset.
-    zero_light_ : (*group, 2) Tensor
-        Zero-light point (Z_Q, Z_q) of each group, in data units.
-    lambda_r_ : float
-        λ_r used by the last fit.
-    target_ : (*group, K) Tensor
-        Target distribution Q of each group, in data units.
-
-    Notes
-    -----
-    The fit makes one pass over the data, plus a second one when the
-    per-pixel distributions are summarised by histograms. Each frame
-    is first resampled to the working grid (bilinear, with
-    anti-aliasing), then the K quantiles are computed at every location
-    of the grid. The fitted v and z are resampled back to the image size
-    (bilinear). [`apply`][optix.shading.CIDRE.apply] works on frame
-    batches.
+    !!! note
+        The fit makes one pass over the data, plus a second one when the
+        per-pixel distributions are summarised by histograms. Each frame
+        is first resampled to the working grid (bilinear, with
+        anti-aliasing), then the K quantiles are computed at every location
+        of the grid. The fitted v and z are resampled back to the image size
+        (bilinear). [`apply`][optix.shading.CIDRE.apply] works on frame
+        batches.
 
     !!! note "Implementation choices"
         - The intensities are divided by their maximum (over the
@@ -303,9 +288,6 @@ class CIDRE(Estimator):
           penalised), the L-BFGS settings and the initialisation (v = 1
           and each line through the pivot; Z_Q = Z_q = (α₁ + α₂)/2).
 
-    **Extension** (off by default): `normalize_fit=True` divides E_f by
-    the number K of quantiles (the λ then weigh 1/K as much data).
-
     !!! references "References"
         1. Smith K, Li Y, Piccinini F, Csucs G, Balazs C, Bevilacqua A,
            Horvath P. *CIDRE: an illumination-correction method for
@@ -328,6 +310,24 @@ class CIDRE(Estimator):
               doi     = {10.1038/nmeth.3323},
             }
             ```
+
+    !!! note "Extension (off by default)"
+        `normalize_fit=True` divides E_f by the number K of quantiles (the
+        λ then weigh 1/K as much data).
+
+    Attributes
+    ----------
+    estimates : dict
+        `{"shading": ShadingEstimate}` with `flat` = v and `dark` = z,
+        shaped `(*group, *spatial)`. v is relative to the target
+        distribution Q and is stored as produced
+        (`meta["flat_norm"] == "none"`); z includes the camera offset.
+    zero_light_ : (*group, 2) Tensor
+        Zero-light point (Z_Q, Z_q) of each group, in data units.
+    lambda_r_ : float
+        λ_r used by the last fit.
+    target_ : (*group, K) Tensor
+        Target distribution Q of each group, in data units.
 
     Examples
     --------

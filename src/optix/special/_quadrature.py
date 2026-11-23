@@ -26,6 +26,16 @@ def gauss_hermite(
     eigenvector components are not accurate in floating point. Everything
     runs in float64 on the CPU; the results are then cast and moved.
 
+    !!! note
+        `sum(exp(logw) * f(nodes))` ≈ ∫ f(x) exp(−x²) dx, exactly for
+        polynomials of degree ≤ 2n − 1. For a Gaussian expectation use the
+        change of variables x = μ + √2 σ t::
+
+            E[f(x)] ≈ sum(exp(logw) * f(mu + sqrt(2) * sigma * nodes))
+                      / sqrt(pi)
+
+        for x ~ N(mu, sigma²).
+
     Parameters
     ----------
     n : int
@@ -40,16 +50,6 @@ def gauss_hermite(
     logw : (n,) Tensor
         Natural logarithm of the weights. Log-weights are returned so that
         large `n` does not underflow.
-
-    Notes
-    -----
-    `sum(exp(logw) * f(nodes))` ≈ ∫ f(x) exp(−x²) dx, exactly for
-    polynomials of degree ≤ 2n − 1. For a Gaussian expectation use the
-    change of variables x = μ + √2 σ t::
-
-        E[f(x)] ≈ sum(exp(logw) * f(mu + sqrt(2) * sigma * nodes)) / sqrt(pi)
-
-    for x ~ N(mu, sigma²).
     """
     if n < 1:
         raise ValueError(f"n must be >= 1, got {n}")

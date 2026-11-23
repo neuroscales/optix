@@ -28,10 +28,9 @@ class Dirichlet(Distribution):
 
     p(π) = Γ(α₀) ∏ₖ πₖ^(αₖ − 1) / ∏ₖ Γ(αₖ) with α₀ = ∑ₖ αₖ.
 
-    Notes
-    -----
-    Exponential family: T(π) = log π, η = α − 1,
-    A = ∑ₖ log Γ(αₖ) − log Γ(α₀), h = 1.
+    !!! note
+        Exponential family: T(π) = log π, η = α − 1,
+        A = ∑ₖ log Γ(αₖ) − log Γ(α₀), h = 1.
     """
 
     _forms = {("concentration",): (1,)}
