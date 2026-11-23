@@ -24,30 +24,29 @@ class Reservoir(Reducer):
     smallest keys again, so merging is exact and the sample is exactly
     uniform.
 
+    !!! note
+        Once the reservoir is full, with `kmax` its largest key, a value is
+        only kept if its key is below `kmax`. A float32 Bernoulli mask with
+        probability `q`, the smallest power of two ≥ `kmax` / 2⁶² (and
+        ≥ 2⁻²⁴, so that it is exact in float32), selects candidates, and
+        int64 keys are drawn uniformly in [0, `q` 2⁶²) for those only; keys
+        ≥ `kmax` are then discarded. Each value thus gets a key uniform in
+        [0, `kmax`) with probability exactly `kmax` / 2⁶², as if a key had
+        been drawn for every value, without a chunk-sized int64 temporary.
+
+        Each update synchronises with the host (boolean indexing and reading
+        `kmax`). The random generator is not part of `state_dict`: a
+        reservoir restored with `from_state_dict` starts again from `seed`,
+        and reservoirs (e.g. parallel workers) built with the same `seed`
+        draw the same key stream. Give each worker its own seed (or none) for
+        independent samples.
+
     Attributes
     ----------
     values : (≤ size,) Tensor
         Sampled values (flattened, in no particular order).
     seen : int
         Number of values seen (after masking).
-
-    Notes
-    -----
-    Once the reservoir is full, with `kmax` its largest key, a value is
-    only kept if its key is below `kmax`. A float32 Bernoulli mask with
-    probability `q`, the smallest power of two ≥ `kmax` / 2⁶² (and
-    ≥ 2⁻²⁴, so that it is exact in float32), selects candidates, and
-    int64 keys are drawn uniformly in [0, `q` 2⁶²) for those only; keys
-    ≥ `kmax` are then discarded. Each value thus gets a key uniform in
-    [0, `kmax`) with probability exactly `kmax` / 2⁶², as if a key had
-    been drawn for every value, without a chunk-sized int64 temporary.
-
-    Each update synchronises with the host (boolean indexing and reading
-    `kmax`). The random generator is not part of `state_dict`: a
-    reservoir restored with `from_state_dict` starts again from `seed`,
-    and reservoirs (e.g. parallel workers) built with the same `seed`
-    draw the same key stream. Give each worker its own seed (or none) for
-    independent samples.
     """
 
     _state = ("values", "keys", "count")

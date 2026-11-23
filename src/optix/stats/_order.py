@@ -97,6 +97,12 @@ def order_statistics(
 ) -> Tensor:
     """Per-pixel k-th smallest value(s) over all samples of each group.
 
+    !!! note
+        Up to four ranks use repeated `torch.kthvalue`; more ranks use one
+        `sort` (whose int64 indices make it heavier: `overhead` defaults to
+        3 then). `torch.quantile` is not used: it rejects large inputs.
+        NaNs give undefined results.
+
     Parameters
     ----------
     data : array-like or Labeled
@@ -112,13 +118,6 @@ def order_statistics(
     Returns
     -------
     (*group, *spatial) or (K, *group, *spatial) Tensor
-
-    Notes
-    -----
-    Up to four ranks use repeated `torch.kthvalue`; more ranks use one
-    `sort` (whose int64 indices make it heavier: `overhead` defaults to
-    3 then). `torch.quantile` is not used: it rejects large inputs.
-    NaNs give undefined results.
     """
     n = _nsamples(data, ndim, layout)
     ks = [k] if isinstance(k, int) else [int(i) for i in k]
