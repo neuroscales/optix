@@ -244,7 +244,7 @@ global grid, and the halo grows to $s\,(2\lfloor\rho/s\rfloor + 2 + [\text{smoot
 multiple of $s$ that covers the coarse opening, the cells and the interpolation
 ($[\text{smooth}]$ is 1 with `smooth=True` and 0 otherwise).
 
-The cost of the exact ball is $O(N \rho^n)$ for $N$ pixels, one operation per
+The cost of the exact ball is $O(\lvert\Omega\rvert\, \rho^n)$ for $\lvert\Omega\rvert$ pixels, one operation per
 offset of the ball. On one CPU thread, a $1024^2$ image takes about 0.4 s with
 $\rho = 10$ and 11 s with $\rho = 50$; `shrink=4` brings the latter to 0.03 s. A
 $128^3$ volume takes about 12 s with $\rho = 10$. The flat disk and square are

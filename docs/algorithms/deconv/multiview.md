@@ -45,8 +45,8 @@ camera offset are assumed removed.
     $$
     \mathbb{E}[\mathbf{y}_v] = \mathbf{A}_v \mathbf{x},
     \qquad
-    (\mathbf{A}_v \mathbf{x})_p = \sum_q h_v(p - q)\, x_q ,
-    \qquad v = 1, \ldots, V .
+    (\mathbf{A}_v \mathbf{x})_i = \sum_{j \in \Omega} h_v(i - j)\, x_j ,
+    \qquad i \in \Omega,\; v = 1, \ldots, V .
     $$
 
 === "Preibisch et al. 2014"
@@ -301,9 +301,9 @@ given. The defaults of `faithful=False` are the same.
 The χ² stop is the only extension. Following
 [Lucy (1974, §IV)](https://doi.org/10.1086/111605), it stops at the first
 iteration for which $P(\chi^2 > \chi^2_{\mathrm{obs}}) \ge \alpha$, with
-$\chi^2_{\mathrm{obs}} = \sum_v \sum_p (y_{vp} - \mu_{vp})^2 / \mu_{vp}$,
-$\boldsymbol{\mu}_v = \mathbf{A}_v \mathbf{x}$ and $V P - 1$ degrees of freedom
-($P$ pixels per view); it assumes counts.
+$\chi^2_{\mathrm{obs}} = \sum_v \sum_{i \in \Omega} (y_{vi} - \mu_{vi})^2 / \mu_{vi}$,
+$\boldsymbol{\mu}_v = \mathbf{A}_v \mathbf{x}$ and $V \lvert\Omega\rvert - 1$ degrees of freedom
+($\lvert\Omega\rvert$ pixels per view); it assumes counts.
 
 !!! note "Choices the paper leaves open"
     These are fixed by the implementation and have no keyword:

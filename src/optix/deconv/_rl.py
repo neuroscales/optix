@@ -118,9 +118,9 @@ def _expected(
 def chi2_probability(data: Tensor, mu: Tensor) -> float:
     """P(χ² > χ²_obs) of Pearson's statistic for counts.
 
-        χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / μᵢ,   ν = n − 1 degrees of freedom,
+        χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / μᵢ,   ν = |Ω| − 1 degrees of freedom,
 
-    with n the number of pixels
+    with |Ω| the number of pixels
     ([Lucy 1974, §IV](https://doi.org/10.1086/111605)).
 
     Parameters
@@ -381,7 +381,7 @@ class RichardsonLucy(Estimator):
 
     **Stopping rule.** [Lucy (1974, §IV)](https://doi.org/10.1086/111605): stop
     as soon as the χ² test of the fit, P(χ² > χ²_obs) with χ²_obs = ∑ᵢ (yᵢ −
-    μᵢ)²/μᵢ, μ = H f⁽ʳ⁾, and ν = n − 1 degrees of freedom, is not small (≥
+    μᵢ)²/μᵢ, μ = H f⁽ʳ⁾, and ν = |Ω| − 1 degrees of freedom, is not small (≥
     `alpha` = 0.05). The test assumes y in counts (photons or electrons). A
     fixed number of iterations
     ([Richardson](https://doi.org/10.1364/JOSA.62.000055) shows 10, 20 and 30)

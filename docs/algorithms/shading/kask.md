@@ -42,7 +42,7 @@ signal is multiplicative and shaded by $\mathbf{f}$:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \beta_i\, \mathbf{s}_b
+    \mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \beta_n\, \mathbf{s}_b
     $$
 
 === "Kask et al. 2016"
@@ -54,13 +54,13 @@ signal is multiplicative and shaded by $\mathbf{f}$:
     with $S_A = B\,S_b$ and $S_M = S_f$ in the normalised form below.
 
 Both profiles are normalised to mean 1, $\bar{\mathbf{f}} = \bar{\mathbf{s}}_b = 1$,
-and $\beta_i$ is the mean background intensity of frame $i$, in ADU
+and $\beta_n$ is the mean background intensity of frame $n$, in ADU
 (camera offset included). The correction is
 
 === "optix"
 
     $$
-    \hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \hat\beta_i\, \mathbf{s}_b}{\mathbf{f}} + \hat\beta_i
+    \hat{\mathbf{x}}_i = \frac{\mathbf{y}_n - \hat\beta_n\, \mathbf{s}_b}{\mathbf{f}} + \hat\beta_n
     $$
 
 === "Kask et al. 2016"
@@ -73,26 +73,26 @@ and $\beta_i$ is the mean background intensity of frame $i$, in ADU
     profiles not normalised.)
 
 The background is corrected additively and the foreground multiplicatively.
-The constant $\hat\beta_i$ added back keeps the corrected image positive and
+The constant $\hat\beta_n$ added back keeps the corrected image positive and
 restores the original background level.
 
 | optix | [Kask et al. 2016](https://doi.org/10.1111/jmi.12404) | Meaning |
 |---|---|---|
-| $\mathbf{y}_i$ | $N$ | recorded image |
-| $\mathbf{x}_i$ | $U$, $\hat{U}$ | latent and corrected image |
+| $\mathbf{y}_n$ | $N$ | recorded image |
+| $\mathbf{x}_n$ | $U$, $\hat{U}$ | latent and corrected image |
 | $\mathbf{f}$ | $S_f$ (normalised $S_M$) | foreground profile, `flat` |
 | $\mathbf{s}_b$ | $S_b$ (normalised $S_A$) | background profile |
-| $\beta_i$, $\hat\beta_i$ | $B$, $\hat{B}$ | mean background intensity of frame $i$ |
-| $\bar\beta$ | | mean of $\beta_i$ over the images used in the background fit |
+| $\beta_n$, $\hat\beta_n$ | $B$, $\hat{B}$ | mean background intensity of frame $n$ |
+| $\bar\beta$ | | mean of $\beta_n$ over the images used in the background fit |
 
 The estimate stores $\mathbf{f}$ in `flat` (`meta["flat_norm"] == "mean"`) and
 $\mathbf{d} = \bar\beta\,\mathbf{s}_b$ in `dark`, in ADU. Unlike the shading
 model of the other estimators, the background here is *not* lit through
 $\mathbf{f}$, and its amplitude changes per frame:
 `meta["dark_scaling"] == "per-frame"` records that `apply` re-estimates
-$\beta_i$ for every image, whereas
+$\beta_n$ for every image, whereas
 [`ShadingEstimate.correct`](../../reference/shading.md) subtracts `dark` as it
-is, that is, with $\beta_i = \bar\beta$.
+is, that is, with $\beta_n = \bar\beta$.
 
 ## Probabilistic model
 
@@ -208,7 +208,7 @@ Profiles are estimated in one pass in this order:
    images, filter outliers in each and average it; subtract the background
    $\bar\beta\,\mathbf{s}_b$ from each average; fit the averages globally.
 5. **Quality control.** Split the data into subsets, fit each (with $\lambda$
-   scaled by the share $n_s/n$ of the images of the subset, so that it smooths
+   scaled by the share $N_s/N$ of the images of the subset, so that it smooths
    as much as the full fit), and take the spread of their profiles as the
    range of the random error. A profile
    above its limit is replaced by 1, with a warning, and the foreground
@@ -227,8 +227,8 @@ not give the objective of the global fit:
 linear interpolation between bin centres (the polynomial is evaluated at the
 pixels).
 
-Applying the correction needs $\hat\beta_i$: the frame is segmented with the
-fitted background profile and $\hat\beta_i = \sum y / \sum s_b$ over its
+Applying the correction needs $\hat\beta_n$: the frame is segmented with the
+fitted background profile and $\hat\beta_n = \sum y / \sum s_b$ over its
 background pixels (the mean level of the fit if the frame has none).
 
 ## Algorithm
@@ -247,12 +247,12 @@ For each frame y, in storage order:
     after 10, 20, 40, ... background frames: refit the provisional p
 Background: outlier-filtered global fit (λ = 0.2), repeated until no outlier
     (outlier: mean square deviation > 3 × median over the images)
-Levels: β_i = Σ background / Σ (s_b over background bins), per frame
-    β̄ = mean of β_i over the images used in the background fit
+Levels: β_n = Σ background / Σ (s_b over background bins), per frame
+    β̄ = mean of β_n over the images used in the background fit
 Foreground: for each set of 16 binned images: filter outliers, average,
     subtract β̄ s_b; fit all averages globally (λ = 20)
-Random error: 4 contiguous subsets, λ scaled by n_s / n; background ≤ 2 %, foreground ≤ 4 %
-Return flat = f, dark = β̄ s_b, background_level_ = β_i, κn
+Random error: 4 contiguous subsets, λ scaled by N_s / N; background ≤ 2 %, foreground ≤ 4 %
+Return flat = f, dark = β̄ s_b, background_level_ = β_n, κn
 ```
 
 ## Faithful mode and extensions
@@ -348,7 +348,7 @@ global fits of the outlier filters.
 With a layout that has group axes, each group (for instance each channel) has
 its own pair of profiles, as the paper estimates a separate set per detection
 channel. [`apply`](../../reference/shading.md) works on frame batches and
-re-estimates $\beta_i$ per image.
+re-estimates $\beta_n$ per image.
 
 ## Usage
 

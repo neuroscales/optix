@@ -18,15 +18,15 @@ smooth bases used to describe illumination.
 
 Take one pixel, and let $\lambda$ be the number of photoelectrons it
 expects to collect during the exposure. Photons arrive at random, so the number
-actually collected, $n$, varies from exposure to exposure even if nothing in
+actually collected, $e$, varies from exposure to exposure even if nothing in
 the scene changes. It follows a Poisson distribution with mean $\lambda$.
 The electronics then multiply the count by a gain $g$, add an offset $o$ so
 that the output never goes negative, and add a little noise $\varepsilon$ of
 their own (the *read noise*). The recorded value is
 
 $$
-y = g\,n + o + \varepsilon,
-\qquad n \sim \mathrm{Poisson}(\lambda),
+y = g\,e + o + \varepsilon,
+\qquad e \sim \mathrm{Poisson}(\lambda),
 \qquad \varepsilon \sim \mathcal{N}(0, \sigma^2).
 $$
 
@@ -34,7 +34,7 @@ $$
 |---|---|---|
 | $y$ | recorded pixel value | ADU (analog-to-digital units, the integers in the file) |
 | $\lambda$ | expected number of photoelectrons | electrons |
-| $n$ | actual number of photoelectrons | electrons |
+| $e$ | actual number of photoelectrons | electrons |
 | $g$ | gain | **ADU per electron** |
 | $o$ | camera offset | ADU |
 | $\sigma^2$ | read-noise variance | ADU$^2$ |
@@ -53,7 +53,7 @@ maps.
 ### Mean and variance
 
 The mean and the variance of $y$ follow directly. The Poisson distribution
-has variance equal to its mean, so $\mathrm{Var}[g\,n] = g^2 \lambda$, and the
+has variance equal to its mean, so $\mathrm{Var}[g\,e] = g^2 \lambda$, and the
 three noise sources are independent:
 
 $$
@@ -180,11 +180,11 @@ $\mathbf{d}$ the **dark field** (additive, in ADU). All four are images, and
 $\odot$ is the pixel-wise product (see [Notation](notation.md)). When frames
 are recorded in a sequence and the overall level drifts, for example because
 of a fluctuating light source or a background in the specimen that changes
-from frame to frame, each frame $i$ may carry an additional constant $b_i$,
+from frame to frame, each frame $n$ may carry an additional constant $b_n$,
 the **baseline**:
 
 $$
-\mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d} .
+\mathbf{y}_n = \mathbf{f} \odot (\mathbf{x}_n + b_n) + \mathbf{d} .
 $$
 
 The baseline sits inside the flat field: it is light from the specimen
@@ -198,12 +198,12 @@ In code the three terms are the fields `flat`, `dark` and `baseline` of a
 Correcting an image means inverting the model:
 
 $$
-\hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}} - b_i .
+\hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \mathbf{d}}{\mathbf{f}} - b_n .
 $$
 
 An estimate may instead declare `meta["baseline_units"] = "raw"`, for a
 baseline that is added after the flat field,
-$\mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d} + b_i$: a drifting
+$\mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \mathbf{d} + b_n$: a drifting
 camera offset, say. The default is `"signal"`, the model above.
 
 ### How the two models fit together
@@ -247,7 +247,7 @@ compared, chained and applied by the same code. The result types in
 ones that most often cause silent mistakes, so it is worth knowing them.
 
 - **Flat fields are stored as produced.** The model has a scale ambiguity:
-  $(\mathbf{f}, \mathbf{x}_i, b_i)$ and $(c\mathbf{f}, \mathbf{x}_i/c, b_i/c)$
+  $(\mathbf{f}, \mathbf{x}_n, b_n)$ and $(c\mathbf{f}, \mathbf{x}_n/c, b_n/c)$
   describe the same images for any $c > 0$. Each
   algorithm resolves it its own way, and optix does not rescale behind your
   back. The convention used is recorded in `meta["flat_norm"]`, which is
@@ -256,13 +256,13 @@ ones that most often cause silent mistakes, so it is worth knowing them.
   rescaled to the convention you want, with `meta` updated. The scale moves
   into the latent image, so `dark` is untouched and a baseline inside the flat
   field is rescaled with the signal (one added after it is untouched). A
-  similar ambiguity exists between $\mathbf{d}$ and the $b_i$: replacing
-  $\mathbf{d}$ by $\mathbf{d} + c\,\mathbf{f}$ and every $b_i$ by $b_i - c$
+  similar ambiguity exists between $\mathbf{d}$ and the $b_n$: replacing
+  $\mathbf{d}$ by $\mathbf{d} + c\,\mathbf{f}$ and every $b_n$ by $b_n - c$
   changes nothing, so a constant can move from one to the other.
 
 - **`dark` includes the camera offset.** `ShadingEstimate.dark` is the
   whole additive image of the correction
-  $(\mathbf{y}_i - \mathbf{d})/\mathbf{f} - b_i$, in ADU.
+  $(\mathbf{y}_n - \mathbf{d})/\mathbf{f} - b_n$, in ADU.
   `SensorEstimate.offset` is the camera offset alone. A model that has only
   one additive term returns it in both fields. Because of that overlap,
   *corrections never subtract both*: pick the `dark` of a `ShadingEstimate`, or
@@ -299,15 +299,15 @@ be the instrument. Describing a flat field with a handful of smooth basis
 functions rather than with one value per pixel makes it cheaper to estimate and
 much less sensitive to noise.
 
-optix uses the orthonormal discrete cosine transform (DCT-II). For $P$ samples, the
-$j$-th basis function evaluated at sample $p$ is
+optix uses the orthonormal discrete cosine transform (DCT-II). For $L$ samples, the
+$j$-th basis function evaluated at sample $m$ is
 
 $$
-\Phi_{pj} = c_j \cos\!\Bigl(\frac{\pi}{P}\,\bigl(p + \tfrac12\bigr)\,j\Bigr),
-\qquad c_0 = \sqrt{\tfrac1P},\quad c_{j>0} = \sqrt{\tfrac2P},
+\Phi_{mj} = c_j \cos\!\Bigl(\frac{\pi}{L}\,\bigl(m + \tfrac12\bigr)\,j\Bigr),
+\qquad c_0 = \sqrt{\tfrac1L},\quad c_{j>0} = \sqrt{\tfrac2L},
 $$
 
-for $p = 0, \ldots, P-1$. The columns of $\boldsymbol{\Phi}$ are orthonormal,
+for $m = 0, \ldots, L-1$. The columns of $\boldsymbol{\Phi}$ are orthonormal,
 $\boldsymbol{\Phi}^\top \boldsymbol{\Phi} = \mathbf{I}$, and
 function $j$ completes $j/2$ oscillations over the axis. Keeping only the $k$
 lowest-frequency columns gives a smooth subspace; with $k = 1$ the picture is
@@ -339,11 +339,11 @@ torch.Size([4, 4])
 
 The DCT has a second virtue: it diagonalises the *negative* discrete Laplacian
 with reflecting (Neumann) boundaries, which are the natural boundary conditions of an
-image, $-\boldsymbol{\Delta}_h \boldsymbol{\phi}_j = \kappa_j \boldsymbol{\phi}_j$ for the $j$-th column $\boldsymbol{\phi}_j$ of $\boldsymbol{\Phi}$. The eigenvalue of function $j$ on an axis of $P$ samples spaced $h$ apart
+image, $-\boldsymbol{\Delta}_h \boldsymbol{\phi}_j = \kappa_j \boldsymbol{\phi}_j$ for the $j$-th column $\boldsymbol{\phi}_j$ of $\boldsymbol{\Phi}$. The eigenvalue of function $j$ on an axis of $L$ samples spaced $h$ apart
 is
 
 $$
-\kappa_j = \frac{2 - 2\cos(\pi j / P)}{h^2},
+\kappa_j = \frac{2 - 2\cos(\pi j / L)}{h^2},
 $$
 
 and for the separable function with indices $(j_1, \ldots, j_d)$ the weight

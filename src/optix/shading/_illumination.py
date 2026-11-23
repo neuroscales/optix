@@ -139,7 +139,7 @@ class IlluminationFunction(CalibrationEstimator):
 
     The illumination correction function (ICF) is
 
-        f = S(meanᵢ (yᵢ − d)),   x = (y − d)/f,
+        f = S(meanₙ (yₙ − d)),   x = (y − d)/f,
 
     the per-pixel average of all images of a batch (e.g. a plate and
     channel) smoothed by S; each image is corrected by dividing it by f.

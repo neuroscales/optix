@@ -34,13 +34,13 @@ calibration: do not correct by both.
 ## Probabilistic model
 
 There is no noise model: the references are reduced per pixel and the noise is
-assumed to average out. With $P$ the number of pixels, frames
-$\mathbf{y}_i, \mathbf{x}_i \in \mathbb{R}^P$ and $M$ frames per reference stack,
+assumed to average out. With $\lvert\Omega\rvert$ the number of pixels, frames
+$\mathbf{y}_n, \mathbf{x}_n \in \mathbb{R}^{\lvert\Omega\rvert}$ and $M$ frames per reference stack,
 
 $$
-\mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d}, \qquad
+\mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \mathbf{d}, \qquad
 \hat{\mathbf{d}} = \hat{\mathbf{y}}^{\text{dark}}, \qquad
-\hat{\mathbf{f}} = \frac{\hat{\mathbf{y}}^{\text{flat}} - \hat{\mathbf{d}}}{\frac{1}{P}\sum_{p=1}^{P}\bigl(\hat{y}^{\text{flat}}_p - \hat{d}_p\bigr)},
+\hat{\mathbf{f}} = \frac{\hat{\mathbf{y}}^{\text{flat}} - \hat{\mathbf{d}}}{\frac{1}{\lvert\Omega\rvert}\sum_{i \in \Omega}\bigl(\hat{y}^{\text{flat}}_i - \hat{d}_i\bigr)},
 $$
 
 where $\hat{\mathbf{y}}$ is the per-pixel mean or median over the frames of a
@@ -52,30 +52,30 @@ $\tilde{\mathbf{y}} = \operatorname{median}_m \mathbf{y}_m$ (pixel-wise) with
 
 | Symbol | Meaning | Shape |
 |---|---|---|
-| $\mathbf{y}_i$ | recorded frame $i$ (ADU) | $\mathbb{R}^P$, per frame |
-| $\mathbf{x}_i$ | latent image of frame $i$, without shading | $\mathbb{R}^P$, per frame |
-| $\mathbf{f}$ | flat field: relative sensitivity, mean $1$ | $\mathbb{R}^P$, per pixel, shared by the frames of a group |
-| $\mathbf{d}$ | dark: offset, dark current and stray light (ADU) | $\mathbb{R}^P$, per pixel, shared by the frames of a group |
-| $\mathbf{y}_m^{\text{dark}}$, $\mathbf{y}_m^{\text{flat}}$ | frame $m$ of the dark and flat reference stacks | $\mathbb{R}^P$, per frame |
-| $\hat{\mathbf{y}}^{\text{dark}}$, $\hat{\mathbf{y}}^{\text{flat}}$ | per-pixel mean or median of each reference stack | $\mathbb{R}^P$, per pixel |
-| $P$, $M$ | numbers of pixels and of reference frames | scalars, whole stack |
+| $\mathbf{y}_n$ | recorded frame $n$ (ADU) | $\mathbb{R}^{\lvert\Omega\rvert}$, per frame |
+| $\mathbf{x}_n$ | latent image of frame $n$, without shading | $\mathbb{R}^{\lvert\Omega\rvert}$, per frame |
+| $\mathbf{f}$ | flat field: relative sensitivity, mean $1$ | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel, shared by the frames of a group |
+| $\mathbf{d}$ | dark: offset, dark current and stray light (ADU) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel, shared by the frames of a group |
+| $\mathbf{y}_m^{\text{dark}}$, $\mathbf{y}_m^{\text{flat}}$ | frame $m$ of the dark and flat reference stacks | $\mathbb{R}^{\lvert\Omega\rvert}$, per frame |
+| $\hat{\mathbf{y}}^{\text{dark}}$, $\hat{\mathbf{y}}^{\text{flat}}$ | per-pixel mean or median of each reference stack | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel |
+| $\lvert\Omega\rvert$, $M$ | numbers of pixels and of reference frames | scalars, whole stack |
 
 ## Inference / derivation
 
 The correction is
-$\hat{\mathbf{x}}_i = (\mathbf{y}_i - \hat{\mathbf{d}}) / \hat{\mathbf{f}}
-= \dfrac{\mathbf{y}_i - \hat{\mathbf{d}}}{\hat{\mathbf{y}}^{\text{flat}} - \hat{\mathbf{d}}}\,\frac{1}{P}\sum_p \bigl(\hat{y}^{\text{flat}}_p - \hat{d}_p\bigr)$
+$\hat{\mathbf{x}}_n = (\mathbf{y}_n - \hat{\mathbf{d}}) / \hat{\mathbf{f}}
+= \dfrac{\mathbf{y}_n - \hat{\mathbf{d}}}{\hat{\mathbf{y}}^{\text{flat}} - \hat{\mathbf{d}}}\,\frac{1}{\lvert\Omega\rvert}\sum_{i \in \Omega} \bigl(\hat{y}^{\text{flat}}_i - \hat{d}_i\bigr)$
 (pixel-wise division). Statistically, the mean reduction is the method-of-moments
 (and Gaussian maximum-likelihood) estimate of each pixel's expected value, and
 the median is its robust counterpart, the maximum-likelihood estimate under
 Laplace noise, insensitive to a few outlying frames.
-The overall scale shared by $\mathbf{f}$ and $\mathbf{x}_i$ is fixed by dividing
+The overall scale shared by $\mathbf{f}$ and $\mathbf{x}_n$ is fixed by dividing
 the flat by its spatial mean (per group), which keeps corrected intensities in
 ADU; `meta["flat_norm"]` records `"mean"` or `"none"`.
 
 ## Algorithm
 
-**Input:** flat frames $\mathbf{y}_1^{\text{flat}}, \ldots, \mathbf{y}_M^{\text{flat}} \in \mathbb{R}^P$;
+**Input:** flat frames $\mathbf{y}_1^{\text{flat}}, \ldots, \mathbf{y}_M^{\text{flat}} \in \mathbb{R}^{\lvert\Omega\rvert}$;
 `dark` (a stack, a map, a `ShadingEstimate`, a `SensorEstimate` or none);
 `statistic="mean"`, `normalize="mean"`. \
 **Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$ and $\hat{\mathbf{d}}$ and, for

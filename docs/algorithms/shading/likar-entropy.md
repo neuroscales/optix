@@ -39,9 +39,10 @@ baseline, as [CIDRE](cidre.md) does:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d},
+    \mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \mathbf{d},
     \qquad
-    \hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \hat{\mathbf{d}}}{\hat{\mathbf{f}}}
+    \hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \hat{\mathbf{d}}}{\hat{\mathbf{f}}},
+    \qquad n = 1, \ldots, N
     $$
 
 === "Likar et al. 2000"
@@ -56,8 +57,8 @@ baseline, as [CIDRE](cidre.md) does:
 
 | optix | [Likar et al. 2000](https://doi.org/10.1046/j.1365-2818.2000.00669.x) | Meaning |
 |---|---|---|
-| $\mathbf{y}_i$ | $N$ | recorded image |
-| $\mathbf{x}_i$ | $U$ | latent image |
+| $\mathbf{y}_n$ | $N$ | recorded image |
+| $\mathbf{x}_n$ | $U$ | latent image |
 | $\mathbf{f}$ | $S_M$ | multiplicative shading (flat field) |
 | $\mathbf{d}$ | $S_A$ | additive shading (dark field) |
 | $\mathbf{r} = (x, y)$ | $(x, y)$ | pixel position, origin at the image centre |
@@ -91,7 +92,7 @@ $\mathbf{r} = (x, y)$ measured from the image centre:
     \end{aligned}
     $$
 
-    so that $\sum_p d_p \approx 0$ and $\bar{f} \approx 1$.
+    so that $\sum_{i \in \Omega} d_i \approx 0$, with $\Omega$ the pixels, and $\bar{f} \approx 1$.
 
 === "Likar et al. 2000"
 
@@ -112,8 +113,9 @@ pixel$^2$. The flat field has no unit: $m_1$ and $m_2$ are per pixel, and
 $m_3$, $m_4$ and $m_5$ per pixel$^2$. (They are not the parameters that the
 optimiser works with, which are rescaled; see [Algorithm](#algorithm).)
 
-The objective is the entropy of the corrected image. With $h(n)$ the
-histogram of the grey levels $n = 1 \ldots G$ and $p(n)$ its normalisation:
+The objective is the entropy of the corrected image. With $h_k$ the
+histogram of the grey levels $k = 1 \ldots G$ and $p_k$ its normalisation
+(the paper's $h(n)$, $n$ and $p(n)$; $n$ indexes frames in optix):
 
 === "optix"
 
@@ -121,7 +123,7 @@ histogram of the grey levels $n = 1 \ldots G$ and $p(n)$ its normalisation:
     \{\mathbf{a}, \mathbf{m}\} = \arg\min_{\mathbf{a},\, \mathbf{m}}
     \; \mathcal{H}\!\left(\frac{\mathbf{y} - \mathbf{d}(\mathbf{a})}{\mathbf{f}(\mathbf{m})}\right),
     \qquad
-    \mathcal{H} = -\sum_{n} p(n) \log p(n)
+    \mathcal{H} = -\sum_{k} p_k \log p_k
     $$
 
 === "Likar et al. 2000"
@@ -145,11 +147,11 @@ parameters (Eqs. 19–20, text):
   histogram covers $[-G, 2G]$.
 - **Blur.** The histogram is convolved with a triangular window,
 
-  $$
-  {}^{*}h(n) = \sum_{i=-t}^{t} h(n + i)\,(t + 1 - |i|), \qquad t = 2, \tag{20}
-  $$
+    $$
+    {}^{*}h(n) = \sum_{i=-t}^{t} h(n + i)\,(t + 1 - |i|), \qquad t = 2, \tag{20}
+    $$
 
-  and normalised afterwards, which gives $p(n)$.
+    and normalised afterwards, which gives $p(n)$, that is $p_k$.
 - **Marginal grey values.** The pixels of the input image at the grey values 1
   and $G$ are ignored, since they may be saturated.
 
@@ -163,7 +165,7 @@ direction at a time with Brent's one-dimensional method
 The neutralisation conditions (Eqs. 14–15) are essential, and the two
 constants they fix are not alike. A constant added to $\mathbf{d}$ translates
 the histogram and leaves its entropy unchanged: it is a gauge freedom, fixed
-by $\sum_p d_p = 0$. A constant factor in $\mathbf{f}$ is different: scaling
+by $\sum_{i \in \Omega} d_i = 0$. A constant factor in $\mathbf{f}$ is different: scaling
 the image compresses the histogram and lowers its entropy, so with a free
 factor the minimiser would shrink every value into a few bins (entropy
 towards 0). Setting the constant term of $\mathbf{f}$ to 1 removes this

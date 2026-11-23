@@ -176,7 +176,7 @@ $k a \rho\, r_d / z_d$ equals $k_0\,\mathrm{NA}\,\rho\, r$ with $r = r_d/M$, up 
 factor $[1 - (\mathrm{NA}/M)^2]^{-1/2}$ that is close to 1 when $\mathrm{NA} \ll M$ (a few $10^{-4}$ away from 1 for NA 1.4 at
 60$\times$). The
 constant $C / z_d$ is dropped because the PSF is normalised to unit sum. Samples
-on the voxel grid are the intensity at $\Delta z = $ `defocus` $+ (k - K_z//2)\,d_z$
+on the voxel grid are the intensity at $\Delta z$ = `defocus` + $(k - K_z//2)\,d_z$
 and lateral offset $(j - K_y//2)\, d_y$, $(i - K_x//2)\, d_x$.
 
 ## Inference / derivation
