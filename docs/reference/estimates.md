@@ -15,3 +15,4 @@ the conventions they follow (which are also explained in
         - ShadingEstimate
         - Classification
         - PSFEstimate
+        - TileIntensityEstimate

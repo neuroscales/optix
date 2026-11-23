@@ -35,6 +35,7 @@ nav = [
     "reference/deconv.md",
     "reference/destripe.md",
     "reference/psf.md",
+    "reference/fusion.md",
     "reference/models.md",
     "reference/distributions.md",
     "reference/functional.md",

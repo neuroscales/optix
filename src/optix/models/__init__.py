@@ -6,6 +6,7 @@ Samples depend on the seed **and** on how the caller chunks the calls.
 from .mixture import GammaMixtureSample, simulate_gamma_mixture
 from .sensor import random_sensor, simulate_sensor
 from .shading import random_shading, simulate_shading
+from .tiles import simulate_tiles
 
 __all__ = [
     "GammaMixtureSample",
@@ -14,4 +15,5 @@ __all__ = [
     "simulate_gamma_mixture",
     "simulate_sensor",
     "simulate_shading",
+    "simulate_tiles",
 ]
