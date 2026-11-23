@@ -26,6 +26,7 @@ nav = [
     "reference/estimates.md",
     "reference/io.md",
     "reference/stats.md",
+    "reference/filters.md",
     "reference/basis.md",
     "reference/special.md",
     "reference/sensor.md",
@@ -59,9 +60,26 @@ features = [
   "navigation.indexes",
 ]
 
-[project.theme.palette]
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
 primary = "orange"
 accent = "orange"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "orange"
+accent = "orange"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
 
 [project.theme.icon]
 repo = "fontawesome/brands/github"

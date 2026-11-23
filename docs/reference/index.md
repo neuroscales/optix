@@ -11,6 +11,7 @@ the reference to look up a signature.
 | [`optix.estimates`](estimates.md) | `SensorEstimate`, `ShadingEstimate`, `Classification`, `PSFEstimate`: the shared result types |
 | [`optix.io`](io.md) | `Layout`, `labeled` and the chunk iterators `frame_batches`, `row_tiles` and `blocks` |
 | [`optix.stats`](stats.md) | streaming reducers (`Moments`, `Histogram`, ...) and per-pixel order statistics |
+| [`optix.filters`](filters.md) | spatial neighbourhood filters (`median_filter`, `median_disk`) |
 | [`optix.basis`](basis.md) | DCT bases and their smoothness penalties |
 | [`optix.special`](special.md) | quadrature, Newton solvers and cancellation-free KL divergences |
 | [`optix.sensor`](sensor.md) | sensor calibration estimators and variance-stabilising transforms |
