@@ -5,7 +5,7 @@
     **Noise model:** Poisson-Gaussian (Gaussian limit) \
     **Streaming:** per-frame \
     **Needs many frames:** yes \
-    **Reference:** none: an original optix model, not published (the Dirichlet update follows Minka 2000)
+    **Reference:** none: an original optix model, not published (the Dirichlet update follows [Minka 2000](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/))
 
 ## Overview
 
@@ -39,38 +39,20 @@ background and $\mathbf{d}_e$ a dark signal, both constant over frames. In the
 Gaussian limit, and writing the signal in ADU, $\mathbf{u}_i = g\,\mathbf{s}_i$,
 each pixel $p$ is
 
-=== "optix"
+$$
+y_{ip} \sim \mathcal{N}\bigl(c_p + f_p\,u_{ip},\; v_p + g\,f_p\,u_{ip}\bigr),
+\qquad u_{ip} \ge 0,
+$$
 
-    $$
-    y_{ip} \sim \mathcal{N}\bigl(c_p + f_p\,u_{ip},\; v_p + g\,f_p\,u_{ip}\bigr),
-    \qquad u_{ip} \ge 0,
-    $$
-
-    with the offset $\mathbf{c} = \mathbf{o} + g(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$
-    and the variance of an empty pixel $\mathbf{v} = \boldsymbol{\sigma}^2 + g^2(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$.
-
-=== "Docstring"
-
-    $$
-    y_{ik} \sim \mathcal{N}(c_i + m_i u_{ik},\; v_i + g\,m_i u_{ik})
-    $$
-
-There is no paper; the second tab is the notation of the class docstring,
-where $i$ indexes pixels and $k$ pictures. In optix terms the dark field is
-the offset, $\hat{\mathbf{d}} = \mathbf{c}$, the flat field is $\mathbf{f}$
-(geometric mean 1), and the baseline is absorbed in $\mathbf{c}$. With
-`noise="constant"` the variance is $v_p$ (no shot noise).
-
-| optix (this page) | docstring | in code |
-|---|---|---|
-| frame $i$, pixel $p$ | picture $k$, pixel $i$ | |
-| $\mathbf{f}$ | $m$ | `estimates["shading"].flat` |
-| $\mathbf{c}$ | $c$ | `estimates["sensor"].offset` = `estimates["shading"].dark` |
-| $\mathbf{v}$ | $v$ | `estimates["sensor"].variance` |
-| $g$ | $g$ | `gain` (held fixed) |
-| $u_{ip}$ | $u_{ik}$ | `apply(..., output="mean")` gives $\mathbb{E}[u \mid y]$ |
-| $\boldsymbol{\pi}_i$ | $\pi_k$ | `concentration_` (of $q(\boldsymbol{\pi}_i)$) |
-| $\mu_k$, $\nu_k$ | $\mu_c$, $\nu_c$ | `estimates["classification"].parameters` |
+with the offset $\mathbf{c} = \mathbf{o} + g(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$
+and the variance of an empty pixel $\mathbf{v} = \boldsymbol{\sigma}^2 + g^2(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$.
+In optix terms the dark field is the offset, $\hat{\mathbf{d}} = \mathbf{c}$
+(`estimates["sensor"].offset` = `estimates["shading"].dark`), the flat field
+is $\mathbf{f}$ (`estimates["shading"].flat`, geometric mean 1), $\mathbf{v}$
+is `estimates["sensor"].variance`, and the baseline is absorbed in
+$\mathbf{c}$; the gain $g$ is held at its nominal value. With
+`noise="constant"` the variance is $v_p$ (no shot noise). The class
+docstring uses the same notation.
 
 ## Probabilistic model
 
@@ -121,7 +103,7 @@ and the evidence lower bound is raised by alternating:
   integrand. $q(\boldsymbol{\pi}_i)$ is Dirichlet (conjugate update).
 - **class step**: $\mu_k$, $\nu_k$ are refitted to the aggregated posterior
   of $u$ in each class, $\nu_k$ kept in `nu_bounds`; $\boldsymbol{\alpha}$ by
-  Minka's fixed-point Newton method.
+  [Minka's fixed-point Newton method](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/).
 - **field step**: $\mathbf{c}$, $\mathbf{v}$, $\boldsymbol{\theta}$ take one
   joint Fisher-scoring step; the per-pixel unknowns are eliminated exactly,
   leaving a small dense system in $\boldsymbol{\theta}$. A step that lowers
@@ -224,15 +206,18 @@ See the [API reference](../../reference/shading.md).
 
 !!! references "References"
 
-    1. Minka T. *Estimating a Dirichlet distribution.* Technical report, 2000.
-       (No DOI.)
+    1. Minka TP. *Estimating a Dirichlet distribution.* Technical report,
+       Microsoft Research, 2000.
+       [microsoft.com/en-us/research](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/)
 
     ??? quote "BibTeX"
 
         ```bibtex
-        @misc{minka2000dirichlet,
-          author = {Minka, T.},
-          title  = {Estimating a Dirichlet distribution},
-          year   = {2000},
+        @techreport{minka2000dirichlet,
+          author      = {Minka, Thomas P.},
+          title       = {Estimating a Dirichlet distribution},
+          institution = {Microsoft Research},
+          year        = {2000},
+          url         = {https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/},
         }
         ```
