@@ -6,9 +6,12 @@ import pytest
 import torch
 
 from optix.deconv import MultiviewRL, multiview_rl, richardson_lucy
+from optix.deconv._multiview import _normalise_weights
 from optix.deconv.utils import (
+    BackProjection,
     Multiview,
     PaddedConvolution,
+    chi2_probability,
     compound_kernels,
     rl_block,
 )
@@ -40,6 +43,25 @@ def gaussian(size, sigma, dtype=F64):
     return out / out.sum()
 
 
+def skewed(size, seed):
+    """Random PSF without any symmetry (P ≠ P*)."""
+    gen = torch.Generator().manual_seed(seed)
+    p = torch.rand(size, size, generator=gen, dtype=F64) ** 3
+    return p / p.sum()
+
+
+def comet(size, sigma, tail, angle, dtype=F64):
+    """Gaussian core with an exponential tail towards `angle`."""
+    x = torch.arange(size, dtype=dtype) - size // 2
+    y, x = torch.meshgrid(x, x, indexing="ij")
+    c, s = math.cos(angle), math.sin(angle)
+    u, v = c * x + s * y, -s * x + c * y
+    core = torch.exp(-(u**2 + v**2) / (2 * sigma**2))
+    trail = torch.exp(-u.clamp(min=0) / tail - v**2 / (2 * sigma**2))
+    g = core + 0.5 * trail * (u > 0)
+    return g / g.sum()
+
+
 def blur(truth, psf):
     op = PaddedConvolution(psf, truth.shape)
     return op.forward(op.pad(truth)).clamp(min=0)
@@ -62,6 +84,22 @@ def views_of(truth, psfs, gen, scale=20.0):
     ]
 
 
+def cropped_views(psfs, shape=(64, 64), pad=12, **kw):
+    """Noise-free views of a scene that extends `pad` beyond the field."""
+    big = tuple(n + 2 * pad for n in shape)
+    truth, _ = scene(big, **kw)
+    inner = (slice(pad, -pad),) * len(shape)
+    return truth[inner], [blur(truth, p)[inner] for p in psfs]
+
+
+def kl(mv, f, data):
+    """Poisson data misfit ∑ y log(y/μ) − y + μ of all views."""
+    mu = mv.forward(f).clamp(min=1e-300)
+    return float(
+        (data * (data / mu).clamp(min=1e-300).log() - data + mu).sum()
+    )
+
+
 def rel_err(x, truth):
     return float((x - truth).norm() / truth.norm())
 
@@ -74,8 +112,12 @@ def four_views(n=4, shape=(64, 64), seed=0):
 
 # -- compound kernels ---------------------------------------------------------
 def test_compound_kernels_definitions():
-    psfs = [aniso(9, 2.0, 0.8, a) for a in (0.0, 1.0, 2.0)]
+    psfs = [skewed(9, seed) for seed in range(3)]
     mirror = [p.flip(0, 1) for p in psfs]
+    assert all(
+        float((p - m).abs().max()) > 1e-3
+        for p, m in zip(psfs, mirror, strict=True)
+    )
     ks = {k: compound_kernels(psfs, k) for k in KERNELS}
     for v in range(3):
         torch.testing.assert_close(ks["bayesian"][v], mirror[v])
@@ -105,6 +147,45 @@ def test_compound_kernels_definitions():
     # one view: every variant is the mirrored PSF
     for k in KERNELS:
         torch.testing.assert_close(compound_kernels(psfs[:1], k)[0], mirror[0])
+    # the "bayesian" kernel through BackProjection is Hᵀ
+    op = PaddedConvolution(psfs[1], (20, 24))
+    r = torch.rand(
+        20, 24, dtype=F64, generator=torch.Generator().manual_seed(5)
+    )
+    back = BackProjection(ks["bayesian"][1], op)
+    torch.testing.assert_close(back(r), op.adjoint(r))
+
+
+@pytest.mark.parametrize("kernel", KERNELS)
+def test_asymmetric_psfs_recover_point_position(kernel):
+    """Comet-shaped PSFs: the mirroring P* puts the point back in place."""
+    truth = torch.full((48, 48), 1.0, dtype=F64)
+    truth[20, 27] += 2000.0
+    psfs = [comet(15, 1.2, 3.0, a) for a in (0.0, math.pi / 2, 2.4)]
+    views = [blur(truth, p) for p in psfs]
+    y, x = torch.meshgrid(
+        torch.arange(48, dtype=F64), torch.arange(48, dtype=F64), indexing="ij"
+    )
+
+    def centroid(img):
+        w = (img - img.median()).clamp(min=0)
+        w = w * ((y - 20).abs() <= 4) * ((x - 27).abs() <= 4)
+        return float((w * y).sum() / w.sum()), float((w * x).sum() / w.sum())
+
+    # the tails pull the centroids of the views off the point by ~0.5 px
+    assert (
+        max(
+            abs(c - t)
+            for c, t in zip(centroid(views[1]), (20, 27), strict=True)
+        )
+        > 0.4
+    )
+    kw = {"kernel": kernel, "dtype": F64}
+    out = multiview_rl(views, psfs, n_iter=30, **kw)
+    assert divmod(int(out.argmax()), 48) == (20, 27)
+    # early iterates already centred (kernels without the mirroring: off by ≥ 0.09)
+    out = multiview_rl(views, psfs, n_iter=3, **kw)
+    assert centroid(out) == pytest.approx((20.0, 27.0), abs=0.05)
 
 
 def test_compound_kernels_no_underflow_in_float32_range():
@@ -274,6 +355,140 @@ def test_unit_weights_and_partial_coverage():
         MultiviewRL(psfs, weights=ones, update="additive")
 
 
+def test_missing_data_where_weight_is_zero():
+    """View 1 has no data (and weight 0) on the right: there, the result
+    is view 0 alone, up to the border and on the margin beyond it."""
+    psfs = [aniso(21, 4.0, 1.5, 0.0), aniso(21, 4.0, 1.5, math.pi / 2)]
+    truth, clean = cropped_views(psfs, base=20.0)
+    x = torch.arange(64, dtype=F64)
+    fall = 0.5 * (1 + torch.cos(math.pi * (x - 24) / 16))
+    taper = torch.where(x < 24, 1.0, torch.where(x < 40, fall, 0.0))
+    w1 = taper.expand(64, 64).clone()
+    w0 = torch.ones(64, 64, dtype=F64)
+    views = [clean[0], clean[1] * (x < 40)]
+    ref = richardson_lucy(clean[0], psfs[0], n_iter=30)
+    out = multiview_rl(
+        views,
+        psfs,
+        weights=[w0, w1],
+        kernel="bayesian",
+        n_iter=30,
+        block=(64, 64),
+    )
+    for col in (48, 56, 63):
+        diff = (out[:, col] - ref[:, col]).norm() / ref[:, col].norm()
+        assert float(diff) < 0.03, col
+    # the margin weight of view 1 vanishes beyond the uncovered border
+    # (columns 64 to 63 + PSF half-width; the rest of the grid wraps)
+    ops = [PaddedConvolution(p, (64, 64)) for p in psfs]
+    w = _normalise_weights(torch.stack([w0, w1]), 1.0)
+    mv = Multiview(ops, weights=w)
+    assert float(mv.weights[1, :, 64:74].max()) < 1e-6
+    assert bool(((mv.weights >= 0) & (mv.weights <= 1)).all())
+
+
+def test_normalise_weights():
+    w = torch.tensor(
+        [[1.0, 0.0, 0.0, 3.0, 2.0], [1.0, 2.0, 0.0, 1.0, -1.0]], dtype=F64
+    )
+    out = _normalise_weights(w, 1.0)
+    expected = torch.tensor(
+        [[0.5, 0.0, 0.0, 0.75, 1.0], [0.5, 1.0, 0.0, 0.25, 0.0]], dtype=F64
+    )
+    torch.testing.assert_close(out, expected)
+    # k = 2: the sum is k where two views overlap, each weight capped at 1
+    out = _normalise_weights(w, 2.0)
+    expected = torch.tensor(
+        [[1.0, 0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 0.0, 0.5, 0.0]], dtype=F64
+    )
+    torch.testing.assert_close(out, expected)
+    three = torch.rand(3, 50, generator=torch.Generator().manual_seed(0))
+    out = _normalise_weights(three.double(), 2.0)
+    assert bool((out <= 1).all())
+    capped = (2 * three / three.sum(0) >= 1).any(0)
+    torch.testing.assert_close(
+        out.sum(0)[~capped], torch.full_like(out[0][~capped], 2.0)
+    )
+
+
+# -- edge damping and the margin ----------------------------------------------
+def test_margin_weights_invariants():
+    psfs = [aniso(21, 4.0, 1.0, math.pi * k / 3) for k in range(3)]
+    ops = [PaddedConvolution(p, (40, 36)) for p in psfs]
+    assert Multiview(ops[:1]).weights is None
+    for kernels in (None, compound_kernels(psfs, "efficient")):
+        mv = Multiview(ops, kernels)
+        inside = mv.weights[(slice(None), slice(0, 40), slice(0, 36))]
+        assert bool((inside == 1).all())
+        assert bool(((mv.weights >= 0) & (mv.weights <= 1)).all())
+        # ρᵥ = Hᵥᵀ1 / maxᵤ Hᵤᵀ1 on the margin, for every kernel
+        norms = torch.stack([o.norm for o in ops])
+        rho = norms / norms.max(0).values.clamp(min=1e-300)
+        margin = torch.ones(mv.grid, dtype=torch.bool)
+        margin[:40, :36] = False
+        support = mv.norm > mv.norm.max() * 1e-6
+        sel = margin & support
+        torch.testing.assert_close(mv.weights[:, sel], rho[:, sel])
+
+
+@pytest.mark.parametrize("kernel", ["bayesian", "efficient"])
+def test_scene_beyond_the_field(kernel):
+    """Light from outside the field: the margin takes it, and the misfit
+    of the noise-free views decreases at every iteration."""
+    psfs = [aniso(21, 4.0, 1.0, math.pi * k / 3) for k in range(3)]
+    truth, clean = cropped_views(psfs)
+    data = torch.stack(clean)
+    ops = [PaddedConvolution(p, truth.shape) for p in psfs]
+    ks = None if kernel == "bayesian" else compound_kernels(psfs, kernel)
+    for update in ("sequential", "multiplicative"):
+        mv = Multiview(ops, ks, update=update)
+        f = float(data.mean())
+        misfit = []
+        for _ in range(60):
+            f, _ = rl_block(data, mv, f, n_iter=1, step=mv.step)
+            misfit.append(kl(mv, f, data))
+        if kernel == "bayesian":  # the convergence proof (Suppl. Note 2)
+            assert all(
+                b <= a * (1 + 1e-12)
+                for a, b in zip(misfit, misfit[1:], strict=False)
+            ), update
+        assert misfit[-1] < 0.05 * misfit[0]
+
+
+@pytest.mark.parametrize("update", ["multiplicative", "additive"])
+def test_identical_views_are_one_view(update):
+    truth, gen = scene((40, 36), seed=3)
+    psf = aniso(9, 2.0, 1.0, 0.3)
+    data = views_of(truth, [psf], gen)[0]
+    ref = richardson_lucy(data, psf, n_iter=12, dtype=F64)
+    kw = {"kernel": "bayesian", "update": update, "n_iter": 12, "dtype": F64}
+    for n in (2, 3):
+        out = multiview_rl([data] * n, [psf] * n, **kw)
+        torch.testing.assert_close(out, ref, rtol=1e-12, atol=1e-10)
+
+
+@pytest.mark.parametrize("update", UPDATES)
+def test_chi2_stop_with_several_views(update):
+    truth, gen = scene((48, 48), seed=1)
+    psfs = [aniso(15, 3.0, 1.0, math.pi * k / 3) for k in range(3)]
+    data = torch.stack(
+        [torch.poisson(blur(truth, p), generator=gen) for p in psfs]
+    )
+    ops = [PaddedConvolution(p, truth.shape) for p in psfs]
+    mv = Multiview(ops, update=update)
+    start = float(data.mean())
+    f, k = rl_block(data, mv, start, alpha=0.05, max_iter=100, step=mv.step)
+    assert 1 < k < 100
+    assert chi2_probability(data, mv.forward(f)) >= 0.05
+    g, _ = rl_block(data, mv, start, n_iter=k - 1, step=mv.step)
+    assert chi2_probability(data, mv.forward(g)) < 0.05
+    kw = {"update": update, "kernel": "bayesian", "chi2_stop": True}
+    out = multiview_rl(list(data), psfs, dtype=F64, **kw)
+    est = MultiviewRL(psfs, dtype=F64, **kw).fit(list(data))
+    torch.testing.assert_close(est.apply(list(data)), out)
+    assert est.history.extras["iterations"] == [float(k)]
+
+
 # -- blocks, lazy input, 3-D --------------------------------------------------
 @pytest.mark.parametrize("kernel", ["efficient", "optimization-2"])
 def test_blocks_match_whole_image_2d(kernel):
@@ -411,4 +626,26 @@ def test_history_and_save_load(tmp_path):
     from optix import load
 
     again = load(path)
+    torch.testing.assert_close(again.apply(views), out)
+
+
+def test_save_keeps_lazy_weights_out(tmp_path):
+    zarr = pytest.importorskip("zarr")
+    from optix import load
+
+    truth, psfs, views = four_views(n=2, shape=(32, 32))
+    lazy = zarr.open_array(
+        str(tmp_path / "w.zarr"), mode="w", shape=(32, 32), dtype="f8"
+    )
+    lazy[:] = 0.5
+    dense = torch.full((32, 32), 0.5, dtype=F64)
+    est = MultiviewRL(psfs, n_iter=4, weights=[dense, lazy]).fit(views)
+    out = est.apply(views)
+    est.save(tmp_path / "mv.pt")
+    again = load(tmp_path / "mv.pt")
+    assert again.weights[1] is None
+    torch.testing.assert_close(again.weights[0], dense)
+    with pytest.raises(ValueError, match="Lazy weights"):
+        again.apply(views)
+    again.weights = [dense, lazy]
     torch.testing.assert_close(again.apply(views), out)

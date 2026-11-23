@@ -105,6 +105,12 @@ def compound_kernels(
         values does not underflow; the final normalisation makes the
         scaling irrelevant.
 
+        In [`MultiviewRL`][optix.deconv.MultiviewRL] the compound kernels
+        are used inside the field of view only: on the margin of the
+        object domain (pixels outside the views), the back projection is
+        Hᵥᵀ for every variant (see
+        [`Multiview`][optix.deconv.utils.Multiview]).
+
     Parameters
     ----------
     psfs : sequence of Tensor
@@ -176,14 +182,55 @@ class Multiview:
 
     set to 1 on object pixels that view v does not reach (no update).
 
-    On the margin of the object domain (object pixels outside the block,
-    which no view observes directly), the sequential and multiplicative
+    **Margin.** The object domain is the block padded by the PSF support;
+    its margin (object pixels outside the block) is observed by no view
+    directly, only through the tails of the PSFs. There the back
+    projector of every view is Hᵥᵀ, whatever the `kernel`
+    ([`BackProjection`][optix.deconv.utils.BackProjection] uses the
+    compound kernel inside the block only; the compound kernels are
+    narrower and would leave part of the margin without an update), so
+    Bᵥ1 = Hᵥᵀ1 there. Not specified in the paper.
+
+    **Edge damping.** On the margin the sequential and multiplicative
     updates apply view v's correction with the weight
-    ρᵥ = Bᵥ1 / max_u Bᵤ1, its reach relative to the view that sees the
-    pixel best. A pixel that one view reaches only through the far tail
-    of its PSF, where cᵥ is a ratio of two round-off-sized numbers, is
-    then left to the views that do see it. Inside the block ρᵥ = 1; with
-    one view, ρ = 1 everywhere.
+
+        ρᵥ = Hᵥᵀ1 / maxᵤ Hᵤᵀ1 ∈ [0, 1],
+
+    its reach relative to the view that sees the pixel best, as
+    f ← f · (1 − ρᵥ + ρᵥ cᵥ). Ordered-subset updates assume subsets of
+    equal sensitivity Hᵥᵀ1; away from the image border every view has
+    sensitivity 1, but on the margin the reaches of the views differ by
+    orders of magnitude, and a view that reaches a pixel only through
+    the far tail of its PSF would otherwise apply a full correction
+    drawn from almost no data (in the extreme, a ratio of two
+    round-off-sized numbers). Scaling each view's step by ρᵥ ≤ 1
+    restores the balance between the views. It changes neither the
+    fixed points (1 − ρᵥ + ρᵥ cᵥ = 1 exactly where cᵥ = 1) nor
+    positivity. Without it the noise-free data misfit of the sequential
+    update is not monotone and stalls an order of magnitude higher, in
+    double precision too, and float32 and float64 results differ
+    visibly near the image border. Not specified in the paper.
+
+    Inside the block ρᵥ = 1, so the update rule there is unchanged; the
+    result next to the image border still differs from the undamped
+    one, since the margin feeds the border pixels through the blur.
+    With one view there is no damping (ρ = 1 everywhere) and the
+    iteration is exactly single-view Richardson–Lucy.
+
+    **Weights** (sequential update). Given weights wᵥ on the block are
+    used inside it; on the margin they are carried over as
+
+        wᵥ = ρᵥ · clamp(Bᵥ[wᵥ] / Bᵥ1, 0, 1),
+
+    the weights of the block pixels that view v back-projects onto each
+    margin pixel, so that a view with weight 0 at an image border does
+    not update the margin beyond it (zero is absorbing for a
+    multiplicative update, so a correction of 0 there could not be
+    undone by the other views). Not specified in the paper. The weights
+    only gate the update: within a PSF half-width of the edge of a
+    view's coverage, its pixels outside the coverage still enter cᵥ as
+    observed values (zeros if the view has no data there), so the
+    fall-off of the weights should be at least as wide as the PSF.
 
     Attributes
     ----------
@@ -195,8 +242,9 @@ class Multiview:
         `"sequential"`, `"multiplicative"` or `"additive"`.
     weights : Tensor or None
         Weights wᵥ ∈ [0, 1] of the views on the object grid, `(N,
-        *grid)`: the given weights inside the block, ρᵥ outside it (None
-        with one view and no weights).
+        *grid)`: the given weights inside the block, and outside it ρᵥ,
+        or ρᵥ · clamp(Bᵥ[wᵥ] / Bᵥ1, 0, 1) with given weights (None with
+        one view and no weights).
     shape : tuple of int
         `(N, *L)`.
     grid : tuple of int
@@ -230,7 +278,8 @@ class Multiview:
         weights : Tensor, optional
             Weights wᵥ ∈ [0, 1] of each view on the block, `(N, *L)`
             (sequential update only). Object pixels outside the block
-            get wᵥ = ρᵥ. Default: wᵥ = 1 inside the block.
+            get wᵥ = ρᵥ · clamp(Bᵥ[wᵥ] / Bᵥ1, 0, 1). Default: wᵥ = 1
+            inside the block, ρᵥ outside it.
         """
         ops = list(ops)
         if not ops:
@@ -285,12 +334,17 @@ class Multiview:
                 f"weights must have shape {self.shape}, got "
                 f"{tuple(weights.shape)}"
             )
-        norm = self.norm
-        if self._reach is None:
-            out = norm.new_ones((self.shape[0], *self.grid))
-        else:
-            out = self._reach.clone()
-        out[self._inside] = weights.to(norm).clamp(0, 1)
+        weights = weights.to(self.norm).clamp(0, 1)
+        out = []
+        for v in range(self.shape[0]):
+            # margin: ρᵥ · clamp(Bᵥ[wᵥ] / Bᵥ1, 0, 1), the weights of the
+            # block pixels that view v back-projects onto each margin pixel
+            w = (self._back(v, weights[v]) * self._inv[v]).clamp_(0, 1)
+            if self._reach is not None:
+                w = w * self._reach[v]
+            out.append(w)
+        out = torch.stack(out)
+        out[self._inside] = weights
         return out
 
     def weighted(self, weights: Tensor | None) -> "Multiview":
@@ -424,6 +478,8 @@ class Multiview:
                     f,
                     data[v],
                     background=bgs[v],
+                    # mu holds every view at the starting f; only view 0
+                    # is evaluated there, the later views see the updated f
                     mu=None if mu is None or v > 0 else mu[0],
                 )
                 eps = damping
@@ -535,7 +591,12 @@ class MultiviewRL(Estimator):
     capped at 1, wᵥ ← min(1, k wᵥ / ∑ᵤ wᵤ) (0 where all vanish). k = 1
     (the default) updates every pixel by one full correction per
     iteration; k > 1 trades uniformity for the ordered-subset speed-up
-    (Supplementary Fig. 10).
+    (Supplementary Fig. 10). Beyond the field of view the weights are
+    carried over by back projection (see
+    [`Multiview`][optix.deconv.utils.Multiview]; not specified in the
+    paper). The weights gate the update only, so a view's missing pixels
+    count as observed zeros within a PSF half-width of its coverage: the
+    fall-off should be at least as wide as the PSF.
 
     **Blocks.** As [`RichardsonLucy`][optix.deconv.RichardsonLucy]: the
     object is estimated on a domain padded by the PSF support, and large
@@ -692,7 +753,10 @@ class MultiviewRL(Estimator):
             Weight wᵥ ≥ 0 of each view (Eq. 3), `(*spatial)` in layout
             order, the size of the views' spatial extent (tensors or lazy
             arrays); sequential update only. Default: no weights (every
-            view updates every pixel fully).
+            view updates every pixel fully). [`save`][optix.Estimator.save]
+            stores tensor and numpy weights; lazy weights are not read
+            into memory, so after [`load`][optix.load] they must be set
+            again (`est.weights = [...]`) before `apply`.
         weight_sum : float
             Sum k of the weights over the views after normalisation.
             Default: 1 (Online Methods).
@@ -982,6 +1046,11 @@ class MultiviewRL(Estimator):
     def _weight_arrays(self, spatial: tuple[int, ...]) -> list | None:
         if self.weights is None:
             return None
+        if any(w is None for w in self.weights):
+            raise ValueError(
+                "Lazy weights are not saved: set `weights` (one array per "
+                "view) again after loading"
+            )
         for w in self.weights:
             if tuple(w.shape) != tuple(spatial):
                 raise ValueError(
@@ -991,9 +1060,16 @@ class MultiviewRL(Estimator):
         return self.weights
 
     def _extra_state(self) -> dict[str, object]:
+        # in-memory weights are saved; lazy ones (zarr, ...) are not read
+        # whole: they are stored as None and must be set again after load
         weights = None
         if self.weights is not None:
-            weights = [torch.as_tensor(np.asarray(w)) for w in self.weights]
+            weights = [
+                torch.as_tensor(w)
+                if isinstance(w, (Tensor, np.ndarray))
+                else None
+                for w in self.weights
+            ]
         return {"psfs": self.psfs, "level": self.level, "weights": weights}
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
