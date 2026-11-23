@@ -286,6 +286,18 @@ class MixtureFit:
             self.backend,
         )
 
+    def tile_gain(self) -> Tensor | None:
+        """Per-tile gains of the overlap term at the current m.
+
+        None unless the overlap term fits them (`fit_gain`).
+        """
+        if self.overlap is None or not self.overlap.fit_gain:
+            return None
+        if self._overlap is None:
+            self._overlap = self.overlap_stats()
+        logm = self.param.M.log()
+        return self._overlap.log_gain(logm).exp().to(**self.backend)
+
     def _elogpi(self, alpha: Tensor) -> Tensor:
         return Dirichlet(alpha).mean_log
 

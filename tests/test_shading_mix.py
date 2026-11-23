@@ -872,12 +872,17 @@ def test_overlap_stats_on_a_grid_match_brute_force():
     assert abs(f(theta + d.reshape(3, 3)) - pred) < 1e-8 * abs(pred) + 1e-8
 
 
-def _tiles(ntiles=4, X=12, H=32, W=24, step=16, seed=0, gain=2.0):
-    """(tile, x, y, z) tiles of one scene whose brightness varies along y."""
+def _tiles(
+    ntiles=4, X=12, H=32, W=24, step=16, seed=0, gain=2.0, bright=1.0, fade=0.0
+):
+    """(tile, x, y, z) tiles of one scene whose brightness varies along y.
+
+    Tile t is dimmed by exp(−fade·t) (a uniform per-tile fade).
+    """
     g = torch.Generator().manual_seed(seed)
     total = step * (ntiles - 1) + H
     yy = torch.arange(total, dtype=torch.float64)
-    bright = torch.exp(torch.sin(3 * math.pi * yy / total))[:, None]
+    bright = torch.exp(bright * torch.sin(3 * math.pi * yy / total))[:, None]
     gam = (
         torch._standard_gamma(
             torch.full((X, total, W), 2.0, dtype=torch.float64), generator=g
@@ -892,7 +897,8 @@ def _tiles(ntiles=4, X=12, H=32, W=24, step=16, seed=0, gain=2.0):
     logm = logm - logm.mean()
     out = []
     for t in range(ntiles):
-        e = logm.exp() * u[:, t * step : t * step + H] / gain
+        e = math.exp(-fade * t) * logm.exp() * u[:, t * step : t * step + H]
+        e = e / gain
         y_ = 100 + gain * torch.poisson(e, generator=g)
         y_ = y_ + 2.0 * torch.randn(e.shape, generator=g, dtype=torch.float64)
         out.append(y_.round())
@@ -950,3 +956,153 @@ def test_overlap_improves_flat_field(seed):
     # iteration), and exhausts its halvings as often either way
     assert drops[1] < 5e-3
     assert exhausted[1] <= exhausted[0] + 1
+
+
+def _profiled_grid(fit_gain=True):
+    """Noise-free 2x2 grid of tiles with per-tile gains, and its stats."""
+    gen = torch.Generator().manual_seed(0)
+    H = W = 6
+    scene = 50 + 100 * torch.rand(
+        (3, 12, 12), generator=gen, dtype=torch.float64
+    )
+    yy = torch.linspace(-1, 1, H, dtype=torch.float64)
+    logm = 0.3 * yy[:, None] - 0.2 * yy[None] + 0.4 * yy[:, None] ** 2
+    gains = torch.tensor([1.0, 0.9, 1.2, 0.8], dtype=torch.float64)
+    pos = np.array([[0, 0, 0], [0, 0, 4], [0, 4, 0], [0, 4, 4]])
+    tiles = torch.stack(
+        [
+            g * logm.exp() * scene[:, p[1] : p[1] + H, p[2] : p[2] + W]
+            for g, p in zip(gains, pos, strict=True)
+        ]
+    )
+    C = torch.zeros(H, W, dtype=torch.float64)
+    V = torch.ones(H, W, dtype=torch.float64)
+    layout = Layout(spatial=(-2, -1))
+    spec = TileOverlap(positions=pos, fit_gain=fit_gain)
+    ov = Overlap.build(spec, tiles.shape, layout, 0.0)
+    st = ov.stats(tiles, layout, C, V, 1.0, False, dict(dtype=torch.float64))
+    return st, logm, gains
+
+
+def test_tile_gain_flag_and_repr():
+    assert TileOverlap(step=(0, 1)).fit_gain is False
+    assert TileOverlap(step=(0, 1)) != TileOverlap(step=(0, 1), fit_gain=True)
+    assert "fit_gain=True" in repr(TileOverlap(step=(0, 1), fit_gain=True))
+    assert "fit_gain" not in repr(TileOverlap(step=(0, 1)))
+
+
+def test_tile_gain_profiled_term_is_exact():
+    st, logm, gains = _profiled_grid()
+    # noise-free: the true flat field and the profiled gains fit exactly
+    assert abs(st.bound(logm)) < 1e-8
+    a = st.log_gain(logm)
+    rel = (a - a.mean()).exp()
+    assert torch.allclose(rel, gains / gains.log().mean().exp(), atol=1e-8)
+    assert abs(a.sum().item()) < 1e-10
+    # without gains the same data do not fit
+    plain, _, _ = _profiled_grid(fit_gain=False)
+    assert plain.bound(logm) < -1
+    # the profiled term is an exact quadratic in θ with the Schur system
+    from optix.basis import dct_basis, reconstruct
+
+    gen = torch.Generator().manual_seed(1)
+    by = dct_basis(6, 3, dtype=torch.float64)
+    bx = dct_basis(6, 3, dtype=torch.float64)
+    theta = torch.randn(3, 3, generator=gen, dtype=torch.float64) * 0.1
+    Hs, g = st.system(reconstruct(theta, [by, bx]), [by, bx])
+    f = lambda t: st.bound(reconstruct(t, [by, bx]))  # noqa: E731
+    eps = 1e-5
+    num = torch.zeros(9, dtype=torch.float64)
+    for k in range(9):
+        d = torch.zeros(9, dtype=torch.float64)
+        d[k] = eps
+        d = d.reshape(3, 3)
+        num[k] = (f(theta + d) - f(theta - d)) / (2 * eps)
+    assert torch.allclose(num, g, rtol=1e-5, atol=1e-6)
+    d = 0.05 * torch.randn(9, generator=gen, dtype=torch.float64)
+    pred = f(theta) + g @ d - 0.5 * d @ Hs @ d
+    assert abs(f(theta + d.reshape(3, 3)) - pred) < 1e-8 * abs(pred) + 1e-8
+    # the profiled curvature is below the plain one (gains absorb some)
+    H0, _ = plain.system(reconstruct(theta, [by, bx]), [by, bx])
+    assert torch.linalg.eigvalsh(H0 - Hs).min() > -1e-8
+
+
+def test_tile_gain_normalised_per_component():
+    # tiles 0-1 and 2-3-4 overlap in two separate groups; tile 5 is alone
+    gen = torch.Generator().manual_seed(2)
+    H = W = 6
+    scene = 50 + 100 * torch.rand(
+        (2, 40, 6), generator=gen, dtype=torch.float64
+    )
+    gains = torch.tensor([1.3, 0.7, 2.0, 1.0, 0.5, 3.0], dtype=torch.float64)
+    pos = np.array([[0, 0, 0], [0, 3, 0], [0, 12, 0], [0, 15, 0],
+                    [0, 18, 0], [0, 30, 0]])  # fmt: skip
+    tiles = torch.stack(
+        [
+            g * scene[:, p[1] : p[1] + H, p[2] : p[2] + W]
+            for g, p in zip(gains, pos, strict=True)
+        ]
+    )
+    layout = Layout(spatial=(-2, -1))
+    ov = Overlap.build(
+        TileOverlap(positions=pos, fit_gain=True), tiles.shape, layout, 0.0
+    )
+    assert [(i, j) for i, j, _ in ov.pairs] == [(0, 1), (2, 3), (3, 4)]
+    C = torch.zeros(H, W, dtype=torch.float64)
+    V = torch.ones(H, W, dtype=torch.float64)
+    st = ov.stats(tiles, layout, C, V, 1.0, False, dict(dtype=torch.float64))
+    a = st.log_gain(torch.zeros(H, W, dtype=torch.float64))
+    for group in ([0, 1], [2, 3, 4]):
+        assert abs(a[group].sum().item()) < 1e-10
+        truth = gains[group].log()
+        assert torch.allclose(a[group], truth - truth.mean(), atol=1e-8)
+    assert a[5].item() == 0
+
+
+def test_tile_gain_off_is_unchanged():
+    data, _ = _tiles(seed=1)
+    ref = _tile_fit(data, TileOverlap(step=(0, 16, 0)), it=5)
+    off = _tile_fit(data, TileOverlap(step=(0, 16, 0), fit_gain=False), it=5)
+    assert off.history.objective == ref.history.objective
+    assert off.estimates["shading"].allclose(ref.estimates["shading"])
+    assert ref.tile_gain_ is None and off.tile_gain_ is None
+
+
+@pytest.mark.parametrize("fade", [0.05, 0.1])
+def test_tile_gain_removes_fade_ramp(fade):
+    # a scene of uniform mean brightness, dimmed by a factor per tile
+    clean, logm = _tiles(seed=0, X=24, bright=0.0)
+    data, _ = _tiles(seed=0, X=24, bright=0.0, fade=fade)
+
+    def error(est):
+        flat = est.estimates["shading"].flat.double()
+        return (flat.log() - logm).abs().mean().item()
+
+    base = error(_tile_fit(clean, TileOverlap(step=(0, 16, 0))))
+    plain = error(_tile_fit(data, TileOverlap(step=(0, 16, 0))))
+    est = _tile_fit(data, TileOverlap(step=(0, 16, 0), fit_gain=True))
+    # without gains the fade becomes a ramp of m (measured ≈ 0.034 and
+    # 0.051 against ≈ 0.026 without fade); with gains, ≈ 0.026
+    assert plain > base + 0.006
+    assert error(est) < base + 0.003
+    g = est.tile_gain_.double()
+    assert g.shape == (4,)
+    assert abs(g.log().sum().item()) < 1e-6
+    truth = torch.exp(-fade * torch.arange(4, dtype=torch.float64))
+    assert torch.allclose(g / g[0], truth, rtol=0.01)
+    objective = torch.tensor(est.history.objective, dtype=torch.float64)
+    assert (-objective.diff()).max() / objective.abs().max() < 5e-3
+
+
+def test_tile_gain_without_fade_does_not_degrade():
+    data, logm = _tiles(seed=0)
+    errors = []
+    for gain in (False, True):
+        est = _tile_fit(data, TileOverlap(step=(0, 16, 0), fit_gain=gain))
+        flat = est.estimates["shading"].flat.double()
+        errors.append((flat.log() - logm).abs().mean().item())
+    # measured ≈ 0.026 either way (the scene gradient still does not leak)
+    assert errors[1] < errors[0] + 0.005
+    assert errors[1] < 0.05
+    assert torch.allclose(est.tile_gain_, torch.ones(4).to(est.tile_gain_),
+                          atol=0.03)  # fmt: skip

@@ -174,6 +174,15 @@ class GammaMixture(Estimator):
     and v. This identifies the flat field even where the mean signal of
     the scene depends on the position in the tiles.
 
+    With `TileOverlap(fit_gain=True)` the overlap term also fits a gain
+    g_t per tile (effective flat g_t·m, residual
+    d − Δ log m − (log gᵢ − log gⱼ)), profiled out in closed form at each
+    θ; a uniform per-tile fade (bleaching, lamp drift) is then not
+    mistaken for a ramp of m. The price: a linear log m is
+    indistinguishable from such gains, so the linear part of log m along
+    the tile steps is left to the mixture term. The gains are reported
+    as `tile_gain_` and affect nothing else.
+
     The gain g is held at its nominal value (`gain`, or the gain of an
     initial [`SensorEstimate`][optix.estimates.SensorEstimate]): in this
     model it is identified only through the shape of the signal
@@ -218,6 +227,14 @@ class GammaMixture(Estimator):
         on the basis when a given flat field is held fixed).
     quantization_ : Tensor
         `(*group,)` width Δ of the quantisation bins used by the fit.
+    tile_gain_ : Tensor or None
+        `(*group, ntiles)` per-tile gains g_t of the overlap term, when
+        it fits them (`TileOverlap(fit_gain=True)`); None otherwise.
+        Geometric mean one within each connected group of overlapping
+        tiles, and 1 for a tile that overlaps no other. They are
+        nuisance parameters of the overlap term only: the flat field,
+        the mixture term and `predict` do not include them (to equalise
+        the tiles, divide tile t by g_t).
 
     Examples
     --------
@@ -357,6 +374,8 @@ class GammaMixture(Estimator):
             boxes intersect contributes. The tile axis must be a sample
             axis; the same translations apply to every group. Default
             None: the pictures are independent (no overlap term).
+            `TileOverlap(fit_gain=True)` also fits a gain per tile
+            (see `tile_gain_`).
         faithful : bool
             True: the reference preset. False: the `recommended` preset
             (currently the same).
@@ -380,6 +399,7 @@ class GammaMixture(Estimator):
             raise ValueError("quantization must be non-negative")
         self.concentration_: Tensor | None = None
         self.theta_: Tensor | None = None
+        self.tile_gain_: Tensor | None = None
         self.quantization_: Tensor | None = None
 
     # -- helpers -----------------------------------------------------------
@@ -508,6 +528,7 @@ class GammaMixture(Estimator):
             )
         offsets, variances, flats, thetas, alphas = [], [], [], [], []
         params, concentrations, quantizations = [], [], []
+        tile_gains = []
         converged = []
         warned = False
         self.history.reason = ""
@@ -601,6 +622,7 @@ class GammaMixture(Estimator):
             alphas.append(model.post.alpha)
             params.append(prior.params)
             concentrations.append(prior.alpha)
+            tile_gains.append(model.tile_gain())
         self.history.converged = all(converged)
 
         def stack(items: list[Tensor]) -> Tensor:
@@ -614,6 +636,9 @@ class GammaMixture(Estimator):
             gain_map = gain_map.expand(*group_shape, 1, 1).clone()
         self.concentration_ = stack(alphas)
         self.theta_ = stack(thetas)
+        self.tile_gain_ = None
+        if tile_gains and tile_gains[0] is not None:
+            self.tile_gain_ = stack(tile_gains)
         self.quantization_ = torch.tensor(
             quantizations, dtype=torch.float64
         ).reshape(group_shape)
@@ -960,16 +985,20 @@ class GammaMixture(Estimator):
 
     # -- state ---------------------------------------------------------------
     def _extra_state(self) -> dict[str, object]:
-        return {
+        state = {
             "concentration": self.concentration_,
             "theta": self.theta_,
             "quantization": self.quantization_,
         }
+        if self.tile_gain_ is not None:
+            state["tile_gain"] = self.tile_gain_
+        return state
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
         self.concentration_ = state.get("concentration")
         self.theta_ = state.get("theta")
         self.quantization_ = state.get("quantization")
+        self.tile_gain_ = state.get("tile_gain")
 
 
 def _class_init(

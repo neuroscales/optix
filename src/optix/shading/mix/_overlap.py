@@ -34,6 +34,26 @@ position is (x, y, z)). Every pair i < j whose boxes intersect is used,
 with s = positionⱼ − positionᵢ: voxel p of tile i shows the same scene
 point as voxel p − s of tile j. A shift along a sample axis (x here)
 pairs frame k of tile i with frame k − sx of tile j.
+
+Per-tile gain (`TileOverlap(fit_gain=True)`, off by default). Tiles may
+also differ by a uniform factor (bleaching, lamp drift): the effective
+flat field of tile t is g_t·m, and the residual becomes
+
+    d − (log m(p) − log m(p − s)) − (log gᵢ − log gⱼ).
+
+The term is exactly quadratic in a = log g with d and w fixed, so a is
+profiled out in closed form: at every θ, a*(θ) solves the weighted
+Laplacian system L·a = b of the tile-overlap graph (an edge per pair with
+at least one matched voxel), normalised by ∑ a = 0 within each connected
+component (geometric mean of the gains one; isolated tiles get g = 1).
+The θ system receives the Schur complement H_θθ − U·L⁺·Uᵀ and the score at
+a*(θ) (envelope theorem); the bound uses a*(θ), its maximum over a, so it
+is the same quadratic in θ that the step solves. Profiling rather than
+carrying a as a parameter keeps the step, its halving and the bound free
+of extra state. A linear log m (exp(k·p)) is indistinguishable from the
+gains g_t ∝ exp(−k·position_t): with fit_gain the overlap term says
+nothing about the linear part of log m along the tile steps, which then
+rests on the mixture term and the prior alone.
 """
 
 import math
@@ -79,6 +99,14 @@ class TileOverlap:
     weight : float
         Scale of the overlap term relative to the mixture likelihood.
         Default 1.
+    fit_gain : bool
+        Also fit one gain g_t per tile (effective flat g_t·m), so that a
+        uniform per-tile fade is not mistaken for a ramp of the flat
+        field. The gains are normalised to a geometric mean of one in
+        each connected group of overlapping tiles (isolated tiles: 1).
+        They enter only the overlap term: the mixture term, the fitted
+        flat field and `predict`/correction do not use them; the fitted
+        values are `GammaMixture.tile_gain_`. Default False.
 
     Notes
     -----
@@ -95,6 +123,7 @@ class TileOverlap:
         step: object = None,
         axis: int | str = 0,
         weight: float = 1.0,
+        fit_gain: bool = False,
     ) -> None:
         given = [x is not None for x in (positions, steps, step)]
         if sum(given) != 1:
@@ -104,6 +133,7 @@ class TileOverlap:
         self.step = None if step is None else _ints(step, 1)
         self.axis = axis
         self.weight = float(weight)
+        self.fit_gain = bool(fit_gain)
         if not self.weight >= 0:
             raise ValueError("overlap weight must be non-negative")
 
@@ -122,6 +152,7 @@ class TileOverlap:
             and same(self.step, other.step)
             and self.axis == other.axis
             and self.weight == other.weight
+            and self.fit_gain == other.fit_gain
         )
 
     __hash__ = None
@@ -132,7 +163,9 @@ class TileOverlap:
             if v is not None:
                 return (
                     f"TileOverlap({name}={v.tolist()}, axis={self.axis!r}, "
-                    f"weight={self.weight})"
+                    f"weight={self.weight}"
+                    + (", fit_gain=True" if self.fit_gain else "")
+                    + ")"
                 )
         return "TileOverlap()"
 
@@ -221,28 +254,97 @@ def _tensor(x: object, backend: dict) -> Tensor:
 class OverlapStats:
     """Per spatial shift, the sums over matched voxels of w, w·d, w·d².
 
-    Each entry maps a spatial shift (sy, sx) to the slices of the overlap
-    in tile i's and tile j's pixel grids and three maps over tile i's
-    slice.
+    Each entry maps a spatial shift (sy, sx) (or, with per-tile gains, a
+    pair (i, j)) to the slices of the overlap in tile i's and tile j's
+    pixel grids, three maps over tile i's slice, and the pair's tiles.
     """
 
     terms: dict = field(default_factory=dict)
     count: int = 0
+    ntiles: int = 0
+    fit_gain: bool = False
+    _A: Tensor | None = field(default=None, repr=False)
 
-    def add(self, key: tuple, si: tuple, sj: tuple, maps: Tensor) -> None:
+    def add(
+        self,
+        key: tuple,
+        si: tuple,
+        sj: tuple,
+        maps: Tensor,
+        pair: tuple[int, int] = (0, 0),
+    ) -> None:
         if key in self.terms:
             self.terms[key][2].add_(maps)
         else:
-            self.terms[key] = [si, sj, maps]
+            self.terms[key] = [si, sj, maps, *pair]
+        self._A = None
 
     def _delta(self, logm: Tensor, si: tuple, sj: tuple) -> Tensor:
         return logm[si] - logm[sj]
 
-    def bound(self, logm: Tensor) -> float:
-        """−½ ∑ w·(d − Δ log m)²."""
-        total = 0.0
-        for si, sj, (sw, swd, swdd) in self.terms.values():
+    @property
+    def gains(self) -> bool:
+        """Whether the term profiles per-tile gains."""
+        return self.fit_gain and self.ntiles > 0 and bool(self.terms)
+
+    def _graph(self) -> Tensor:
+        """Laplacian of the overlap graph plus a pinning block per component.
+
+        Edges are the pairs with a positive total weight. The added
+        blocks make the matrix invertible and, since every right-hand
+        side is orthogonal to the component indicators, the solution
+        sums to zero over each component (and is 0 on isolated tiles).
+        """
+        if self._A is not None:
+            return self._A
+        n = self.ntiles
+        L = torch.zeros((n, n), dtype=torch.float64)
+        parent = list(range(n))
+
+        def root(t: int) -> int:
+            while parent[t] != t:
+                parent[t] = parent[parent[t]]
+                t = parent[t]
+            return t
+
+        for _, _, maps, i, j in self.terms.values():
+            w = float(maps[0].sum())
+            if not w > 0:
+                continue
+            L[i, i] += w
+            L[j, j] += w
+            L[i, j] -= w
+            L[j, i] -= w
+            parent[root(i)] = root(j)
+        roots = torch.tensor([root(t) for t in range(n)])
+        P = (roots[:, None] == roots[None]).double()
+        # pinning blocks scaled like L, for conditioning
+        scale = max(float(L.diagonal().max()), 1.0)
+        self._A = L + scale * P / P.sum(1, keepdim=True)
+        return self._A
+
+    def log_gain(self, logm: Tensor) -> Tensor:
+        """Profiled log gains a*(θ), `(ntiles,)` (zeros without gains)."""
+        a = torch.zeros(self.ntiles, dtype=torch.float64)
+        if not self.gains:
+            return a
+        b = torch.zeros_like(a)
+        for si, sj, (sw, swd, _), i, j in self.terms.values():
             delta = self._delta(logm, si, sj).to(sw)
+            r = float((swd - sw * delta).sum())
+            b[i] += r
+            b[j] -= r
+        return torch.linalg.solve(self._graph(), b)
+
+    def bound(self, logm: Tensor) -> float:
+        """−½ ∑ w·(d − Δ log m − Δ log g)², at the profiled gains."""
+        gains = self.gains
+        a = self.log_gain(logm).tolist()
+        total = 0.0
+        for si, sj, (sw, swd, swdd), i, j in self.terms.values():
+            delta = self._delta(logm, si, sj).to(sw)
+            if gains:
+                delta = delta + (a[i] - a[j])
             q = sw * delta.square() - 2 * swd * delta + swdd
             total -= 0.5 * q.sum().item()
         return total
@@ -250,14 +352,25 @@ class OverlapStats:
     def system(
         self, logm: Tensor, bases: Sequence[Tensor]
     ) -> tuple[Tensor, Tensor]:
-        """Curvature `(k, k)` and score `(k,)` of the term in θ."""
+        """Curvature `(k, k)` and score `(k,)` of the term in θ.
+
+        With per-tile gains, of the term profiled over them: the Schur
+        complement H_θθ − U·L⁺·Uᵀ of the gain block, and the score at
+        a*(θ) (where the score in a vanishes).
+        """
         by, bx = bases
         k = by.shape[1] * bx.shape[1]
         H = by.new_zeros((k, k))
         g = by.new_zeros(k)
-        for si, sj, (sw, swd, _) in self.terms.values():
+        gains = self.gains
+        a = self.log_gain(logm).tolist()
+        U = torch.zeros((k, self.ntiles), dtype=torch.float64)
+        for si, sj, (sw, swd, _), i, j in self.terms.values():
             sw, swd = sw.to(by), swd.to(by)
-            e = swd - sw * self._delta(logm, si, sj)
+            delta = self._delta(logm, si, sj)
+            if gains:
+                delta = delta + (a[i] - a[j])
+            e = swd - sw * delta
             yi, xi = by[si[0]], bx[si[1]]
             yj, xj = by[sj[0]], bx[sj[1]]
             g += project(e, [yi, xi]).flatten()
@@ -266,6 +379,13 @@ class OverlapStats:
             jj = _cross(sw, yj, xj, yj, xj)
             ij = _cross(sw, yi, xi, yj, xj)
             H += ii + jj - ij - ij.T
+            if gains:
+                u = project(sw, [yi, xi]) - project(sw, [yj, xj])
+                u = u.flatten().double()
+                U[:, i] += u
+                U[:, j] -= u
+        if gains:
+            H -= (U @ torch.linalg.solve(self._graph(), U.T)).to(H)
         return H, g
 
 
@@ -287,6 +407,8 @@ class Overlap:
     pairs: list  # [(i, j, shift)] of intersecting tiles, from the poses
     weight: float
     threshold: float
+    ntiles: int = 0
+    fit_gain: bool = False
 
     @classmethod
     def build(
@@ -317,7 +439,14 @@ class Overlap:
         tile = tuple(raw_shape[a] for a in keep if a != axis)
         pos = spec.poses(raw_shape[axis], len(tile))
         pairs = tile_pairs(pos, tile)
-        return cls(sub_axis, pairs, float(spec.weight), float(threshold))
+        return cls(
+            sub_axis,
+            pairs,
+            float(spec.weight),
+            float(threshold),
+            ntiles=int(raw_shape[axis]),
+            fit_gain=spec.fit_gain,
+        )
 
     def stats(
         self,
@@ -338,7 +467,7 @@ class Overlap:
         # positions of the spatial axes among the non-tile axes
         sp = [other.index(a) for a in spatial]
         rest = [a for a in range(len(other)) if a not in sp]
-        out = OverlapStats()
+        out = OverlapStats(ntiles=self.ntiles, fit_gain=self.fit_gain)
         if not self.weight > 0:
             return out
         sd = V.sqrt()
@@ -387,7 +516,9 @@ class Overlap:
                 acc[1] += wd.sum(0).double()
                 acc[2] += (wd * d).sum(0).double()
                 out.count += int(ok.sum())
-            out.add(key, pi, pj, acc)
+            if self.fit_gain:
+                key = (i, j)
+            out.add(key, pi, pj, acc, (i, j))
         return out
 
     def _read(

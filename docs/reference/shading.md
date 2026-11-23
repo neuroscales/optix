@@ -20,6 +20,9 @@ Estimators of the flat field, dark field and per-frame baseline, and the correct
 
 Integer tile positions for [`GammaMixture`][optix.shading.GammaMixture]
 (`overlap=`): voxels seen by two overlapping tiles constrain the flat field.
+With `TileOverlap(fit_gain=True)` each tile also gets a gain (reported as
+`GammaMixture.tile_gain_`), so that a uniform per-tile fade is not mistaken
+for a ramp of the flat field.
 
 ::: optix.shading.mix
     options:
