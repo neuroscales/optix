@@ -5,6 +5,7 @@ import itertools
 import pytest
 import torch
 
+from optix import config
 from optix.deconv import (
     BiggsAndrews,
     DenisPSF,
@@ -12,11 +13,14 @@ from optix.deconv import (
     NagyOLearyPSF,
     RichardsonLucy,
     Snyder,
+    WienerButterworth,
     nagy_oleary,
 )
 from optix.deconv.utils import (
     PaddedConvolution,
+    RegionPreconditioner,
     ShiftVariantConvolution,
+    ShiftVariantPSF,
     cgls,
     interpolation_weights,
     object_positions,
@@ -309,8 +313,25 @@ def test_optimal_beats_interpolation():
     r = torch.rand(op.shape, generator=gen, dtype=F64)
     lhs = float((op.forward(f) * r).sum())
     assert lhs == pytest.approx(float((f * op.adjoint(r)).sum()), rel=1e-11)
-    with pytest.raises(TypeError, match="cannot be saved"):
-        optimal._payload()
+    # ω* is stored once (§2.5.2): the model saves without psf_model
+    assert tuple(optimal.omega.shape) == (H, W, 4)
+    back = ShiftVariantPSF._from_payload(optimal._payload())
+    assert isinstance(back, DenisPSF) and back.psf_model is None
+    assert error(back) == pytest.approx(error(optimal), rel=1e-12)
+    op1 = optimal.operator((-3, 5), (20, 40))
+    f = torch.rand(op1.grid, generator=gen, dtype=F64)
+    torch.testing.assert_close(
+        back.operator((-3, 5), (20, 40)).forward(f), op1.forward(f)
+    )
+    with pytest.raises(ValueError, match="integer"):
+        optimal.terms((torch.tensor([0.5]), torch.tensor([1.0])))
+    # the fit batch follows the memory budget
+    with config(memory=8 * 81 * 4 * 50):
+        small = DenisPSF(
+            psf, centres, model="optimal", psf_model=psf_model, extent=(H, W)
+        )
+        assert small._batch() == 50
+    torch.testing.assert_close(small.omega, optimal.omega)
 
 
 def test_model_validation():
@@ -442,6 +463,63 @@ def test_rl_save_load_shift_variant(tmp_path):
     )
 
 
+def test_rl_save_load_optimal(tmp_path):
+    """An "optimal" model saves its kernels and ω*, not the callable."""
+    from optix import load
+
+    shape = (24, 26)
+    psf = psf_grid(2, size=5)
+    centres = centres_for(shape)
+
+    def psf_model(pos):
+        return psf[1, 1].expand(pos.shape[0], 5, 5) * (1 + pos[:, :1, None])
+
+    model = DenisPSF(
+        psf, centres, model="optimal", psf_model=psf_model, extent=shape
+    )
+    _, data, _ = sv_data(shape, model, seed=5)
+    est = BiggsAndrews(model, n_iter=4, dtype=F64).fit(data)
+    path = tmp_path / "ba.pt"
+    est.save(path)
+    back = load(path)
+    assert back.psf.model == "optimal" and back.psf.psf_model is None
+    torch.testing.assert_close(
+        back.apply(data).double(), est.apply(data), rtol=1e-4, atol=1e-3
+    )
+
+
+def test_n_terms_bounds_block_terms():
+    """The memory estimate counts the terms meeting the image."""
+    shape = (40, 44)
+    psf = psf_grid(2, size=5, nodes=3)
+    for model in models(psf, centres_for(shape)):
+        bound = model.n_terms(shape)
+        kernels, _ = model.terms(
+            tuple(torch.arange(-5, n + 5, dtype=F64) for n in shape)
+        )
+        assert kernels.shape[0] <= bound <= 9
+    # PSFs whose nodes all lie in one half of the axis: fewer terms
+    model = NagyOLearyPSF(psf, [[0.0, 10.0, 200.0], [0.0, 10.0, 200.0]])
+    assert model.n_terms((12, 12)) == 4
+    assert (
+        DenisPSF(psf, centres_for(shape), model="modes", rank=2).n_terms(shape)
+        == 2
+    )
+
+
+def test_wiener_butterworth_rejects_shift_variant():
+    shape = (32, 32)
+    model = DenisPSF(psf_grid(2, size=5), centres_for(shape))
+    with pytest.raises(TypeError, match="single PSF"):
+        WienerButterworth(model)
+    est = WienerButterworth(psf_grid(2, size=5)[1, 1])
+    est.psf = model
+    with pytest.raises(TypeError, match="single PSF"):
+        est.fit(torch.rand(shape, dtype=F64) + 1).apply(
+            torch.rand(shape, dtype=F64) + 1
+        )
+
+
 # -- Nagy & O'Leary preconditioned CG ---------------------------------------
 @pytest.mark.parametrize("shape", [(7, 6), (5, 5, 4)])
 def test_optimal_circulant_is_frobenius_projection(shape):
@@ -511,8 +589,38 @@ def test_nagy_oleary_restores(ndim):
         out = est.apply(data)
         assert float((out - truth).norm() / truth.norm()) < 0.7 * err0
         assert est.history.extras["iterations"] == [14.0]
+    # the paper's own variants keep the estimator faithful
     assert NagyOLeary(psf, centres).is_faithful
-    assert not NagyOLeary(psf, centres, tau=0.05).is_faithful
+    for kw in (
+        {"tau": 0.05},
+        {"precondition": False},
+        {"interpolation": "linear"},
+    ):
+        assert NagyOLeary(psf, centres, **kw).is_faithful
+    assert not NagyOLeary(psf, centres, boundary="extended").is_faithful
+    with pytest.raises(ValueError, match="boundary"):
+        NagyOLeary(psf, centres, boundary="periodic")
+    # the extended object (extension) restores as well
+    est = NagyOLeary(psf, centres, boundary="extended", dtype=F64).fit(data)
+    out = est.apply(data)
+    assert float((out - truth).norm() / truth.norm()) < 0.7 * err0
+
+
+def test_nagy_oleary_zero_boundary_is_restriction():
+    """boundary="zero": unknowns on the image only, as the paper's K."""
+    shape = (30, 34)
+    psf = psf_grid(2, size=5)
+    centres = centres_for(shape)
+    data = torch.rand(shape, dtype=F64) * 10
+    est = NagyOLeary(psf, centres, n_iter=3, dtype=F64).fit(data)
+    model = est.model
+    op = model.operator((0, 0), shape)
+    mask = est._inside(model, (0, 0), shape, data)
+    assert float(mask.sum()) == data.numel()
+    torch.testing.assert_close(op.crop(mask), torch.ones_like(data))
+    # an inner block keeps the image pixels around it as unknowns
+    inner = est._inside(model, (10, 10), (40, 40), torch.zeros(8, 8))
+    assert bool((inner == 1).all())
 
 
 def test_nagy_oleary_blocks_and_shortcut():
@@ -529,3 +637,99 @@ def test_nagy_oleary_blocks_and_shortcut():
         NagyOLeary(psf)
     with pytest.raises(RuntimeError, match="fit"):
         NagyOLeary(psf, centres).apply(data)
+
+
+def test_nagy_oleary_blocked_close_to_whole():
+    """Per-block CG differs from the whole-image CG, within ≈ 15 %.
+
+    Each block runs its own CGLS (own step sizes, hence its own
+    regularisation), so the block-wise restoration is not the global CG
+    iterate. With 24 × 24 cores of a 48 × 48 image (all pixels are block
+    cores), the relative L2 difference is ≈ 14 %; it is asserted below
+    25 %, and both are about as close to the truth.
+    """
+    shape = (48, 48)
+    psf = psf_grid(2, size=5)
+    centres = centres_for(shape)
+    model = NagyOLearyPSF(psf, centres)
+    op = model.operator((0, 0), shape)
+    truth = checkerboard(shape, size=4)
+    gen = torch.Generator().manual_seed(0)
+    data = op.forward(embed(truth, op))
+    data = data + torch.randn(shape, generator=gen, dtype=F64)
+    whole = nagy_oleary(data, psf, centres, tau=0.1, dtype=F64)
+    blocked = nagy_oleary(
+        data, psf, centres, tau=0.1, dtype=F64, block=(24, 24)
+    )
+    rel = float((blocked - whole).norm() / whole.norm())
+    assert rel < 0.25
+
+    def err(x):
+        return float((x - truth).norm() / truth.norm())
+
+    assert err(blocked) < 1.1 * err(whole)
+
+
+@pytest.mark.parametrize("ndim", [2, 3])
+@pytest.mark.parametrize("precondition", [False, True])
+def test_nagy_oleary_float32_matches_float64(ndim, precondition):
+    shape = (32, 32) if ndim == 2 else (14, 14, 14)
+    psf = sharp_grid(ndim, size=9 if ndim == 2 else 5)
+    centres = centres_for(shape)
+    op = NagyOLearyPSF(psf, centres).operator((0,) * ndim, shape)
+    truth = checkerboard(shape, size=4)
+    gen = torch.Generator().manual_seed(7)
+    data = op.forward(embed(truth, op))
+    data = data + 0.01 * torch.randn(shape, generator=gen, dtype=F64)
+    out = {}
+    for dtype in (torch.float32, F64):
+        est = NagyOLeary(psf, centres, precondition=precondition, dtype=dtype)
+        out[dtype] = est.fit(data.to(dtype)).apply(data.to(dtype))
+    assert out[torch.float32].dtype == torch.float32
+    rel = float(
+        (out[torch.float32].double() - out[F64]).norm() / out[F64].norm()
+    )
+    assert rel < 1e-4
+    # cgls itself, on the operator in both precisions
+    f32, _ = cgls(
+        data.float(),
+        NagyOLearyPSF(psf.float(), centres).operator((0,) * ndim, shape),
+        5,
+    )
+    f64, _ = cgls(data, op, 5)
+    assert float((f32.double() - f64).norm() / f64.norm()) < 1e-4
+
+
+def test_pcg_with_tau_does_not_diverge_on_gaussian_psfs():
+    """Smooth PSFs: τ = 0 diverges, τ = 0.2 stays close to plain CG."""
+    shape = (64, 64)
+    psf = psf_grid(2, size=9)  # Gaussian, σ 0.7–2.1
+    centres = centres_for(shape)
+    model = NagyOLearyPSF(psf, centres)
+    op = model.operator((0, 0), shape)
+    truth = checkerboard(shape, size=4)
+    gen = torch.Generator().manual_seed(8)
+    data = op.forward(embed(truth, op))
+    data = data + torch.randn(shape, generator=gen, dtype=F64)
+    err0 = float((data - truth).norm() / truth.norm())
+    regions = model.regions(tuple(torch.arange(n, dtype=F64) for n in shape))
+    boxes = [(model.kernels[i], box) for i, box in regions]
+
+    def errors(precond):
+        out = []
+        cgls(
+            data,
+            op,
+            14,
+            precond=precond,
+            callback=lambda k, f: out.append(
+                float((op.crop(f) - truth).norm() / truth.norm())
+            ),
+        )
+        return out
+
+    plain = errors(None)
+    pcg = errors(RegionPreconditioner(boxes, tau=0.2))
+    assert max(pcg) < 1.25 * max(plain)  # no blow-up at any iteration
+    assert pcg[-1] < 1.2 * plain[-1]  # about as good as CG, not better
+    assert errors(RegionPreconditioner(boxes, tau=0.0))[-1] > err0

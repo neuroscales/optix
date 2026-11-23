@@ -265,7 +265,7 @@ class BiggsAndrews(RichardsonLucy):
             data,
             self.options["block"],
             self._halo(psf),
-            overhead=self._overhead(psf, _OVERHEAD_ACCEL),
+            overhead=self._overhead(psf, _OVERHEAD_ACCEL, data),
             contiguous=True,
             align=chunks_of(out),
             **backend,

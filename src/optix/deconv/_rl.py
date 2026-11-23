@@ -582,10 +582,19 @@ class RichardsonLucy(Estimator):
         return cache[shape]
 
     @staticmethod
-    def _overhead(psf: Tensor | ShiftVariantPSF, base: float) -> float:
-        """Working buffers per voxel, plus the shift-variant terms."""
+    def _overhead(
+        psf: Tensor | ShiftVariantPSF, base: float, data: Labeled
+    ) -> float:
+        """Working buffers per voxel, plus the shift-variant terms.
+
+        A shift-variant operator stores, per term, a weight map and a
+        transfer function (≈ 2 floats per voxel), plus a temporary; the
+        number of terms is bounded by those meeting the image
+        ([`n_terms`][optix.deconv.utils.ShiftVariantPSF.n_terms]).
+        """
         if isinstance(psf, ShiftVariantPSF):
-            return base + 3.0 * 3**psf.ndim  # weights and transfer functions
+            _, _, spatial = data.layout.shape_of(data.array)
+            return base + 3.0 * psf.n_terms(spatial)
         return base
 
     def _labeled_for(self, data: ArrayLike) -> Labeled:
@@ -731,7 +740,7 @@ class RichardsonLucy(Estimator):
             self.options["block"],
             halo,
             overhead=self._overhead(
-                psf, _OVERHEAD_ACCEL if self._accelerate else _OVERHEAD
+                psf, _OVERHEAD_ACCEL if self._accelerate else _OVERHEAD, data
             ),
             contiguous=True,
             align=chunks_of(out),

@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Sequence
 import torch
 from torch import Tensor
 
+from .._config import get_config
 from ._fft import next_fast_len
 
 __all__ = [
@@ -436,6 +437,38 @@ class ShiftVariantPSF:
         """Kernels `(T, *K)` and weights `(T, *n)` at global positions."""
         raise NotImplementedError
 
+    def _axis_kind(self) -> str | None:
+        """Per-axis weight kind bounding the terms (None: all kernels)."""
+        return "multilinear"
+
+    def n_terms(self, extent: Sequence[int]) -> int:
+        """Upper bound on the number of terms T of any block of an image.
+
+        It counts the nodes whose weights are non-zero somewhere on the
+        image of shape `extent` or within one kernel size of it (the
+        object grid of a block): at most the number of PSFs on the grid,
+        or the number of kernels for models with full-field weights.
+        Blocks, and the memory they take, are sized from it.
+
+        Parameters
+        ----------
+        extent : sequence of int
+            Image shape.
+
+        Returns
+        -------
+        int
+        """
+        kind = self._axis_kind()
+        if kind is None:
+            return int(self.kernels.shape[0])
+        total = 1
+        for c, n, k in zip(self.centres, extent, self.shape, strict=True):
+            x = torch.arange(-k, int(n) + k, dtype=torch.float64)
+            nodes, _ = interpolation_weights([c.cpu()], [x], kind)
+            total *= nodes.shape[0]
+        return total
+
     def operator(
         self,
         origin: Sequence[int],
@@ -497,6 +530,8 @@ class ShiftVariantPSF:
                 interpolation=payload["interpolation"],
                 normalize=False,
             )
+        if kind == "denis" and payload["kind"] == "optimal":
+            return DenisPSF._restore_optimal(payload)
         if kind == "denis":
             return DenisPSF(
                 payload["psf"],
@@ -522,10 +557,13 @@ class NagyOLearyPSF(ShiftVariantPSF):
     region of PSF i: the image is partitioned into rectangles, one per
     PSF, with boundaries half-way between neighbouring centres. With
     `interpolation="linear"` (§3.2.2), the weights interpolate linearly
-    between the PSF centres on a triangulation of the grid (each
-    rectangle of four neighbouring centres split along its diagonal, as
-    in Fig. 3.2; in 3-D, the Kuhn triangulation of each box into six
-    tetrahedra). Beyond the outermost centres the weights are constant.
+    between the PSF centres on a triangulation of the grid: each
+    rectangle of four neighbouring centres is split into two triangles
+    along the diagonal from its first corner (lowest index along every
+    axis) to the opposite one; in 3-D, the Kuhn triangulation of each
+    box into six tetrahedra. The paper only asks for a triangulation;
+    its Fig. 3.2 draws the other diagonal, and either is valid. Beyond
+    the outermost centres the weights are constant.
     The paper recommends the piecewise-constant model where linear
     interpolation brings no gain (§5).
 
@@ -607,6 +645,9 @@ class NagyOLearyPSF(ShiftVariantPSF):
         self.interpolation = interpolation
         self.kernels = psf.reshape((-1,) + tuple(psf.shape[d:]))
 
+    def _axis_kind(self) -> str | None:
+        return "nearest" if self.interpolation == "constant" else "multilinear"
+
     def terms(self, coords: tuple[Tensor, ...]) -> tuple[Tensor, Tensor]:
         kind = "nearest" if self.interpolation == "constant" else "simplex"
         nodes, maps = interpolation_weights(self.centres, coords, kind)
@@ -662,21 +703,33 @@ class DenisPSF(ShiftVariantPSF):
       3-D) interpolation, so the PSF at every location is the linear
       interpolation of the sampled PSFs. It preserves the positivity,
       the normalisation and the symmetries of the PSFs (§3.2).
-    - `"modes"` (§2.4, Eqs. 26–28; Flicker & Rigaut 2005): cₚ = uₚ the
-      first `rank` left singular vectors of the matrix of sampled PSFs
-      (PSF modes) and wₚ = σₚ vₚ their coefficients, interpolated
-      between grid nodes with the bilinear weights φ. With all modes it
-      equals `"interpolation"`; the approximation error of the PSF
-      samples is ∑_{p > rank} σₚ² (Eckart–Young).
+    - `"modes"` (§2.4; the practical scheme of Flicker & Rigaut 2005):
+      PSF modes cₚ = uₚ, the first `rank` left singular vectors of the
+      matrix of the G *sampled* PSFs (L × G), with coefficients σₚ vₚ
+      at the nodes, interpolated between nodes with the bilinear weights
+      φ. This departs from Eqs. 26–28, which take the SVD of K, the PSFs
+      of every pixel (L × M), with no interpolation. With all modes it
+      equals `"interpolation"`. The truncation is the best rank-`rank`
+      approximation of the samples only, with error ∑_{p > rank} σₚ²
+      on them (Eckart–Young), not of the PSFs over the whole field.
     - `"optimal"` (§2.5, Eqs. 29–38): the optimal local approximation
       proposed by the paper. The weights keep the support of the bilinear
       weights, and both the kernels and the weights minimise
       ‖K − C Wᵀ‖²_F, the error on the PSFs of every pixel of the image,
       by alternating C* = K W (WᵀW)⁻¹ (Eq. 35) and, per pixel,
       ω*ⱼ = (C′ⱼᵀC′ⱼ)⁻¹C′ⱼᵀK⋅ⱼ over the 2ᵈ nodes of its grid cell
-      (Eq. 37), starting from the interpolation model; `n_alt` = 10
-      alternations, as in the paper. It needs a `psf_model` that gives
-      the PSF at any position, and the image `extent`.
+      (Eq. 37; C′ⱼ is the same for every pixel of a cell, so its
+      pseudo-inverse is computed once per cell), starting from the
+      interpolation model; `n_alt` = 10 alternations, as in the paper.
+      It needs a `psf_model` that gives the PSF at any position, and the
+      image `extent`. As in §2.5.2, the kernels and the weights ω* of
+      every pixel are computed once, when the model is built, and
+      stored (2ᵈ values per pixel); operators then only slice them, and
+      the model can be saved without `psf_model`. The fit evaluates
+      `psf_model` at every pixel n_alt + 1 times, in batches sized from
+      the memory budget, at a cost of about (n_alt + 1)·M·L·2ᵈ
+      operations (M pixels, L the PSF size): fine in 2-D, heavy for
+      large volumes with large 3-D PSFs.
 
     The paper recommends PSF interpolation over the convolve-then-weight
     model of Nagy & O'Leary
@@ -694,6 +747,12 @@ class DenisPSF(ShiftVariantPSF):
           before evaluating `psf_model`, and least-squares problems are
           solved with the pseudo-inverse (minimum-norm solution) so that
           identical neighbouring PSFs are allowed.
+        - With `"optimal"`, all 2ᵈ nodes of a pixel's (clamped) grid
+          cell carry a weight, the paper's "weights of a cell". The
+          support constraint of Eq. 31, supp(wₚ) ⊂ supp(φₚ), is
+          therefore loosened where φₚ vanishes on a cell node: beyond the
+          outermost centres, where the clamped φ is non-zero only on the
+          edge nodes, and exactly on grid lines.
 
     !!! references "References"
 
@@ -725,6 +784,9 @@ class DenisPSF(ShiftVariantPSF):
         cₚ, `(P, *K)`.
     singular_values : Tensor or None
         σ of the sampled PSFs (`"modes"` only), decreasing.
+    omega : Tensor
+        `"optimal"` only: ω* of every image pixel, `(*extent, 2ᵈ)`, over
+        the nodes of its grid cell.
 
     Examples
     --------
@@ -893,16 +955,26 @@ class DenisPSF(ShiftVariantPSF):
             out[sel] = kmat[sel] @ pinvs[c].T
         return out
 
-    def _pixels(self, batch: int = 1 << 14) -> Iterator[Tensor]:
-        """Positions `(n, d)` of all image pixels, in batches."""
+    def _batch(self) -> int:
+        """Pixels per batch of the fit, from the memory budget.
+
+        A batch holds the PSFs there (float64, L values per pixel), the
+        output of `psf_model` and two temporaries of the same size.
+        """
+        per_pixel = 4 * 8 * math.prod(self.shape)
+        return max(1, int(get_config().memory) // per_pixel)
+
+    def _pixels(self) -> Iterator[tuple[int, Tensor]]:
+        """First flat index and positions `(n, d)` of the image pixels."""
         total = math.prod(self.extent)
+        batch = self._batch()
         device = self.kernels.device
         for start in range(0, total, batch):
             flat = torch.arange(
                 start, min(start + batch, total), device=device
             )
             idx = torch.unravel_index(flat, self.extent)
-            yield torch.stack(idx, -1).double()
+            yield start, torch.stack(idx, -1).double()
 
     def _fit_optimal(self) -> None:
         g = self._samples.shape[0]
@@ -911,7 +983,7 @@ class DenisPSF(ShiftVariantPSF):
         for _ in range(self.n_alt):
             kw = c.new_zeros(c.shape[1], g)
             wtw = c.new_zeros(g * g)
-            for pos in self._pixels():
+            for _, pos in self._pixels():
                 kmat = self._evaluate(pos)
                 nodes, w, cell = self._corners(pos)
                 if pinvs is not None:
@@ -926,10 +998,22 @@ class DenisPSF(ShiftVariantPSF):
                         )
             c = (kw @ torch.linalg.pinv(wtw.reshape(g, g))).T  # Eq. 35
             pinvs = self._pinvs(c)
-        self._pinv = pinvs
-        self.kernels = c.reshape((g,) + self.shape).to(self._samples.dtype)
+        # ω* of every pixel for the final kernels (Eq. 37), computed once
+        n_corners = 2 ** sum(n > 1 for n in self.grid_shape)
+        omega = c.new_zeros(math.prod(self.extent), n_corners)
+        for start, pos in self._pixels():
+            nodes, _, cell = self._corners(pos)
+            omega[start : start + pos.shape[0]] = self._weights_at(
+                self._evaluate(pos), nodes, cell, pinvs
+            )
+        dtype = self._samples.dtype
+        self.omega = omega.reshape(self.extent + (n_corners,)).to(dtype)
+        self.kernels = c.reshape((g,) + self.shape).to(dtype)
 
     # -- terms ---------------------------------------------------------
+    def _axis_kind(self) -> str | None:
+        return None if self.model == "modes" else "multilinear"
+
     def terms(self, coords: tuple[Tensor, ...]) -> tuple[Tensor, Tensor]:
         if self.model == "interpolation":
             nodes, maps = interpolation_weights(
@@ -942,27 +1026,27 @@ class DenisPSF(ShiftVariantPSF):
             )
             coeff = self._coeff[:, self._flat(nodes)].to(maps)
             return self.kernels, torch.tensordot(coeff, maps, dims=1)
-        # optimal: ω* per pixel from the PSF there
+        # optimal: slice the stored ω* (positions clamped to the image)
         shape = tuple(x.numel() for x in coords)
-        pos = torch.cartesian_prod(*[x.double() for x in coords])
-        pos = pos.reshape(-1, len(coords))
-        pinvs = self._pinv.to(pos.device)
-        flat_nodes, flat_w = [], []
-        for start in range(0, pos.shape[0], 1 << 14):
-            p = pos[start : start + (1 << 14)]
-            hi = torch.tensor(self.extent, dtype=p.dtype, device=p.device) - 1
-            nodes, _, cell = self._corners(torch.minimum(p.clamp(min=0), hi))
-            flat_nodes.append(nodes)
-            flat_w.append(
-                self._weights_at(self._evaluate(p), nodes, cell, pinvs)
-            )
-        nodes = torch.cat(flat_nodes)
-        w = torch.cat(flat_w)
+        index = []
+        for x, n in zip(coords, self.extent, strict=True):
+            r = x.double().round()
+            if not bool(((x.double() - r).abs() < 1e-6).all()):
+                raise ValueError(
+                    "model='optimal' is defined at integer pixel positions"
+                )
+            index.append(r.long().clamp(0, n - 1))
+        grids = torch.meshgrid(*index, indexing="ij")
+        omega = self.omega.to(index[0].device)[grids].reshape(
+            -1, self.omega.shape[-1]
+        )
+        pos = torch.stack([gi.reshape(-1) for gi in grids], -1).double()
+        nodes, _, _ = self._corners(pos)
         active, inv = torch.unique(nodes, return_inverse=True)
-        maps = w.new_zeros(active.numel(), pos.shape[0])
+        maps = omega.new_zeros(active.numel(), pos.shape[0])
         pix = torch.arange(pos.shape[0], device=pos.device)
         for s in range(nodes.shape[1]):
-            maps.index_put_((inv[:, s], pix), w[:, s], accumulate=True)
+            maps.index_put_((inv[:, s], pix), omega[:, s], accumulate=True)
         return self.kernels[active], maps.reshape((-1,) + shape)
 
     def _convert(self, **backend: object) -> None:
@@ -971,21 +1055,32 @@ class DenisPSF(ShiftVariantPSF):
         if self.model == "modes":
             self._coeff = self._coeff.to(**backend)
         if self.model == "optimal":
-            device = backend.get("device")
-            if device is not None:
-                self._pinv = self._pinv.to(device)
+            self.omega = self.omega.to(**backend)
 
     def _payload(self) -> dict:
-        if self.model == "optimal":
-            raise TypeError(
-                "A DenisPSF with model='optimal' holds a psf_model callable "
-                "and cannot be saved"
-            )
         grid = self.grid_shape
-        return {
+        payload = {
             "model": "denis",
             "psf": self._samples.reshape(grid + self.shape),
             "centres": list(self.centres),
             "kind": self.model,
             "rank": self.rank,
         }
+        if self.model == "optimal":
+            payload["kernels"] = self.kernels
+            payload["omega"] = self.omega
+            payload["n_alt"] = self.n_alt
+            payload["normalize"] = self.normalize
+        return payload
+
+    @classmethod
+    def _restore_optimal(cls, payload: dict) -> "DenisPSF":
+        """A fitted `"optimal"` model from its kernels and ω*."""
+        new = cls(payload["psf"], payload["centres"], normalize=False)
+        new.model = "optimal"
+        new.normalize = bool(payload["normalize"])
+        new.n_alt = int(payload["n_alt"])
+        new.omega = payload["omega"]
+        new.extent = tuple(int(n) for n in new.omega.shape[:-1])
+        new.kernels = payload["kernels"]
+        return new

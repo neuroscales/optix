@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 import torch
 from torch import Tensor
 
-from .._estimator import Estimator, Tags
+from .._estimator import Estimator, Tags, _same
 from ..io import (
     ArrayLike,
     Chunk,
@@ -17,7 +17,11 @@ from ..io import (
     flush,
     prepare_out,
 )
-from ._shiftvariant import NagyOLearyPSF, ShiftVariantConvolution
+from ._shiftvariant import (
+    NagyOLearyPSF,
+    ShiftVariantConvolution,
+    object_positions,
+)
 
 __all__ = [
     "NagyOLeary",
@@ -27,7 +31,10 @@ __all__ = [
     "optimal_circulant",
 ]
 
-_OVERHEAD = 16.0  # CG vectors, transfer functions and weights per voxel
+_OVERHEAD = 16.0  # CG vectors, preconditioner and FFT buffers per voxel
+_BOUNDARIES = ("zero", "extended")
+# options whose every value is one of the paper's own methods
+_PAPER_CHOICES = ("interpolation", "precondition", "tau")
 
 
 def optimal_circulant(kernel: Tensor, shape: Sequence[int]) -> Tensor:
@@ -141,6 +148,32 @@ class RegionPreconditioner:
         return self._solve(x, True)
 
 
+class _ZeroBoundary:
+    """H restricted to the object pixels inside the image.
+
+    The object is zero outside the image: H f = H₀(m ⊙ f) and
+    Hᵀ r = m ⊙ H₀ᵀ r, with m the indicator of the object pixels of the
+    block's grid that lie in the image.
+    """
+
+    def __init__(self, op: ShiftVariantConvolution, mask: Tensor) -> None:
+        self.op = op
+        self.mask = mask
+        self.ndim = op.ndim
+        self.shape = op.shape
+        self.grid = op.grid
+        self.norm = op.norm * mask
+
+    def forward(self, f: Tensor) -> Tensor:
+        return self.op.forward(f * self.mask)
+
+    def adjoint(self, r: Tensor) -> Tensor:
+        return self.op.adjoint(r) * self.mask
+
+    def crop(self, x: Tensor) -> Tensor:
+        return self.op.crop(x)
+
+
 def _dot(a: Tensor, b: Tensor) -> float:
     return float((a * b).sum(dtype=torch.float64))
 
@@ -159,10 +192,12 @@ def cgls(
     from f⁽⁰⁾ = 0, with the right preconditioner P = C⁻¹: the iteration
     runs on z with f = P z,
 
-        s₀ = Pᵀ Hᵀ y,  p₀ = s₀,
+        s₀ = Pᵀ Hᵀ e₀,  p₀ = s₀,
         tₖ = P pₖ,  qₖ = H tₖ,  αₖ = ‖sₖ‖² / ‖qₖ‖²,
-        fₖ₊₁ = fₖ + αₖ tₖ,  rₖ₊₁ = rₖ − αₖ qₖ,
-        sₖ₊₁ = Pᵀ Hᵀ rₖ₊₁,  pₖ₊₁ = sₖ₊₁ + (‖sₖ₊₁‖²/‖sₖ‖²) pₖ.
+        fₖ₊₁ = fₖ + αₖ tₖ,  eₖ₊₁ = eₖ − αₖ qₖ,
+        sₖ₊₁ = Pᵀ Hᵀ eₖ₊₁,  pₖ₊₁ = sₖ₊₁ + (‖sₖ₊₁‖²/‖sₖ‖²) pₖ,
+
+    with e₀ = y the residual y − H fₖ.
 
     Stopping early regularises the solution. Inner products are
     accumulated in float64.
@@ -196,8 +231,8 @@ def cgls(
         return x if precond is None else precond.transpose(x)
 
     f = torch.zeros_like(op.norm)
-    r = data.clone()
-    s = pt(op.adjoint(r))
+    e = data.clone()
+    s = pt(op.adjoint(e))
     d = s
     gamma = _dot(s, s)
     n = 0
@@ -209,8 +244,8 @@ def cgls(
             break
         alpha = gamma / qq
         f = f + alpha * t
-        r = r - alpha * q
-        s = pt(op.adjoint(r))
+        e = e - alpha * q
+        s = pt(op.adjoint(e))
         new = _dot(s, s)
         d = s + (new / gamma) * d
         gamma = new
@@ -239,35 +274,68 @@ class NagyOLeary(Estimator):
     `interpolation="linear"` the preconditioner uses, on each region of
     the piecewise-constant partition, the PSF of that region (§4.1.1:
     one of the vertex kernels). `precondition=False` runs plain CGLS,
-    the paper's reference method.
+    the paper's reference method. The paper's variants (`interpolation`,
+    `precondition`, `tau`) keep the estimator faithful.
 
-    **Boundaries and blocks.** As for
-    [`RichardsonLucy`][optix.deconv.RichardsonLucy], the object extends
-    past the observed region by the PSF support, and large inputs are
-    processed in blocks with a halo, each block solved as an image of its
-    own and only its core kept. The blur weights are those of the whole
-    image (global positions); the preconditioner of a block uses the
-    parts of the regions that fall in it, and CG inner products are per
-    block, so block-wise and whole-image results differ slightly away
-    from the image edges. With the default `block`, the image is
-    processed whole when it fits in the memory budget.
+    **Boundary.** As in the paper (§1: K is square; §3.2.1: zero padding
+    along the exterior borders), the unknowns are the object pixels of
+    the image, and the object is zero outside it (`boundary="zero"`).
+    The extension `boundary="extended"` instead solves for an object
+    extended past the image by the PSF support, as
+    [`RichardsonLucy`][optix.deconv.RichardsonLucy] does; the system is
+    then underdetermined, and early stopping selects the solution.
+
+    **Blocks.** Large inputs are processed in blocks with a halo, and
+    only the core of each block is kept. The blur weights are those of
+    the whole image (global positions), and the unknowns of a block are
+    its loaded pixels plus the image pixels within the PSF support
+    around them (zero outside the image). Each block runs a complete
+    CGLS on its own least-squares problem, with its own inner products
+    and step sizes, and the preconditioner of a block uses the parts of
+    the regions that fall in it. Since the step sizes depend on the
+    data and the iteration count sets the regularisation, each block is
+    regularised differently: the block-wise result is a valid CG
+    restoration, but not the whole-image CG iterate. With Gaussian PSFs
+    and blocks of 16–32 pixels, the two differ by 10–30 % (relative L2
+    norm), while both are about as close to the true object. With the
+    default `block`, the image is processed whole when it fits in the
+    memory budget.
+
+    **Cost.** A product with K is a sum of T full-block convolutions,
+    T the number of PSFs whose weights meet the block, so the operator
+    stores T weight maps and T transfer functions per block, and each
+    product costs T FFT pairs. The paper's region-by-region products
+    (§3.2.1) give the same result with about the storage of one
+    spatially invariant convolution. The memory budget accounts for the
+    T terms.
 
     !!! warning "Smooth PSFs need τ > 0"
-        The paper's PSFs have a sharp core, so the eigenvalues of C stay
-        away from 0 and τ = 0 works (§4: "for moderately ill-posed
-        problems with little noise, we can take τ ≈ 0"). For smooth PSFs
-        (e.g. Gaussian), the eigenvalues of C decay to tiny values and
-        Cτ⁻¹ with τ = 0 amplifies the mismatch between C and K at the
-        region boundaries, and the noise: PCG then diverges from the
-        first iterations. Choose τ a few per cent of the largest
-        eigenvalue (≈ 1 for unit-sum PSFs), or `precondition=False`.
+        The paper's experiments use τ = 0 (§5), and §4 notes that "for
+        moderately ill-posed problems with little noise, we can take
+        τ ≈ 0". A likely reason why this works there is that the HST
+        PSFs have a sharp core, which keeps the eigenvalues of C away
+        from 0; the paper does not say so. For smooth PSFs (e.g.
+        Gaussian), the eigenvalues of C decay to tiny values, and Cτ⁻¹
+        with τ = 0 amplifies the mismatch between C and K at the region
+        boundaries, even without noise: PCG then diverges from the first
+        iterations. Choose τ ≈ 0.1–0.3 of the largest eigenvalue (≈ 1 for
+        unit-sum PSFs), the larger values for wider PSFs; with smaller
+        τ the first iterates can still overshoot. With Gaussian PSFs
+        (σ = 0.7–2 pixels) and such τ, PCG after 14 iterations is about
+        as accurate as plain CG or somewhat worse (relative error 0–30 %
+        higher on a checkerboard object), not better: the speed-up of §5
+        should not be expected for smooth PSFs (the paper notes
+        something similar for smooth images, §5).
+        `precondition=False` avoids the issue.
 
     !!! note "Choices not specified in the paper"
         - The paper avoids a stopping criterion and compares solutions
           after a fixed number of iterations: 14 PCG iterations in
           Fig. 5.8, the default `n_iter`.
-        - CGLS starts from f⁽⁰⁾ = 0; the object outside the observed
-          region is not preconditioned.
+        - CGLS starts from f⁽⁰⁾ = 0. Object pixels outside the
+          piecewise-constant regions of a block (outside the image with
+          `boundary="extended"`, or in the margin around an inner block)
+          are not preconditioned.
         - Region boundaries are half-way between neighbouring centres.
 
     !!! references "References"
@@ -313,6 +381,7 @@ class NagyOLeary(Estimator):
         "interpolation": "constant",
         "precondition": True,
         "tau": 0.0,
+        "boundary": "zero",
         "n_iter": 14,
         "halo": None,
         "block": None,
@@ -327,6 +396,7 @@ class NagyOLeary(Estimator):
         interpolation: str | None = None,
         precondition: bool | None = None,
         tau: float | None = None,
+        boundary: str | None = None,
         n_iter: int | None = None,
         halo: int | Sequence[int] | None = None,
         block: Sequence[int | None] | None = None,
@@ -350,9 +420,15 @@ class NagyOLeary(Estimator):
             [`NagyOLearyPSF`][optix.deconv.NagyOLearyPSF]). Default
             (paper, §5): `"constant"`.
         precondition : bool
-            Preconditioned CG (PCG) or plain CG. Default: True.
+            Preconditioned CG (PCG) or plain CG (both from the paper).
+            Default: True.
         tau : float
-            Truncation level τ of the preconditioner. Default (§5): 0.
+            Truncation level τ of the preconditioner (§4). Default (§5):
+            0. Smooth PSFs need τ > 0 (see the warning above).
+        boundary : {"zero", "extended"}
+            Unknowns on the image with a zero object outside it (paper,
+            default), or an object extended past the image by the PSF
+            support (extension).
         n_iter : int
             Number of CG iterations. Default: 14 (see above).
         halo : int or sequence of int, optional
@@ -379,6 +455,10 @@ class NagyOLeary(Estimator):
             raise ValueError("n_iter must be non-negative")
         if float(opts["tau"]) < 0:
             raise ValueError("tau must be non-negative")
+        if opts["boundary"] not in _BOUNDARIES:
+            raise ValueError(
+                f"boundary must be one of {_BOUNDARIES}: {opts['boundary']!r}"
+            )
         self.psf = psf
         self.centres = centres
         self.model: NagyOLearyPSF | None = None
@@ -389,6 +469,15 @@ class NagyOLeary(Estimator):
                 psf, centres, interpolation=opts["interpolation"]
             )
         self._fitted = False
+
+    def _resolve(self, faithful: bool, params: object) -> None:
+        super()._resolve(faithful, params)
+        # the paper's interpolation, CG/PCG and τ variants keep it faithful
+        self.is_faithful = all(
+            _same(value, self.paper.get(name))
+            for name, value in self.options.items()
+            if name not in _PAPER_CHOICES
+        )
 
     def _labeled_for(self, data: ArrayLike) -> Labeled:
         if isinstance(data, Labeled):
@@ -441,6 +530,26 @@ class NagyOLeary(Estimator):
             for core, inner in zip(chunk.spatial, chunk.inner, strict=True)
         )
 
+    @staticmethod
+    def _inside(
+        model: NagyOLearyPSF,
+        origin: tuple[int, ...],
+        extent: tuple[int, ...],
+        like: Tensor,
+    ) -> Tensor:
+        """Indicator of the object pixels of a block that lie in the image."""
+        shape = tuple(like.shape)
+        local = object_positions(shape, model.shape, device=like.device)
+        mask = None
+        for a, (x, o, n) in enumerate(zip(local, origin, extent, strict=True)):
+            g = x + float(o)
+            m = ((g >= 0) & (g < n)).to(like.dtype)
+            view = [1] * len(shape)
+            view[a] = -1
+            m = m.reshape(view)
+            mask = m if mask is None else mask * m
+        return mask
+
     def _preconditioner(
         self,
         model: NagyOLearyPSF,
@@ -474,11 +583,13 @@ class NagyOLeary(Estimator):
         out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
         n_iter = int(self.options["n_iter"])
         iterations = self.history.extras.setdefault("iterations", [])
+        _, _, extent = data.layout.shape_of(raw)
         chunks = blocks(
             data,
             self.options["block"],
             self._halo(model.shape),
-            overhead=_OVERHEAD + 3.0 * 3**model.ndim,
+            # weights, transfer functions and a temporary per term
+            overhead=_OVERHEAD + 3.0 * model.n_terms(extent),
             contiguous=True,
             align=chunks_of(out),
             **backend,
@@ -488,6 +599,8 @@ class NagyOLeary(Estimator):
             shape = tuple(y.shape)
             origin = self._origin(chunk)
             op = model.operator(origin, shape)
+            if self.options["boundary"] == "zero":
+                op = _ZeroBoundary(op, self._inside(model, origin, extent, y))
             precond = None
             if self.options["precondition"]:
                 precond = self._preconditioner(model, origin, shape, y.dtype)
