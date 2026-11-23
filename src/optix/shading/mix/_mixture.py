@@ -15,6 +15,7 @@ from ...io import ArrayLike, Labeled, Layout, WritableArrayLike, prepare_out
 from ...io._arrays import chunks_of, flush
 from ._gamma import GammaComponent
 from ._model import MixtureFit, detect_quantization, is_integer_valued
+from ._overlap import Overlap, TileOverlap
 
 __all__ = ["GammaMixture"]
 
@@ -43,6 +44,7 @@ _PRESET: dict[str, object] = {
     "v_prior": None,
     "v_dof": 5.0,
     "lam": 1.0,
+    "overlap": None,
 }
 
 
@@ -156,6 +158,22 @@ class GammaMixture(Estimator):
     ADU) by default; `quantization="auto"` detects it from a sample of
     the data.
 
+    Overlapping tiles. When the pictures are tiles of a mosaic whose
+    neighbours overlap (`overlap`, a
+    [`TileOverlap`][optix.shading.mix.TileOverlap] of integer
+    tile positions), a voxel seen in two tiles at positions p and p − s of
+    the field of view has the same signal u in both, so the log-ratio of
+    its excesses, d = log(yᵢ − c) − log(yⱼ − c), measures
+    log m(p) − log m(p − s) whatever u. The bound gains the
+    composite-likelihood term −½ ∑ w·(d − log m(p) + log m(p − s))² over
+    the voxels that are tissue in both tiles (more than `threshold`
+    background standard deviations above c), with the delta-method
+    weight w = 1 / (Var yᵢ / (yᵢ − c)² + Var yⱼ / (yⱼ − c)²). It is a
+    quadratic in θ, added to the system of the θ step (and to the
+    initial moment fit of the flat field); d and w follow the current c
+    and v. This identifies the flat field even where the mean signal of
+    the scene depends on the position in the tiles.
+
     The gain g is held at its nominal value (`gain`, or the gain of an
     initial [`SensorEstimate`][optix.estimates.SensorEstimate]): in this
     model it is identified only through the shape of the signal
@@ -250,6 +268,7 @@ class GammaMixture(Estimator):
         v_prior: float | None = None,
         v_dof: float | None = None,
         lam: float | None = None,
+        overlap: TileOverlap | object | None = None,
         faithful: bool = True,
         dtype: torch.dtype | str | None = None,
         device: torch.device | str | None = None,
@@ -328,6 +347,16 @@ class GammaMixture(Estimator):
             (0 disables it). Default 5.
         lam : float
             Precision λ of the bending-energy prior on log m. Default 1.
+        overlap : TileOverlap or array-like, optional
+            Integer positions of overlapping tiles: a
+            [`TileOverlap`][optix.shading.mix.TileOverlap] (from
+            `positions=`, `steps=` or `step=`, e.g.
+            `TileOverlap(step=(0, 64, 0))` for (tile, x, y, z) data whose
+            tiles step by 64 rows along y), or an `(N, D)` array of
+            absolute positions (tile axis 0). Every pair of tiles whose
+            boxes intersect contributes. The tile axis must be a sample
+            axis; the same translations apply to every group. Default
+            None: the pictures are independent (no overlap term).
         faithful : bool
             True: the reference preset. False: the `recommended` preset
             (currently the same).
@@ -392,6 +421,7 @@ class GammaMixture(Estimator):
         alpha: Tensor,
         gain: float,
         quantization: float | None = None,
+        overlap: Overlap | None = None,
     ) -> MixtureFit:
         opt = self.options
         if quantization is None:
@@ -414,6 +444,7 @@ class GammaMixture(Estimator):
             lam=float(opt["lam"]),
             gain_sd=0.1,
             backend=backend,
+            overlap=overlap,
         )
 
     def _prior_alpha(self, backend: dict) -> Tensor:
@@ -467,6 +498,14 @@ class GammaMixture(Estimator):
             return torch.broadcast_to(value, map_shape)[g]
 
         sub = _drop_groups(layout, ndim)
+        overlap = None
+        if opt["overlap"] is not None:
+            overlap = Overlap.build(
+                opt["overlap"],
+                tuple(int(n) for n in raw.shape),
+                layout,
+                threshold=float(opt["threshold"]),
+            )
         offsets, variances, flats, thetas, alphas = [], [], [], [], []
         params, concentrations, quantizations = [], [], []
         converged = []
@@ -496,6 +535,7 @@ class GammaMixture(Estimator):
                 alpha=self._prior_alpha(backend),
                 gain=gain,
                 quantization=quantization,
+                overlap=overlap,
             )
             offset = field(shading, "dark", g)
             if offset is None:

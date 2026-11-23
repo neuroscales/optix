@@ -51,6 +51,7 @@ from ...io import (
 from ...special import fit_dirichlet
 from ...stats import tile_reduce
 from ...stats._base import state_dtype
+from ._overlap import Overlap, OverlapStats
 
 __all__ = [
     "Component",
@@ -201,6 +202,7 @@ class MixtureFit:
         lam: float,
         gain_sd: float,
         backend: dict,
+        overlap: Overlap | None = None,
     ) -> None:
         self.source = source
         self.layout = layout
@@ -247,6 +249,8 @@ class MixtureFit:
         self._stats: Tensor | None = None
         self._counts: Tensor | None = None
         self._class_stats: tuple[Tensor, Tensor] | None = None
+        self.overlap = overlap
+        self._overlap: OverlapStats | None = None
 
     # -- helpers -----------------------------------------------------------
     def modulation(self) -> Tensor:
@@ -265,6 +269,21 @@ class MixtureFit:
             overhead=_OVERHEAD + _OVERHEAD_CLASS * self.nclass,
             contiguous=True,
             **self.backend,
+        )
+
+    def overlap_stats(self) -> OverlapStats | None:
+        """Matched log-ratios of the overlapping tiles (current c, v)."""
+        if self.overlap is None:
+            return None
+        prm = self.param
+        return self.overlap.stats(
+            self.source,
+            self.layout,
+            prm.C,
+            prm.V,
+            float(prm.gain),
+            self.full,
+            self.backend,
         )
 
     def _elogpi(self, alpha: Tensor) -> Tensor:
@@ -400,6 +419,13 @@ class MixtureFit:
                 # Information about log M per tissue value: mean² /
                 # variance (= ν for a Gamma signal without noise)
                 info = mean**2 / max(s2 / n - mean**2, 1e-12 * mean**2)
+                extra = None
+                if self.overlap is not None:
+                    prm.C, prm.V = C, V
+                    ov = self._overlap = self.overlap_stats()
+                    if ov.terms:
+                        zero = torch.zeros_like(C)
+                        extra = ov.system(zero, [self.by, self.bx])
                 theta = fit_modulation(
                     fg_excess,
                     fg_count,
@@ -407,6 +433,7 @@ class MixtureFit:
                     self.bx,
                     prior.lam * self.bending,
                     info=info,
+                    extra=extra,
                 )
             prm.theta = theta
             M = self.modulation()
@@ -519,6 +546,12 @@ class MixtureFit:
         bound -= (
             0.5 * ((prm.gain / self.gain0).log().item() / prior.gain_sd) ** 2
         )
+        if self.overlap is not None:
+            # computed once, from the initial c and v: the term is then an
+            # exact quadratic in θ and the bound stays consistent
+            if self._overlap is None:
+                self._overlap = self.overlap_stats()
+            bound += self._overlap.bound(prm.M.log())
         self.history.append(bound)
         return bound
 
@@ -669,6 +702,10 @@ class MixtureFit:
             H.diagonal().add_(H.diagonal().mean(), alpha=1e-8)
             g = project(Sm, bases).flatten()
             g.addcmul_(weights, prm.theta.flatten(), value=-1)
+            if self._overlap is not None and self._overlap.terms:
+                Ho, go = self._overlap.system(M.log(), bases)
+                H += Ho
+                g += go
             # No DC term: the geometric mean of m stays at one
             H[0, :] = H[:, 0] = 0
             H[0, 0] = 1
@@ -901,6 +938,7 @@ def fit_modulation(
     min_count: float = 3.0,
     robust_iter: int = 2,
     outlier: float = 4.0,
+    extra: tuple[Tensor, Tensor] | None = None,
 ) -> Tensor:
     """Flat-field moment estimate of the log-modulation field.
 
@@ -918,6 +956,10 @@ def fit_modulation(
     residual exceeds `outlier` robust standard deviations (hot pixels)
     are discarded and the fit repeated `robust_iter` times.
 
+    `extra` = (H, g) adds a quadratic ½ θᵀHθ − gᵀθ to the objective (the
+    overlap term of tiled data, whose score at θ = 0 is g); the moment
+    term may then be empty.
+
     Parameters
     ----------
     total, count : (H, W) Tensor
@@ -934,7 +976,7 @@ def fit_modulation(
     """
     ky, kx = By.shape[-1], Bx.shape[-1]
     ok = (count >= min_count) & (total > 0)
-    if not ok.any():
+    if not ok.any() and extra is None:
         return torch.zeros((ky, kx), dtype=total.dtype, device=total.device)
     tiny = torch.finfo(total.dtype).tiny
     logm = torch.where(
@@ -945,10 +987,15 @@ def fit_modulation(
     for it in range(robust_iter + 1):
         H = gram(w, bases)
         H.diagonal().add_(penalty.flatten())
-        H.diagonal().add_(H.diagonal().mean(), alpha=1e-8)
         g = project(w * logm, bases).flatten()
+        if extra is not None:
+            H += extra[0]
+            g += extra[1]
+        H.diagonal().add_(H.diagonal().mean(), alpha=1e-8)
         theta = torch.linalg.solve(H, g).reshape(ky, kx)
         if it == robust_iter:
+            break
+        if not ok.any():
             break
         res = (logm - reconstruct(theta, bases)).abs_()
         scale = 1.4826 * res[w > 0].median()

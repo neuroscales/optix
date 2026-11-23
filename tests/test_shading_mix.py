@@ -724,3 +724,229 @@ def test_quiet_data_warning_and_spread_floor():
     assert not GammaMixture(spread_floor=True).is_faithful
     fg = floored.apply(data, output="foreground") > 0.5
     assert abs(fg.float().mean() - labels.float().mean()) < 0.05
+
+
+# -- overlapping tiles -------------------------------------------------------
+from optix.shading.mix import (  # noqa: E402
+    TileOverlap,
+    overlap_slices,
+    tile_pairs,
+)
+from optix.shading.mix._overlap import Overlap  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "shift",
+    [
+        (0, 0),
+        (3, 0),
+        (-3, 2),
+        (0, -7),
+        (5, 5),
+        (8, 0),
+        (-8, 1),
+        (9, -9),
+        (7, -7),
+    ],
+)
+def test_overlap_slices_brute_force(shift):
+    shape = (8, 7)
+    got = overlap_slices(shift, shape)
+    pairs = [
+        (p, tuple(a - s for a, s in zip(p, shift, strict=True)))
+        for p in np.ndindex(*shape)
+    ]
+    pairs = [
+        (p, q)
+        for p, q in pairs
+        if all(0 <= v < n for v, n in zip(q, shape, strict=True))
+    ]
+    if not pairs:
+        assert got is None
+        return
+    si, sj = got
+    ii = {p for p, _ in pairs}
+    a = np.zeros(shape, int)
+    a[si] = 1
+    assert {tuple(x) for x in np.argwhere(a)} == ii
+    # slices match voxel by voxel
+    idx = np.arange(np.prod(shape)).reshape(shape)
+    mapped = idx[si]
+    for p, q in pairs:
+        loc = tuple(v - s.start for v, s in zip(p, si, strict=True))
+        assert idx[sj][loc] == idx[q]
+    assert mapped.shape == idx[sj].shape
+
+
+def test_tile_positions_shortcuts_agree():
+    pos = TileOverlap(positions=[[0, 0, 0], [1, 5, 0], [2, 10, 0]])
+    steps = TileOverlap(steps=[[1, 5, 0], [1, 5, 0]])
+    step = TileOverlap(step=[1, 5, 0])
+    for o in (pos, steps, step):
+        assert np.array_equal(o.poses(3, 3), pos.positions)
+    with pytest.raises(ValueError, match="exactly one"):
+        TileOverlap(step=[0, 1, 0], steps=[[0, 1, 0]])
+    with pytest.raises(ValueError, match="integers"):
+        TileOverlap(step=[0, 1.5, 0])
+    with pytest.raises(ValueError, match="steps"):
+        steps.poses(4, 3)
+    # same fit from the three descriptions
+    data, _ = _tiles(seed=0)
+    fits = [
+        _tile_fit(data, o, it=3)
+        for o in (
+            TileOverlap(positions=[[0, 16 * t, 0] for t in range(4)]),
+            TileOverlap(steps=[[0, 16, 0]] * 3),
+            TileOverlap(step=(0, 16, 0)),
+        )
+    ]
+    for f in fits[1:]:
+        assert f.estimates["shading"].allclose(fits[0].estimates["shading"])
+        assert f.history.objective == fits[0].history.objective
+
+
+def test_tile_pairs_grid_and_snake():
+    # 2x2 grid of 10x10 tiles stepping 8: the diagonal pair (0, 3)
+    # overlaps by a 2x2 corner, (1, 2) too; (0, 1) and (2, 3) are not
+    # consecutive-only.
+    pos = np.array([[0, 0], [0, 8], [8, 0], [8, 8]])
+    pairs = tile_pairs(pos, (10, 10))
+    assert [(i, j) for i, j, _ in pairs] == [
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 2),
+        (1, 3),
+        (2, 3),
+    ]
+    assert dict(((i, j), s) for i, j, s in pairs)[(0, 3)] == (8, 8)
+    si, sj = overlap_slices((8, 8), (10, 10))
+    assert si == (slice(8, 10), slice(8, 10)) and sj == (slice(0, 2),) * 2
+    # far tiles are skipped
+    assert tile_pairs(np.array([[0, 0], [0, 10]]), (10, 10)) == []
+
+
+def test_overlap_stats_on_a_grid_match_brute_force():
+    # (tile, frame, y, x) with 4 tiles on a 2x2 grid, noise-free
+    gen = torch.Generator().manual_seed(0)
+    H = W = 6
+    scene = 50 + 100 * torch.rand(
+        (3, 12, 12), generator=gen, dtype=torch.float64
+    )
+    yy = torch.linspace(-1, 1, H, dtype=torch.float64)
+    logm = 0.3 * yy[:, None] - 0.2 * yy[None]
+    pos = np.array([[0, 0, 0], [0, 0, 4], [0, 4, 0], [0, 4, 4]])
+    tiles = torch.stack(
+        [logm.exp() * scene[:, p[1] : p[1] + H, p[2] : p[2] + W] for p in pos]
+    )
+    C = torch.zeros(H, W, dtype=torch.float64)
+    V = torch.ones(H, W, dtype=torch.float64)
+    layout = Layout(spatial=(-2, -1))
+    ov = Overlap.build(TileOverlap(positions=pos), tiles.shape, layout, 0.0)
+    assert len(ov.pairs) == 6  # (1, 2) and (0, 3) are diagonal
+    sub = Layout(spatial=(-2, -1))
+    st = ov.stats(tiles, sub, C, V, 1.0, False, dict(dtype=torch.float64))
+    # noise-free: the true flat field fits every log-ratio exactly
+    assert abs(st.bound(logm)) < 1e-8
+    assert st.bound(torch.zeros_like(logm)) < -1
+    # curvature and score of a quadratic in θ, against finite differences
+    from optix.basis import dct_basis, reconstruct
+
+    by = dct_basis(H, 3, dtype=torch.float64)
+    bx = dct_basis(W, 3, dtype=torch.float64)
+    theta = torch.randn(3, 3, generator=gen, dtype=torch.float64) * 0.1
+    Hs, g = st.system(reconstruct(theta, [by, bx]), [by, bx])
+    f = lambda t: st.bound(reconstruct(t, [by, bx]))  # noqa: E731
+    # finite differences (bound uses .item())
+    eps = 1e-5
+    num = torch.zeros(9, dtype=torch.float64)
+    for k in range(9):
+        d = torch.zeros(9, dtype=torch.float64)
+        d[k] = eps
+        d = d.reshape(3, 3)
+        num[k] = (f(theta + d) - f(theta - d)) / (2 * eps)
+    assert torch.allclose(num, g, rtol=1e-5, atol=1e-6)
+    # exact quadratic: f(θ + δ) = f(θ) + gᵀδ − ½ δᵀHδ
+    d = 0.05 * torch.randn(9, generator=gen, dtype=torch.float64)
+    pred = f(theta) + g @ d - 0.5 * d @ Hs @ d
+    assert abs(f(theta + d.reshape(3, 3)) - pred) < 1e-8 * abs(pred) + 1e-8
+
+
+def _tiles(ntiles=4, X=12, H=32, W=24, step=16, seed=0, gain=2.0):
+    """(tile, x, y, z) tiles of one scene whose brightness varies along y."""
+    g = torch.Generator().manual_seed(seed)
+    total = step * (ntiles - 1) + H
+    yy = torch.arange(total, dtype=torch.float64)
+    bright = torch.exp(torch.sin(3 * math.pi * yy / total))[:, None]
+    gam = (
+        torch._standard_gamma(
+            torch.full((X, total, W), 2.0, dtype=torch.float64), generator=g
+        )
+        / 2.0
+    )
+    fg = torch.rand((X, total, W), generator=g, dtype=torch.float64) < 0.6
+    u = 200.0 * bright * gam * fg
+    y = torch.linspace(-1, 1, H, dtype=torch.float64)[:, None]
+    x = torch.linspace(-1, 1, W, dtype=torch.float64)[None]
+    logm = 0.4 * y - 0.3 * y**2 + 0.2 * x * y
+    logm = logm - logm.mean()
+    out = []
+    for t in range(ntiles):
+        e = logm.exp() * u[:, t * step : t * step + H] / gain
+        y_ = 100 + gain * torch.poisson(e, generator=g)
+        y_ = y_ + 2.0 * torch.randn(e.shape, generator=g, dtype=torch.float64)
+        out.append(y_.round())
+    return torch.stack(out).to(_working_dtype()), logm
+
+
+def _tile_fit(data, overlap, it=40, **kw):
+    with warnings.catch_warnings(), optix.config(compile=False):
+        warnings.simplefilter("ignore")
+        est = GammaMixture(
+            nclass=1,
+            gain=2.0,
+            order=(4, 4),
+            max_iterations=it,
+            overlap=overlap,
+            **kw,
+        )
+        return est.fit(data, layout=Layout("txyz", spatial="yz"))
+
+
+def test_overlap_default_and_inactive_are_unchanged():
+    data, _ = _tiles(seed=1)
+    ref = _tile_fit(data, None, it=5)
+    assert GammaMixture().options["overlap"] is None
+    # no tile touches another, or a zero weight: the same fit
+    far = TileOverlap(step=(0, 32, 0))
+    zero = TileOverlap(step=(0, 16, 0), weight=0.0)
+    for ov in (far, zero):
+        est = _tile_fit(data, ov, it=5)
+        assert est.history.objective == ref.history.objective
+        assert est.estimates["shading"].allclose(ref.estimates["shading"])
+    with pytest.raises(ValueError, match="sample axis"):
+        GammaMixture(overlap=TileOverlap(step=(0, 1), axis=2)).fit(data[0])
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_overlap_improves_flat_field(seed):
+    data, logm = _tiles(seed=seed)
+    errors, drops, exhausted = [], [], []
+    for ov in (None, TileOverlap(step=(0, 16, 0), axis="t")):
+        est = _tile_fit(data, ov)
+        flat = est.estimates["shading"].flat.double()
+        errors.append((flat.log() - logm).abs().mean().item())
+        objective = torch.tensor(est.history.objective, dtype=torch.float64)
+        drops.append((-objective.diff()).max().item() / objective.abs().max())
+        exhausted.append(sum(h == 4 for h in est.history.extras["halvings"]))
+    # the scene is brighter in some tiles: without overlap its gradient
+    # leaks into m (measured ≈ 0.10); with it, ≈ 0.026
+    assert errors[1] < 0.5 * errors[0]
+    assert errors[1] < 0.05
+    # this scene breaks the one-class model (its mean depends on the
+    # position): the fit is not quite monotone with or without overlap
+    # (the class step is not halved; worst decrease measured ≈ 9e-4 of
+    # the bound without overlap, ≈ 3e-3 with it, recovered at the next
+    # iteration), and exhausts its halvings as often either way
+    assert drops[1] < 5e-3
+    assert exhausted[1] <= exhausted[0] + 1

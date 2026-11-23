@@ -16,6 +16,21 @@ Estimators of the flat field, dark field and per-frame baseline, and the correct
         - GammaMixture
         - IlluminationFunction
 
+### Overlapping tiles
+
+Integer tile positions for [`GammaMixture`][optix.shading.GammaMixture]
+(`overlap=`): voxels seen by two overlapping tiles constrain the flat field.
+
+::: optix.shading.mix
+    options:
+      heading_level: 4
+      show_root_heading: false
+      show_root_toc_entry: false
+      members:
+        - TileOverlap
+        - tile_pairs
+        - overlap_slices
+
 ## Transforms
 
 ::: optix.shading
