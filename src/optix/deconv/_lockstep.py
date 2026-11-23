@@ -207,7 +207,7 @@ class _Image:
         sums = _Sums()
         for chunk, geo in zip(self.loaded, self.geos, strict=True):
             blk = self.prepare(chunk)
-            op, valid, inv = self.operator(tuple(blk.data.shape))
+            op, valid, inv = self.operator(chunk, tuple(blk.data.shape))
             xn = None
             if n == 0:
                 f = torch.zeros_like(inv).masked_fill_(valid, self.start)
@@ -271,6 +271,7 @@ def lockstep(
     damping: float,
     memory: int,
     backend: dict,
+    operator: Callable | None = None,
 ) -> list[dict]:
     """Biggs–Andrews iterations with one α per image and iteration.
 
@@ -292,6 +293,12 @@ def lockstep(
         Budget in bytes above which the iterates are kept on disk.
     backend : dict
         Working dtype and device.
+    operator : callable, optional
+        `operator(chunk, shape)` builds the blur operator of a loaded
+        block (e.g. of a shift-variant PSF, which depends on the block's
+        position); it is rebuilt at every pass. Default: one
+        [`PaddedConvolution`][optix.deconv.utils.PaddedConvolution] of
+        `psf` per block shape.
 
     Returns
     -------
@@ -306,14 +313,18 @@ def lockstep(
     limit = max_iter if n_iter is None else n_iter
     ops: dict[tuple[int, ...], tuple] = {}
 
-    def operator(shape: tuple[int, ...]) -> tuple:
+    def normalised(op: PaddedConvolution) -> tuple:
+        norm = op.norm
+        valid = norm > norm.max() * torch.finfo(norm.dtype).eps * 16
+        tiny = torch.finfo(norm.dtype).tiny
+        inv = torch.where(valid, 1 / norm.clamp(min=tiny), 0)
+        return op, valid, inv
+
+    def build(chunk: Chunk, shape: tuple[int, ...]) -> tuple:
+        if operator is not None:
+            return normalised(operator(chunk, shape))
         if shape not in ops:
-            op = PaddedConvolution(psf, shape)
-            norm = op.norm
-            valid = norm > norm.max() * torch.finfo(norm.dtype).eps * 16
-            tiny = torch.finfo(norm.dtype).tiny
-            inv = torch.where(valid, 1 / norm.clamp(min=tiny), 0)
-            ops[shape] = (op, valid, inv)
+            ops[shape] = normalised(PaddedConvolution(psf, shape))
         return ops[shape]
 
     reports = []
@@ -328,7 +339,7 @@ def lockstep(
                     for _, handle, region in parts
                 ],
                 prepare=prepare,
-                operator=operator,
+                operator=build,
                 state=state,
                 chi2=n_iter is None,
                 damping=damping,

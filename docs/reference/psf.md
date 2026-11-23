@@ -21,6 +21,7 @@
         - bead_psf
         - lightsheet_psf
         - gaussian_sheet
+        - gibson_lanni
 
 ## Utilities
 
@@ -44,3 +45,5 @@
         - rayleigh_range
         - beam_radius
         - sheet_intensity
+        - gibson_lanni_opd
+        - gibson_lanni_profile
