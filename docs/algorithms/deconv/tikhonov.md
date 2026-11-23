@@ -1,11 +1,11 @@
 # Tikhonov
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Gaussian (least squares) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Gonzalez and Woods, *Digital Image Processing*; Bertero and Boccacci, *Introduction to Inverse Problems in Imaging*, 1998 (textbooks, no DOI)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Gaussian (least squares)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Gonzalez and Woods, *Digital Image Processing*; Bertero and Boccacci, *Introduction to Inverse Problems in Imaging*, 1998 (textbooks, no DOI)
 
 ## Overview
 
@@ -38,13 +38,14 @@ blur $\mathbf{A}$ by a known PSF $\mathbf{h}$ of unit sum, plus additive noise
     g = A f + w
     $$
 
-| optix | Bertero & Boccacci 1998 |
-|---|---|
-| $\mathbf{y}$ (recorded image) | $g$ |
-| $\mathbf{x}$ (latent image) | $f$ |
-| $\mathbf{A}$ (blur), $\hat{h}$ (OTF) | $A$, $\hat{K}$ |
-| $\boldsymbol{\varepsilon}$ (noise) | $w$ |
-| $\lambda$ | $\mu$ |
+| optix | Bertero & Boccacci 1998 | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$ | $g$ | recorded image ($P$ pixels) | $\mathbb{R}^P$, per image |
+| $\mathbf{x}$ | $f$ | latent (sharp) image | $\mathbb{R}^P$, per image |
+| $\mathbf{A}$ | $A$ | convolution by the PSF | $\mathbb{R}^{P\times P}$, one per group |
+| $\hat{h}$ | $\hat{K}$ | OTF | scalar per frequency, one per group |
+| $\boldsymbol{\varepsilon}$ | $w$ | additive noise | $\mathbb{R}^P$, per image |
+| $\lambda$ | $\mu$ | regularisation weight | scalar, whole stack |
 
 The book's $f$ is the object, not the optix flat field. The class docstring
 writes $y = Hf + n$ with $S$ the PSF and $\lambda$ the weight.
@@ -62,10 +63,15 @@ $$
 \lVert \mathbf{y} - \mathbf{A}\mathbf{x} \rVert^2 + \lambda \lVert \mathbf{L}\mathbf{x} \rVert^2 ,
 $$
 
-with $\mathbf{L}$ the identity or the discrete Laplacian (the $2d+1$-point
-stencil), equivalently the MAP estimate under a Gaussian likelihood and a
-Gaussian prior $\mathbf{x} \sim \mathcal{N}(\mathbf{0}, (\lambda\mathbf{L}^\top\mathbf{L})^{-1})$
-(up to the noise variance). No non-negativity is imposed.
+with $\mathbf{L} \in \mathbb{R}^{P\times P}$ the identity or the discrete
+Laplacian (the $2d+1$-point stencil, $d$ the number of spatial axes).
+Statistically, this is the MAP estimate (here also the posterior mean) under
+the Gaussian likelihood
+$\mathbf{y} \mid \mathbf{x} \sim \mathcal{N}(\mathbf{A}\mathbf{x}, \sigma^2\mathbf{I})$
+and the Gaussian prior
+$\mathbf{x} \sim \mathcal{N}\bigl(\mathbf{0}, \sigma^2(\lambda\mathbf{L}^\top\mathbf{L})^{-1}\bigr)$
+(improper along the constant image for the Laplacian), that is ridge
+regression with penalty $\mathbf{L}$. No non-negativity is imposed.
 
 ## Inference / derivation
 
@@ -94,13 +100,13 @@ decouple over frequencies and are solved in one step:
     \hat{f}_\mu(\omega) = \frac{\hat{K}^*(\omega)}{|\hat{K}(\omega)|^2 + \mu\, |\hat{P}(\omega)|^2}\, \hat{g}(\omega).
     $$
 
-| optix | Bertero & Boccacci 1998 |
-|---|---|
-| $\hat{\mathbf{x}}$, $\hat{\mathbf{y}}$ | $\hat{f}_\mu$, $\hat{g}$ |
-| $\hat{h}$ | $\hat{K}$ |
-| $\lambda$ (`lam`) | $\mu$ |
-| $\hat{l}$ (transfer function of $\mathbf{L}$) | $\hat{P}$ |
-| $\boldsymbol{\nu}$ | $\omega$ |
+| optix | Bertero & Boccacci 1998 | Meaning | Shape |
+|---|---|---|---|
+| $\hat{\mathbf{x}}$, $\hat{\mathbf{y}}$ | $\hat{f}_\mu$, $\hat{g}$ | Fourier transforms of estimate and data | $\mathbb{C}^P$, per image |
+| $\hat{h}$ | $\hat{K}$ | OTF | scalar per frequency, one per group |
+| $\lambda$ (`lam`) | $\mu$ | regularisation weight | scalar, whole stack |
+| $\hat{l}$ | $\hat{P}$ | transfer function of $\mathbf{L}$ | scalar per frequency |
+| $\boldsymbol{\nu}$ | $\omega$ | spatial frequency, cycles per pixel | one per spatial axis |
 
 $\lambda \to 0$ gives the inverse filter; larger $\lambda$ trades resolution
 for noise. With the Laplacian, the mean of the image ($\boldsymbol{\nu} = 0$)
@@ -119,19 +125,29 @@ $$
 summed over all blocks and images, is minimised over a grid of $\lambda$ from
 $10^{-10}$ to $10^{2}$, four values per decade. GCV estimates the
 prediction error without knowing the noise level; a choice at an end of the
-grid is flagged with a warning.
+grid is flagged with a warning. Here $n$ is the total number of pixels
+summed over. In Bayesian terms, GCV is an empirical (data-driven) choice of
+the prior precision $\lambda$, an alternative to empirical Bayes, which would
+maximise the marginal likelihood of $\mathbf{y}$ over $\lambda$ and $\sigma^2$.
 
 ## Algorithm
 
-```text
-Input: data Y, PSF h (unit sum), lam = 0.01, operator = "identity", boundary = "taper"
-If lam = "gcv": scan λ on 10⁻¹⁰ … 10² (49 values), keep the minimiser of V(λ)
-For each block (core + halo ≥ PSF size, default twice):
-    extend the block smoothly to an FFT grid (taper), or not (periodic)
-    R(ν) = ĥ*(ν) / (|ĥ(ν)|² + λ |l̂(ν)|²)
-    x = IFFT(R · FFT(y)), cropped to the core
-Return x; the λ used is in `strength`
-```
+**Input:** images $\mathbf{y} \in \mathbb{R}^P$; PSF $\mathbf{h}$ of unit sum;
+`lam` $\lambda = 0.01$; `operator = "identity"`; `boundary = "taper"` \
+**Output:** the deconvolved images $\hat{\mathbf{x}} \in \mathbb{R}^P$; the
+$\lambda$ used, in `strength`.
+
+1. **Choose $\lambda$** (only with `lam="gcv"`): evaluate $V(\lambda)$ on 49
+   values from $10^{-10}$ to $10^{2}$ and keep the minimiser.
+2. **Split** each image into blocks, each a core plus a halo of at least the
+   PSF size (default twice).
+3. **For each block:**
+    1. **extend** it smoothly to an FFT grid (`"taper"`), or keep it as is
+       (`"periodic"`);
+    2. **filter**:
+       $\hat{\mathbf{x}}(\boldsymbol{\nu}) = \dfrac{\hat{h}^*(\boldsymbol{\nu})}{\lvert\hat{h}(\boldsymbol{\nu})\rvert^2 + \lambda\lvert\hat{l}(\boldsymbol{\nu})\rvert^2}\,\hat{\mathbf{y}}(\boldsymbol{\nu})$;
+    3. **invert** the FFT and keep the core.
+4. **Return** the assembled $\hat{\mathbf{x}}$.
 
 ## Faithful mode and extensions
 

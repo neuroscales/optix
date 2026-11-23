@@ -1,11 +1,11 @@
 # Wiener
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Gaussian (additive, stationary) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Gonzalez and Woods, *Digital Image Processing*; Bertero and Boccacci, *Introduction to Inverse Problems in Imaging*, 1998 (textbooks, no DOI)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Gaussian (additive, stationary)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Gonzalez and Woods, *Digital Image Processing*; Bertero and Boccacci, *Introduction to Inverse Problems in Imaging*, 1998 (textbooks, no DOI)
 
 ## Overview
 
@@ -24,7 +24,10 @@ projector.
 
 A linear, shift-invariant blur $\mathbf{A}$ by a known PSF $\mathbf{h}$ of unit
 sum (so $|\hat{h}(\boldsymbol{\nu})| \le 1$ and $\hat{h}(\mathbf{0}) = 1$), plus
-additive noise (see [Image formation and noise](../../concepts/image-formation.md)):
+additive noise (see [Image formation and noise](../../concepts/image-formation.md)).
+One image (or one block of it) of $P$ pixels is a vector
+$\mathbf{y} \in \mathbb{R}^P$, and the blur a matrix
+$\mathbf{A} \in \mathbb{R}^{P\times P}$:
 
 === "optix"
 
@@ -39,14 +42,15 @@ additive noise (see [Image formation and noise](../../concepts/image-formation.m
     g = H f + \eta = h * f + \eta
     $$
 
-| optix | Gonzalez & Woods |
-|---|---|
-| $\mathbf{y}$ (recorded image) | $g$ |
-| $\mathbf{x}$ (latent image) | $f$ |
-| $\mathbf{h}$, $\mathbf{A}$ (PSF, blur) | $h$, $H$ |
-| $\boldsymbol{\varepsilon}$ (noise) | $\eta$ |
-| $\hat{h}(\boldsymbol{\nu})$ (OTF) | $H(u, v)$ |
-| $\boldsymbol{\nu}$ (frequency, cycles per pixel) | $(u, v)$ |
+| optix | Gonzalez & Woods | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$ | $g$ | recorded image | $\mathbb{R}^P$, per image |
+| $\mathbf{x}$ | $f$ | latent (sharp) image | $\mathbb{R}^P$, per image |
+| $\mathbf{h}$ | $h$ | PSF, unit sum | kernel, one per group |
+| $\mathbf{A}$ | $H$ | convolution by $\mathbf{h}$ | $\mathbb{R}^{P\times P}$, one per group |
+| $\boldsymbol{\varepsilon}$ | $\eta$ | additive noise | $\mathbb{R}^P$, per image |
+| $\hat{h}(\boldsymbol{\nu})$ | $H(u, v)$ | OTF, Fourier transform of the PSF | scalar per frequency, one per group |
+| $\boldsymbol{\nu}$ | $(u, v)$ | spatial frequency, cycles per pixel | one per spatial axis |
 
 The textbooks' $f$ is the object, not the optix flat field. The class
 docstring writes $y = Hf + n$ with $S$ the PSF.
@@ -83,11 +87,21 @@ least-squares problem, solved in closed form:
     \hat{F}(u, v) = \frac{H^*(u, v)}{|H(u, v)|^2 + S_\eta(u, v) / S_f(u, v)}\, G(u, v).
     $$
 
-| optix | Gonzalez & Woods |
-|---|---|
-| $\hat{\mathbf{x}}(\boldsymbol{\nu})$, $\hat{\mathbf{y}}(\boldsymbol{\nu})$ | $\hat{F}(u, v)$, $G(u, v)$ |
-| $S_x$, $S_\varepsilon$ | $S_f$, $S_\eta$ |
-| $K$ (`nsr`) | $S_\eta / S_f$ (often a constant $K$) |
+| optix | Gonzalez & Woods | Meaning | Shape |
+|---|---|---|---|
+| $\hat{\mathbf{x}}(\boldsymbol{\nu})$, $\hat{\mathbf{y}}(\boldsymbol{\nu})$ | $\hat{F}(u, v)$, $G(u, v)$ | Fourier transforms of estimate and data | $\mathbb{C}^P$, per image |
+| $S_x$, $S_\varepsilon$ | $S_f$, $S_\eta$ | power spectra of object and noise | scalar per frequency, whole stack |
+| $K$ (`nsr`) | $S_\eta / S_f$ (often a constant $K$) | noise-to-signal ratio | scalar, or per frequency; whole stack |
+
+In statistical terms this is the linear minimum-mean-squared-error estimator. When object and noise are Gaussian,
+$\mathbf{x} \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_x)$ and
+$\boldsymbol{\varepsilon} \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\Sigma}_\varepsilon)$
+with circulant covariances $\boldsymbol{\Sigma}_x, \boldsymbol{\Sigma}_\varepsilon \in \mathbb{R}^{P\times P}$
+(diagonalised by the FFT, eigenvalues $S_x$ and $S_\varepsilon$), it is also
+the posterior mean, and the MAP estimate, of $\mathbf{x}$ given $\mathbf{y}$.
+A constant $K$ is the MAP estimate under white noise of variance $\sigma^2$
+and a white Gaussian prior of variance
+$\sigma^2/K$, which is [Tikhonov](tikhonov.md) with $\lambda = K$.
 
 The power spectra are rarely known, so $K$ is in practice a constant
 noise-to-signal ratio tuned by hand (`nsr`), or a function of frequency given
@@ -105,14 +119,19 @@ inverts a circular blur on a single block.
 
 ## Algorithm
 
-```text
-Input: data Y, PSF h (unit sum), nsr = 0.01, boundary = "taper"
-For each block (core + halo ≥ PSF size, default twice):
-    extend the block smoothly to an FFT grid (taper), or not (periodic)
-    R(ν) = ĥ*(ν) / (|ĥ(ν)|² + K(ν))
-    x = IFFT(R · FFT(y)), cropped to the core
-Return x
-```
+**Input:** images $\mathbf{y} \in \mathbb{R}^P$; PSF $\mathbf{h}$ of unit sum;
+`nsr` $K = 0.01$; `boundary = "taper"` \
+**Output:** the deconvolved images $\hat{\mathbf{x}} \in \mathbb{R}^P$.
+
+1. **Split** each image into blocks, each a core plus a halo of at least the
+   PSF size (default twice).
+2. **For each block:**
+    1. **extend** it smoothly to an FFT grid (`"taper"`), or keep it as is
+       (`"periodic"`);
+    2. **filter**:
+       $\hat{\mathbf{x}}(\boldsymbol{\nu}) = \dfrac{\hat{h}^*(\boldsymbol{\nu})}{\lvert\hat{h}(\boldsymbol{\nu})\rvert^2 + K(\boldsymbol{\nu})}\,\hat{\mathbf{y}}(\boldsymbol{\nu})$;
+    3. **invert** the FFT and keep the core.
+3. **Return** the assembled $\hat{\mathbf{x}}$.
 
 ## Faithful mode and extensions
 

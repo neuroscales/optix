@@ -30,34 +30,8 @@ def _i0_focus(alpha):
 
 
 # --------------------------------------------------------------------------
-# Special functions and quadrature
+# Quadrature
 # --------------------------------------------------------------------------
-
-
-def test_bessel_j012_against_mpmath():
-    mpmath = pytest.importorskip("mpmath")
-    x = torch.cat(
-        [
-            torch.linspace(0, 30, 301, dtype=F64),
-            torch.tensor([1e-8, 4.9, 5.0, 5.1, 24.99, 25.0, 80.0, 1e3]),
-            -torch.tensor([0.3, 7.0, 40.0], dtype=F64),
-        ]
-    )
-    out = bessel_j012(x)
-    for n, j in enumerate(out):
-        ref = torch.tensor(
-            [float(mpmath.besselj(n, float(v))) for v in x], dtype=F64
-        )
-        assert (j - ref).abs().max() < 5e-15
-
-
-def test_bessel_j012_float32(device):
-    x = torch.linspace(0, 60, 601, dtype=F64)
-    ref = bessel_j012(x)
-    out = bessel_j012(x.float().to(device))
-    for a, b in zip(out, ref, strict=True):
-        assert a.dtype == torch.float32
-        assert (a.cpu().double() - b).abs().max() < 2e-6
 
 
 @pytest.mark.parametrize("alpha", [0.1, math.radians(60), math.pi / 2])

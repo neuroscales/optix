@@ -3,12 +3,11 @@
 import math
 from collections.abc import Callable, Sequence
 
-import numpy as np
 import torch
 from torch import Tensor
 
 from .._config import get_config, resolve_backend
-from ..special import bessel_j012
+from ..special import bessel_j012, gauss_legendre
 
 __all__ = [
     "richards_wolf",
@@ -39,17 +38,6 @@ PupilPhase = Callable[[Tensor], Tensor]
 # --------------------------------------------------------------------------
 # Quadrature
 # --------------------------------------------------------------------------
-
-
-def _gauss_legendre(
-    n: int, lower: float, upper: float, backend: dict
-) -> tuple[Tensor, Tensor]:
-    """Gauss-Legendre nodes and weights on [lower, upper]."""
-    x, w = np.polynomial.legendre.leggauss(n)
-    half = 0.5 * (upper - lower)
-    nodes = torch.as_tensor(lower + half * (x + 1), dtype=torch.float64)
-    weights = torch.as_tensor(half * w, dtype=torch.float64)
-    return nodes.to(**backend), weights.to(**backend)
 
 
 def _eval_phase(pupil_phase: PupilPhase, theta: Tensor) -> Tensor:
@@ -130,7 +118,10 @@ def _pupil(
     Gauss-Legendre converges exponentially up to α = 90°.
     """
     lower = math.sqrt(max(math.cos(aperture), 0.0))
-    s, w = _gauss_legendre(nodes, lower, 1.0, backend)
+    x, w = gauss_legendre(nodes, dtype=torch.float64)  # on [−1, 1]
+    half = 0.5 * (1.0 - lower)
+    s = (lower + half * (x + 1)).to(**backend)
+    w = (half * w).to(**backend)
     cos = s * s
     sin = torch.sqrt((1 - cos * cos).clamp_min(0))
     base = 2 * cos * w

@@ -2,6 +2,7 @@
 nav = [
   {"Home" = "index.md"},
   {"Getting started" = [
+    "getting-started/index.md",
     "getting-started/installation.md",
     "getting-started/quick-tour.md",
   ]},
@@ -45,11 +46,13 @@ nav = [
     ]},
     {"Point-spread function" = [
       "algorithms/psf/bead-psf.md",
+      "algorithms/psf/gibson-lanni.md",
       "algorithms/psf/richards-wolf.md",
     ]},
     "algorithms/_template.md",
   ]},
   {"Contributing" = [
+    "contributing/index.md",
     "contributing/style.md",
   ]},
   {"API reference" = [
@@ -91,6 +94,7 @@ extra_javascript = [
 [project.theme]
 features = [
   "content.code.copy",
+  "content.tabs.link",
   "navigation.indexes",
 ]
 
@@ -116,6 +120,7 @@ toggle.icon = "lucide/moon"
 toggle.name = "Switch to system preference"
 
 [project.theme.icon]
+logo = "fontawesome/solid/microscope"
 repo = "fontawesome/brands/github"
 
 [project.plugins.mkdocstrings.handlers.python]

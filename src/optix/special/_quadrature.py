@@ -1,5 +1,6 @@
-"""Gauss-Hermite quadrature."""
+"""Gauss-Hermite and Gauss-Legendre quadrature."""
 
+import functools
 import math
 
 import torch
@@ -71,3 +72,85 @@ def gauss_hermite(
         logscale = logscale + scale.log()
     logw = -math.log(n) - 2 * (cur.abs().log() + logscale)
     return nodes.to(**backend), logw.to(**backend)
+
+
+def _legendre_pair(n: int, x: Tensor) -> tuple[Tensor, Tensor]:
+    """Pₙ₋₁(x) and Pₙ(x) by the three-term recurrence (n ≥ 1)."""
+    p0, p1 = torch.ones_like(x), x.clone()
+    for j in range(2, n + 1):
+        p0, p1 = p1, ((2 * j - 1) * x * p1 - (j - 1) * p0) / j
+    return p0, p1
+
+
+@functools.lru_cache(maxsize=32)
+def _gauss_legendre(n: int) -> tuple[Tensor, Tensor]:
+    k = torch.arange(1, n + 1, dtype=torch.float64)
+    x = torch.cos(math.pi * (k - 0.25) / (n + 0.5))
+    for _ in range(100):
+        p0, p1 = _legendre_pair(n, x)
+        dx = p1 * (x * x - 1) / (n * (x * p1 - p0))  # Pₙ / Pₙ′
+        x = x - dx
+        if float(dx.abs().max()) < 1e-15:
+            break
+    p0, p1 = _legendre_pair(n, x)
+    dp = n * (x * p1 - p0) / (x * x - 1)
+    w = 2 / ((1 - x * x) * dp * dp)
+    return x.flip(0), w.flip(0)
+
+
+def gauss_legendre(
+    n: int,
+    *,
+    dtype: torch.dtype | str | None = None,
+    device: torch.device | str | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Gauss-Legendre nodes and weights on [−1, 1].
+
+    The nodes are the roots of the Legendre polynomial Pₙ, found by
+    Newton's method from xᵢ ≈ cos(π (i − ¼) / (n + ½)), with Pₙ and Pₙ₋₁
+    evaluated by the three-term recurrence; the weights are
+    wᵢ = 2 / ((1 − xᵢ²) Pₙ′(xᵢ)²). This costs O(n²) operations, against
+    O(n³) for the eigenvalues of the Jacobi matrix. Everything runs in
+    float64 on the CPU (results are cached by `n`); copies are then cast
+    and moved, so the caller may modify them in place.
+
+    !!! note
+        `sum(weights * f(nodes))` ≈ ∫₋₁¹ f(x) dx, exactly for polynomials
+        of degree ≤ 2n − 1.
+
+    !!! references "References"
+
+        1. Abramowitz M, Stegun IA. *Handbook of Mathematical Functions*,
+           formula 25.4.29. National Bureau of Standards, 1964.
+
+        ??? quote "BibTeX"
+
+            ```bibtex
+            @book{abramowitz1964handbook,
+              author    = {Abramowitz, Milton and Stegun, Irene A.},
+              title     = {Handbook of Mathematical Functions},
+              publisher = {National Bureau of Standards},
+              year      = {1964}
+            }
+            ```
+
+    Parameters
+    ----------
+    n : int
+        Number of nodes (≥ 1).
+    dtype, device : optional
+        Output dtype and device (default: from the configuration).
+
+    Returns
+    -------
+    nodes : (n,) Tensor
+        Quadrature nodes, increasing.
+    weights : (n,) Tensor
+        Quadrature weights.
+    """
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}")
+    backend = resolve_backend(dtype, device)
+    x, w = _gauss_legendre(int(n))
+    # copies: the cached tensors must not reach the caller
+    return x.to(**backend, copy=True), w.to(**backend, copy=True)
