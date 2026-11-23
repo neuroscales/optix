@@ -68,39 +68,40 @@ class BaSiC(Estimator):
     Image formation for frame i of a group (one flat and dark field per
     group, shared by its samples):
 
-        I_i(x) = S(x) (B_i + F_i(x)) + D(x)
+        yᵢ = f ⊙ (xᵢ + bᵢ) + d
 
-    with a smooth flat field S (mean 1), a smooth dark field D, a
-    spatially constant baseline B_i (time-lapse data) and the foreground
-    F_i. The corrected frame is
+    with a smooth flat field f (mean 1), a smooth dark field d, a
+    spatially constant baseline bᵢ (time-lapse data) and the latent
+    image xᵢ. The corrected frame is
 
-        Î_i = (I_i − D) / S − B_i + B_norm
+        x̂ᵢ = (yᵢ − d) / f − bᵢ + b_{norm}
 
-    where B_norm is an arbitrary background: 0 removes the background
-    (fluorescence), mean_i B_i keeps the raw intensity range (bright
-    field).
+    where b_{norm} is an arbitrary background: 0 removes the background
+    (fluorescence), meanᵢ bᵢ keeps the raw intensity range (bright
+    field). (Peng et al. 2017: I = y, S = f, D = d, Bᵢ = bᵢ, F = x,
+    I_B = L, I_R = E.)
 
     **Flat and dark field.** The fitting frames, sorted at each pixel
     over the frames and resized to the working size (128 × 128), form the
-    measurement matrix I (one column per sorted frame). BaSiC decomposes
-    it into a low-rank part I_B = B ⊙ S ⊕ Z, with
-    Z = D_Z (1 − S) + D_R, and a sparse residual I_R:
+    measurement matrix Y (one column per sorted frame). BaSiC decomposes
+    it into a low-rank part L = f bᵀ + z, with
+    z = d_Z (1 − f) + d_R, and a sparse residual E:
 
-        min  ‖W ∘ I_R‖₁ + λ_S ‖𝓕(S)‖₁ + λ_D ‖𝓕(D_R)‖₁ + λ_D ‖D_R‖₁
-        s.t. I = I_B + I_R,  D_Z ∈ [0, min I]
+        min  ‖W ⊙ E‖₁ + λ_f ‖𝓕(f)‖₁ + λ_d ‖𝓕(d_R)‖₁ + λ_d ‖d_R‖₁
+        s.t. Y = L + E,  d_Z ∈ [0, min Y]
 
     with 𝓕 the orthonormal 2-D DCT. The problem is solved by the
     linearised augmented Lagrangian method (LADM), with reweighted-L1
-    weights W = 1 / (|I_R / I_B| + ε), scaled to mean 1. The default
+    weights W = 1 / (|E / L| + ε), scaled to mean 1. The default
     regularisation is
-    λ_S = ‖𝓕(Ī)‖₁ / 800 and λ_D = ‖𝓕(Ī)‖₁ / 2000, with Ī the per-pixel
+    λ_f = ‖𝓕(ȳ)‖₁ / 800 and λ_d = ‖𝓕(ȳ)‖₁ / 2000, with ȳ the per-pixel
     mean frame divided by its mean. The fields are resized back
-    (bilinear) to the image size; D = D_Z + D_R.
+    (bilinear) to the image size; d = d_Z + d_R.
 
-    **Baseline** (`timelapse=True`). After sorting, the fitted B_i belong
-    to the sorted frames, so B_i is estimated in a second step on every
-    unsorted frame (at the working size) with S and D fixed:
-    min_B ‖W ∘ (I_i − B_i S − D)‖₁, reweighted as above.
+    **Baseline** (`timelapse=True`). After sorting, the fitted bᵢ belong
+    to the sorted frames, so bᵢ is estimated in a second step on every
+    unsorted frame (at the working size) with f and d fixed:
+    min_b ‖W ⊙ (yᵢ − bᵢ f − d)‖₁, reweighted as above.
 
     Attributes
     ----------
@@ -131,8 +132,8 @@ class BaSiC(Estimator):
     strip.
 
     !!! note "Implementation choices"
-        The inner LADM loop stops when ‖I − I_B − I_R‖_F / ‖I‖_F < `tol`
-        or after `max_iterations`. The penalty starts at μ₀ = 12.5 / ‖I‖₂
+        The inner LADM loop stops when ‖Y − L − E‖_F / ‖Y‖_F < `tol`
+        or after `max_iterations`. The penalty starts at μ₀ = 12.5 / ‖Y‖₂
         and grows by ρ = 1.5, capped at 10⁷ μ₀ to stay finite. Images are
         resized by bilinear interpolation with anti-aliasing, after
         sorting. The baseline step solves each reweighted problem exactly
@@ -146,7 +147,7 @@ class BaSiC(Estimator):
           Supplementary Note 4 are taken to assume
           (`normalize_weights=False` uses Eq. (9) as printed).
         - The regions "S ≥ 1" and "S < 1" of the dark-field update are
-          read as S ≥ mean(S) and S < mean(S), S being unnormalised
+          read as f ≥ mean(f) and f < mean(f), f being unnormalised
           there.
         - The frames are sorted at full resolution and then resized to
           the working size.
@@ -157,9 +158,9 @@ class BaSiC(Estimator):
       then holds the fitted baselines.
     - `variant="basicpy"`: the solver of BaSiCPy 2.0.0
       (`fitting_mode="approximate"`): weights divided by the frame mean
-      of I_B and normalised to mean 1, B_i clipped at 0, S started at 1,
-      the dark field fitted on the frames with B_i < 1 with a 10× smaller
-      threshold, and λ_D = λ_S / 10 by default. With
+      of L and normalised to mean 1, bᵢ clipped at 0, f started at 1,
+      the dark field fitted on the frames with bᵢ < 1 with a 10× smaller
+      threshold, and λ_d = λ_f / 10 by default. With
       `sort_intensity=False` and `reweight_tol=1e-2` it reproduces
       BaSiCPy.
     - `baseline_method="basicpy"`: BaSiCPy's `fit_only_baseline`, a
@@ -251,23 +252,23 @@ class BaSiC(Estimator):
             Size the frames are resized to for fitting (None: no
             resizing). Default 128.
         darkfield : bool
-            Also estimate the dark field D.
+            Also estimate the dark field d.
         timelapse : bool
             Estimate (in [`fit`][optix.Estimator.fit]) and remove (in
-            [`apply`][optix.Estimator.apply]) the per-frame baseline B_i.
+            [`apply`][optix.Estimator.apply]) the per-frame baseline bᵢ.
         lambda_flat, lambda_dark : float, optional
-            λ_S and λ_D, the weights of the DCT sparsity of S and of D_R.
+            λ_f and λ_d, the weights of the DCT sparsity of f and of d_R.
             Default: derived from the data, per group.
         epsilon : float
             ε of the reweighting. Default 0.1.
         tol, max_iterations : float, int
-            Inner stop: ‖I − I_B − I_R‖_F / ‖I‖_F < `tol`. Defaults 10⁻³
+            Inner stop: ‖Y − L − E‖_F / ‖Y‖_F < `tol`. Defaults 10⁻³
             and 500.
         max_reweight, reweight_tol : int, float
-            Reweighting stop: relative L1 change of S (and of D) below
+            Reweighting stop: relative L1 change of f (and of d) below
             `reweight_tol`, or `max_reweight` steps. Defaults 10 and 10⁻³.
         mu_coef, rho, max_mu_coef : float
-            Penalty schedule: μ₀ = `mu_coef` / ‖I‖₂ and
+            Penalty schedule: μ₀ = `mu_coef` / ‖Y‖₂ and
             μ ← min(ρ μ, `max_mu_coef` μ₀).
         max_frames : int or None
             Number of fitting frames per group (None: all). Default 512.
@@ -287,7 +288,7 @@ class BaSiC(Estimator):
         sort_intensity : bool
             Sort each pixel over the fitting frames before the fit.
         baseline_norm : float or "mean"
-            Background B_norm added back by
+            Background b_{norm} added back by
             [`apply`][optix.Estimator.apply] with `timelapse` ("mean":
             the mean fitted baseline of the group), in the units of the
             baseline. Default 0.

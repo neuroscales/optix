@@ -1,4 +1,4 @@
-"""Shading model: smooth flat field, dark image and per-frame baseline."""
+"""Shading model: smooth flat field, dark field and per-frame baseline."""
 
 from collections.abc import Sequence
 
@@ -38,7 +38,7 @@ def random_shading(
     strength : float
         Standard deviation of the log flat field.
     dark : float
-        Value of the (constant) dark image, ADU.
+        Value of the (constant) dark field, ADU.
     seed : int, optional
     dtype, device : optional
         Working backend.

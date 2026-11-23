@@ -116,7 +116,7 @@ def _odd_pad(x: Tensor, r: int, dim: int) -> Tensor:
 
 
 def normalized_log(v: Tensor, sigma: float) -> Tensor:
-    """Scale-normalised Laplacian of Gaussian σ² ∇²G_σ ∗ v of a 2-D map.
+    """Scale-normalised Laplacian of Gaussian σ² ∇²G_σ ∗ f of a 2-D map.
 
     Separable, the borders extended by point reflection: constant and
     linear maps give 0.
@@ -195,64 +195,65 @@ class CIDRE(Estimator):
 
     CIDRE (corrected intensity distributions using regularised energy
     minimisation) estimates, from many images acquired under the same
-    conditions, the illumination gain v and the additive zero-light
-    term z of
+    conditions, the illumination gain f and the additive zero-light
+    term d of
 
-        I_o(x) = I(x) v(x) + z(x)                            (1)
+        y(r) = f(r) x(r) + d(r)                                (1)
 
     It assumes that objects appear anywhere with equal probability, so
-    that the sorted intensities q(x) at every location are a linear
+    that the sorted intensities q(r) at every location are a linear
     transform of a distribution common to all locations:
 
-        q(x) = v(x) Q + b(x),   b(x) = z(x) − v(x) Z_Q       (7, 8)
+        q(r) = f(r) Q + c(r),   c(r) = d(r) − f(r) Z_Q       (7, 8)
 
-    with Z_Q the zero-light point.
+    with Z_Q the zero-light point. (Smith et al. 2015: I_o = y, I = x,
+    v = f, z = d, b = c, location x = r.)
 
     **Target distribution** (Eqs. 5-6). Q is the robust mean of the
-    q(x) whose mean q̄(x) lies in the central band
-    [ρ_{½−ω}, ρ_{½+ω}] of {q̄(x)}, ρ_u being the u-th quantile over the
+    q(r) whose mean q̄(r) lies in the central band
+    [ρ_{½−ω}, ρ_{½+ω}] of {q̄(r)}, ρ_u being the u-th quantile over the
     locations.
 
-    **Energy** (Eq. 9). v, b and the zero-light point (Z_Q, Z_q)
+    **Energy** (Eq. 9). f, c and the zero-light point (Z_Q, Z_q)
     minimise
 
-        E = E_f + λ_r E_r + λ_z E_z + λ_b E_b
+        E = E_f + λᵣ Eᵣ + λ_z E_z + λ_b E_b
 
     with
 
-    - E_f = ∑_x ∑_n (w²/2) log(1 + ((Q_n v(x) + b(x) − q_n(x)) / w)²),
+    - E_f = ∑_r ∑ₙ (w²/2) log(1 + ((Qₙ f(r) + c(r) − qₙ(r)) / w)²),
       a Cauchy fit of the K sorted values (Eq. 10);
-    - E_r = ∑_{t∈T} ∑_{i,j} ((1/|T|) t² ∇²G_t ∗ v(i, j))², the
-      scale-normalised Laplacian of Gaussian of v (Eq. 11), t being the
+    - Eᵣ = ∑_{t∈T} ∑_{i,j} ((1/|T|) t² ∇²Gₜ ∗ f(i, j))², the
+      scale-normalised Laplacian of Gaussian of f (Eq. 11), t being the
       standard deviation of the Gaussian;
-    - E_z = ∑_x (v(x) Z_Q + b(x) − Z_q)², which pulls every regression
+    - E_z = ∑_r (f(r) Z_Q + c(r) − Z_q)², which pulls every regression
       line through the zero-light point (Eq. 12);
     - E_b = β(Z_Q) + β(Z_q), with β zero on [α₁, α₂] and
       ((x − α)/w_b)² outside (Eqs. 13-14). By default α₁ = 0 and
-      α₂ = min q(x), the smallest value of the data.
+      α₂ = min q(r), the smallest value of the data.
 
-    The default λ_z is 0.5 and λ_r goes linearly from 9.5 for one image
+    The default λ_z is 0.5 and λᵣ goes linearly from 9.5 for one image
     to 6 for 200 images, and is 6 beyond. E is minimised by L-BFGS in
-    the pivot space (Eqs. 19-20), where Q and q(x) are shifted by their
-    medians; then z = b + v Z_Q (Eq. 7).
+    the pivot space (Eqs. 19-20), where Q and q(r) are shifted by their
+    medians; then d = c + f Z_Q (Eq. 7).
 
     **Correction.** [`apply`][optix.shading.CIDRE.apply] reverses Eq. 1
-    and, by default, rescales the result by the mean gain v̄ ("dynamic
+    and, by default, rescales the result by the mean gain f̄ ("dynamic
     range corrected"):
 
-        I = (I_o − z) / v · v̄        (+ z̄ for "zero-light preserved")
+        x = (y − d) / f · f̄        (+ d̄ for "zero-light preserved")
 
     Attributes
     ----------
     estimates : dict
-        `{"shading": ShadingEstimate}` with `flat` = v and `dark` = z,
-        shaped `(*group, *spatial)`. v is relative to the target
+        `{"shading": ShadingEstimate}` with `flat` = f and `dark` = d,
+        shaped `(*group, *spatial)`. f is relative to the target
         distribution Q and is stored as produced
-        (`meta["flat_norm"] == "none"`); z includes the camera offset.
+        (`meta["flat_norm"] == "none"`); d includes the camera offset.
     zero_light_ : (*group, 2) Tensor
         Zero-light point (Z_Q, Z_q) of each group, in data units.
     lambda_r_ : float
-        λ_r used by the last fit.
+        λᵣ used by the last fit.
     target_ : (*group, K) Tensor
         Target distribution Q of each group, in data units.
 
@@ -262,7 +263,7 @@ class CIDRE(Estimator):
     per-pixel distributions are summarised by histograms. Each frame
     is first resampled to the working grid (bilinear, with
     anti-aliasing), then the K quantiles are computed at every location
-    of the grid. The fitted v and z are resampled back to the image size
+    of the grid. The fitted f and d are resampled back to the image size
     (bilinear). [`apply`][optix.shading.CIDRE.apply] works on frame
     batches.
 
@@ -279,8 +280,8 @@ class CIDRE(Estimator):
           memory budget (`quantile_method="auto"`), else read from
           per-pixel histograms of `bins` bins over the per-pixel range.
           Not specified in the paper.
-        - The pivot space reparametrises b only: the medians shift Q
-          and q, and b is recovered exactly, so the energy is unchanged.
+        - The pivot space reparametrises c only: the medians shift Q
+          and q, and c is recovered exactly, so the energy is unchanged.
         - The gradients are those of Eqs. 10-14 as written, obtained by
           automatic differentiation; the optimisation runs in float64.
         - Q is the mean over the central band (Eq. 6 prints a sum; the
@@ -300,7 +301,7 @@ class CIDRE(Estimator):
           scales T = {1, 2, 4, 8} (pixels of a grid whose long side is
           128, rescaled with the working grid), the borders of the
           filters (point reflection, so that linear trends are not
-          penalised), the L-BFGS settings and the initialisation (v = 1
+          penalised), the L-BFGS settings and the initialisation (f = 1
           and each line through the pivot; Z_Q = Z_q = (α₁ + α₂)/2).
 
     **Extension** (off by default): `normalize_fit=True` divides E_f by
@@ -398,7 +399,7 @@ class CIDRE(Estimator):
             Histogram bins per pixel. Default 1024. Not specified in the
             paper.
         lambda_r : float, optional
-            Weight of the smoothness energy E_r. Default: 9.5 for one
+            Weight of the smoothness energy Eᵣ. Default: 9.5 for one
             image, decreasing linearly to 6 at 200 images, 6 beyond.
         lambda_z : float
             Weight of the zero-light energy E_z. Default 0.5.
@@ -415,13 +416,13 @@ class CIDRE(Estimator):
             Half-width ω of the central band of Eq. 5. Default 0.25. Not
             specified in the paper.
         scales : sequence of float
-            Scales T of E_r: standard deviations of the Gaussians, in
+            Scales T of Eᵣ: standard deviations of the Gaussians, in
             pixels of a grid whose long side is 128 (they are rescaled
             with the working grid). Default (1, 2, 4, 8). Not specified
             in the paper.
         zero_light_limits : (float, float), optional
             Limits [α₁, α₂] of the zero-light point, in data units.
-            Default: [0, min q(x)].
+            Default: [0, min q(r)].
         max_iterations, history_size, tol : int, int, float
             L-BFGS (strong Wolfe line search): at most `max_iterations`
             iterations with `history_size` correction pairs; stops when
@@ -430,7 +431,7 @@ class CIDRE(Estimator):
             paper.
         init_method : {"pivot", "least_squares"}
             Initial lines: slope 1 through the pivot (the medians of Q
-            and q(x)), or the per-pixel least-squares fit. The
+            and q(r)), or the per-pixel least-squares fit. The
             zero-light point starts at the middle of [α₁, α₂]. Default
             "pivot". Not specified in the paper.
         normalize_fit : bool
@@ -740,7 +741,7 @@ class CIDRE(Estimator):
         *,
         mode: str = "dynamic_range",
     ) -> WritableArrayLike:
-        """Correct images with the fitted v and z.
+        """Correct images with the fitted f and d.
 
         Parameters
         ----------
@@ -750,9 +751,9 @@ class CIDRE(Estimator):
             Output (see [`Estimator.apply`][optix.Estimator.apply]).
         mode : {"dynamic_range", "zero_light", "direct"}
             "dynamic_range" (dynamic range corrected, the default):
-            I = (I_o − z) / v · v̄. "zero_light" (zero-light preserved):
-            I = (I_o − z) / v · v̄ + z̄. "direct": Eq. 1,
-            I = (I_o − z) / v. v̄ and z̄ are the means of the maps of the
+            x = (y − d) / f · f̄. "zero_light" (zero-light preserved):
+            x = (y − d) / f · f̄ + d̄. "direct": Eq. 1,
+            x = (y − d) / f. f̄ and d̄ are the means of the maps of the
             group.
 
         Returns

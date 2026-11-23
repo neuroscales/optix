@@ -167,7 +167,7 @@ class BaSiCResult:
         estimated).
     baseline : (n,) Tensor
         Per-frame coefficients of the fitted frames in units of the
-        flat-corrected signal, B_i · mean(S) (the unsorted stack only:
+        flat-corrected signal, Bᵢ · mean(S) (the unsorted stack only:
         after sorting they belong to the sorted frames).
     iterations : list of int
         Inner iterations of each reweighting step.
@@ -226,10 +226,10 @@ def _dark_update(
     """One dark-field update; returns `(Z, D_Z)`, or None to keep them.
 
     `R = I − I_R`. D_Z is the root of the least-squares line through the
-    points (B_i, A_i), with A_i the contrast between the pixels where S is
+    points (Bᵢ, Aᵢ), with Aᵢ the contrast between the pixels where S is
     above and below its mean, divided by mean(R) (Table 2, lines 1–6).
     Then D_R = Z − mean(Z) − D_Z (mean(S) − S) with
-    Z = mean_i(R_i) − mean(B) S, shrunk in the image and DCT domains
+    Z = meanᵢ(Rᵢ) − mean(B) S, shrunk in the image and DCT domains
     (lines 7–11).
     """
     n = R.shape[0]
@@ -238,7 +238,7 @@ def _dark_update(
     Smean = Sf.mean()
     tiny = torch.finfo(R.dtype).tiny
     if variant == "basicpy":
-        # frames with B_i < 1 only, and the residual shrunk by λ_D / (10 μ),
+        # frames with Bᵢ < 1 only, and the residual shrunk by λ_D / (10 μ),
         # in the DCT domain first
         valid = B < 1
         if not bool(valid.any()):
@@ -317,7 +317,7 @@ def _ladm_solve(
     it = 0
     while res > tol and it < max_iterations:
         it += 1
-        # lines 3–5: S_F ← 𝒯_{λ_S/μ}(S_F + 𝓕[mean_i(I − I_B − I_R + Y/μ)])
+        # lines 3–5: S_F ← 𝒯_{λ_S/μ}(S_F + 𝓕[meanᵢ(I − I_B − I_R + Y/μ)])
         I_B = S * B[:, None, None] + Z
         S_hat = shrink(
             S_hat + dct.forward((D - I_B - E + Y / mu).mean(0)),
@@ -327,7 +327,7 @@ def _ladm_solve(
         # line 6: I_R ← 𝒯_{W/μ}(I − I_B + Y/μ)
         I_B = S * B[:, None, None] + Z
         E = shrink(D - I_B + Y / mu, W / mu)
-        # line 7: B_i = mean_x(I_i − I_R,i) / mean(I − I_R)
+        # line 7: Bᵢ = mean_x(Iᵢ − I_{R,i}) / mean(I − I_R)
         R = D - E
         B = R.mean((1, 2)) / R.mean()
         if variant == "basicpy":
@@ -392,10 +392,10 @@ def basic_ladm(
 ) -> BaSiCResult:
     """BaSiC on a working stack: reweighted L1 solved by LADM.
 
-    Model (Supplementary Note 3, Eqs. 12–13), for the frames I_i of the
+    Model (Supplementary Note 3, Eqs. 12–13), for the frames Iᵢ of the
     working stack:
 
-        I_i = B_i S + Z + I_R,i,    Z = D_Z (1 − S) + D_R
+        Iᵢ = Bᵢ S + Z + I_{R,i},    Z = D_Z (1 − S) + D_R
 
     minimising ‖W ∘ I_R‖₁ + λ_S ‖𝓕(S)‖₁ (with the dark field, also
     λ_D ‖𝓕(D_R)‖₁ + λ_D ‖D_R‖₁, and D_Z ∈ [0, min I]). Each reweighting
@@ -424,7 +424,7 @@ def basic_ladm(
         "paper": Supplementary Note 3 as written. "basicpy": BaSiCPy
         2.0.0's `ApproximateFit` (S starts at one, B clipped at 0, weights
         divided by the frame mean of I_B and normalised, dark field from
-        the frames with B_i < 1 shrunk with λ_D / (10 μ), and a
+        the frames with Bᵢ < 1 shrunk with λ_D / (10 μ), and a
         reweighting score on S only).
     normalize_weights : bool
         Scale the weights of Eq. (9) to mean 1 ("paper" variant; the
@@ -491,10 +491,10 @@ def baseline_l1(
 ) -> Tensor:
     """Per-frame baseline with fixed profiles (Methods Eq. 8, SI Eq. 14).
 
-    Solves, for each frame, min_b ‖W ∘ (I_i − b S − D)‖₁ with W
+    Solves, for each frame, min_b ‖W ∘ (Iᵢ − b S − D)‖₁ with W
     reweighted by Eq. (9), W = 1 / (|I_R / I_B| + ε) with I_B = b S + D,
     starting from W = 1. For fixed W the minimiser is exact: the median
-    of (I_i − D) / S weighted by W S. A frame stops reweighting when its
+    of (Iᵢ − D) / S weighted by W S. A frame stops reweighting when its
     b changes by less than `reweight_tol` (relative), or after
     `max_reweight` steps, so frames are independent of the batching.
 
@@ -510,8 +510,8 @@ def baseline_l1(
     Returns
     -------
     (n,) Tensor
-        b_i, in units of the flat-corrected signal: the corrected frame is
-        (I_i − D) / S − b_i.
+        bᵢ, in units of the flat-corrected signal: the corrected frame is
+        (Iᵢ − D) / S − bᵢ.
     """
     n = D.shape[0]
     tiny = torch.finfo(D.dtype).tiny
@@ -557,8 +557,8 @@ def baseline_basicpy(
 ) -> Tensor:
     """Per-frame baseline as BaSiCPy 2.0.0's `fit_only_baseline`.
 
-    Fits I_i = b_i S + D + I_R,i with a reweighted-L1 sparse I_R by
-    inexact ALM, with b_i = mean(I_i − I_R,i) − mean(D) clipped at 0. Only
+    Fits Iᵢ = bᵢ S + D + I_{R,i} with a reweighted-L1 sparse I_R by
+    inexact ALM, with bᵢ = mean(Iᵢ − I_{R,i}) − mean(D) clipped at 0. Only
     the pixels below each frame's 10 % quantile are trusted as
     background: the others start with weight ε and get weight 0 after the
     first reweighting. The ALM penalty, stopping rule and weight
@@ -578,7 +578,7 @@ def baseline_basicpy(
     Returns
     -------
     (n,) Tensor
-        b_i, in units of the flat-corrected signal.
+        bᵢ, in units of the flat-corrected signal.
     """
     n = D.shape[0]
     q = torch.quantile(D.reshape(n, -1), 0.1, dim=-1)

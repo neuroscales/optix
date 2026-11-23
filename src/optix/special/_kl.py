@@ -122,6 +122,6 @@ def kl_normal(
     mean_q, var_q, mean_p, var_p = map(
         torch.as_tensor, (mean_q, var_q, mean_p, var_p)
     )
-    # 0.5 (r - 1 - log(r) + (mq - mp)^2 / vp) with r = vq / vp, via
+    # 0.5 (r - 1 - log(r) + (mq − mp)² / vp) with r = vq / vp, via
     # ratio_minus_log (no cancellation when vq ~ vp)
     return 0.5 * (_g(var_q, var_p) + (mean_q - mean_p).square() / var_p)

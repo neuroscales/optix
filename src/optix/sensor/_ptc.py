@@ -26,7 +26,7 @@ __all__ = [
 ]
 
 #: EMVA 1288 R4.0 Linear, Section 6.6 / C.4: below this dark temporal
-#: variance (DN^2) only an upper limit of the read noise is given.
+#: variance (DN²) only an upper limit of the read noise is given.
 MIN_DARK_VARIANCE = 0.24
 
 
@@ -226,7 +226,7 @@ def bspline_slopes(
     Section 6.6 of Release 4.0 General, Eqs. (44)-(49): over [0, xmax]
     split into P intervals of width Δ,
 
-        y(x) = ∑_{p=0}^{P+2} a_p·β₃(x/Δ − (p − 1)),
+        y(x) = ∑_{p=0}^{P+2} aₚ·β₃(x/Δ − (p − 1)),
 
     fitted by least squares; the slope is the analytic derivative.
 
@@ -324,7 +324,8 @@ class PhotonTransferCurve(CalibrationEstimator):
         σ²_y = K²·σ²_d + σ²_q + K·(μ_y − μ_y.dark),   σ²_q = 1/12 DN²,
 
     with K the overall system gain (DN per electron) and σ_d the read
-    noise in electrons; σ²_y.dark = K²·σ²_d + σ²_q.
+    noise in electrons; σ²_y.dark = K²·σ²_d + σ²_q (in optix notation,
+    K = g and σ²_d = σ² / g²).
 
     Procedure (faithful mode, Sections 2.5, 4.2, 6.6, 6.9 and 8):
 
@@ -339,11 +340,11 @@ class PhotonTransferCurve(CalibrationEstimator):
     - K: least-squares line, **with unknown offset and slope**, of
       σ²_y − σ²_y.dark on μ_y − μ_y.dark over the levels from the smallest
       up to `fit_range` (70 %) of μ_y.sat − μ_y.dark (Eq. (50));
-    - linearity of the photon-transfer curve: local slopes K_i of a cubic
+    - linearity of the photon-transfer curve: local slopes Kᵢ of a cubic
       B-spline regression
       ([`bspline_slopes`][optix.sensor.utils.bspline_slopes]) over
       [0, μ_y.sat − μ_y.dark] at the points of the gain fit; the linear
-      model holds if mean |K_i − K|/K < 3 % (Eq. (51));
+      model holds if mean |Kᵢ − K|/K < 3 % (Eq. (51));
     - read noise σ_d = √(σ²_y.dark − σ²_q)/K (Eq. (53)); if
       σ²_y.dark < 0.24 DN², only the upper limit σ_d < 0.40/K (Eq. (54));
     - DSNU and PRNU (Section 8, Eqs. (33)-(36), (65)-(67)) from the
@@ -369,7 +370,7 @@ class PhotonTransferCurve(CalibrationEstimator):
           [`emva_highpass`][optix.sensor.utils.emva_highpass]).
         - The temporal-noise correction σ²_y.stack/L of Eq. (36) is applied
           to the highpass-filtered image unchanged.
-        - The B-spline check uses the mean of |K_i − K|/K (the text) while
+        - The B-spline check uses the mean of |Kᵢ − K|/K (the text) while
           Eq. (51) prints a sum; Eq. (49) of R4.0 General misses a minus
           sign in β₃′, the exact derivative is used.
         - The dark values are taken at a single exposure time.

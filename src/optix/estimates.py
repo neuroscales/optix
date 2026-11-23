@@ -251,7 +251,7 @@ _BASELINE_UNITS = ("raw", "signal")
 class ShadingEstimate(Estimate):
     """Shading model with a per-frame baseline.
 
-    The baseline b_i is a scalar per frame, in one of two units, recorded
+    The baseline bᵢ is a scalar per frame, in one of two units, recorded
     in `meta["baseline_units"]`:
 
     - `"signal"` (default, also when the key is absent): an offset of

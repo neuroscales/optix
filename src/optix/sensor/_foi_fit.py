@@ -309,7 +309,7 @@ def nelder_mead(
     """Minimise `f` with the downhill simplex of Nelder and Mead (1965).
 
     Standard coefficients: reflection 1, expansion 2, contraction 1/2,
-    shrinkage 1/2. The initial simplex is `x0` and `x0 + step_k e_k`.
+    shrinkage 1/2. The initial simplex is `x0` and `x0 + stepₖ eₖ`.
 
     Not specified in the paper: the initial simplex and the stopping
     rule. The search stops when the spread of `f` over the simplex is

@@ -139,7 +139,7 @@ class SuffStats:
     the `counts` of
     [`CategoricalStats`][optix.distributions.CategoricalStats]) are small
     and exact whatever the data dtype: int64 when unweighted, float64 when
-    they are sums of weights (a float32 count stops counting past `2**24`).
+    they are sums of weights (a float32 count stops counting past 2²⁴).
     Merging an int64 count with a float64 one gives a float64 count, and
     [`dtype`][optix.distributions.SuffStats.dtype],
     [`to`][optix.distributions.SuffStats.to] and the constructors'

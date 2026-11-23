@@ -94,10 +94,10 @@ def wavelet_fft(
     whole frame, Eq. (8)), is processed as in Münch et al. (2009), Fig. 5:
 
     1. multilevel 2-D DWT down to level L (Eq. (6)), giving the vertical
-       detail bands c_v,l (low pass along y, high pass along x), l = 1, …, L;
-    2. 1-D FFT of each c_v,l along y, ĉ_v,l(x, ŷ);
+       detail bands c_{v,l} (low pass along y, high pass along x), l = 1, …, L;
+    2. 1-D FFT of each c_{v,l} along y, ĉ_{v,l}(x, ŷ);
     3. damping by the Gaussian band-stop of Eq. (9),
-       ĉ′_v,l = ĉ_v,l · (1 − exp(−ŷ²/(2σ²))), which removes the stripe
+       ĉ′_v,l = ĉ_{v,l} · (1 − exp(−ŷ²/(2σ²))), which removes the stripe
        information condensed on the line ŷ = 0;
     4. inverse FFT, then inverse DWT.
 

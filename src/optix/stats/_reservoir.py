@@ -11,8 +11,8 @@ __all__ = ["Reservoir"]
 
 _KEY_BITS = 62
 _KEYS = 2**_KEY_BITS
-# torch.rand(float32) returns multiples of 2^-24: `rand < 2^-e` holds
-# with probability exactly 2^-e for 0 <= e <= 24.
+# torch.rand(float32) returns multiples of 2⁻²⁴: `rand < 2⁻ᵉ` holds
+# with probability exactly 2⁻ᵉ for 0 <= e <= 24.
 _RAND_BITS = 24
 
 
@@ -120,7 +120,7 @@ class Reservoir(Reducer):
             keys = torch.randint(_KEYS, v.shape, generator=gen, device=device)
         else:
             kmax = max(int(self.keys.max()), 1)
-            # q = 2^-e >= kmax / 2^62, exact in float32 (e <= 24)
+            # q = 2⁻ᵉ >= kmax / 2⁶², exact in float32 (e <= 24)
             e = min(_RAND_BITS, _KEY_BITS - (kmax - 1).bit_length())
             u = torch.rand(
                 v.shape, generator=gen, device=device, dtype=torch.float32

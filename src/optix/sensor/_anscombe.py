@@ -226,8 +226,8 @@ def inverse_anscombe(
         - `"exact"`: exact unbiased inverse I_σ (Eqs. (9)-(10)),
           interpolated in a table of E{f_σ(z) | y, σ} and 0 below
           E{f_σ | 0, σ} (the ML inverse, Eq. (14)); outside the table
-          (y > ymax), the paper's asymptotic form I_0(D) − σ² (Section
-          III-E, Eq. (15)) with the closed form of I_0;
+          (y > ymax), the paper's asymptotic form I₀(D) − σ² (Section
+          III-E, Eq. (15)) with the closed form of I₀;
         - `"closed-form"`:
           [`closed_form_inverse`][optix.sensor.utils.closed_form_inverse],
           Eq. (21);

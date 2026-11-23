@@ -167,7 +167,7 @@ class Moments(Reducer):
             # zero-weight entries (e.g. masked NaN / inf) must not leak
             # into the sums: 0 * nan is nan
             x = torch.where(w > 0, x, 0)
-            # count in the state dtype: float32 is not exact beyond 2^24
+            # count in the state dtype: float32 is not exact beyond 2²⁴
             wsum = weight.to(sdt).sum(dims, keepdim=True)
             safe = torch.where(wsum > 0, wsum, torch.ones_like(wsum))
             mean = (w * x).sum(dims, keepdim=True) / safe.to(x.dtype)
