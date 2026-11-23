@@ -9,13 +9,14 @@ from torch import Tensor
 from .._estimator import Tags
 from ..estimates import SensorEstimate
 from ..io import ArrayLike, Layout, WritableArrayLike
-from ._fft import PaddedConvolution
+from ._fft import PaddedConvolution, next_fast_len
 from ._rl import RichardsonLucy, _Block, rl_block
 
 __all__ = [
     "BackProjection",
     "WienerButterworth",
     "back_projector",
+    "kernel_shape",
     "psf_fwhm",
     "wiener_butterworth",
 ]
@@ -23,6 +24,8 @@ __all__ = [
 _KINDS = ("wiener-butterworth", "butterworth", "gaussian", "traditional")
 _STARTS = ("data", "uniform")
 _START_FLOOR = 0.001  # value replacing zeros of the starting image (Guo 2020)
+SUPPORT = 12  # support of the filtered kernels, in widths (FWHM) per axis
+OVERSAMPLE = 2  # DFT grid of the filters, in kernel supports per axis
 
 
 def psf_fwhm(psf: Tensor) -> tuple[float, ...]:
@@ -88,6 +91,74 @@ def _freqs(
     return sum(g.square() for g in grids)
 
 
+def _widths(
+    psf: Tensor, fwhm: float | Sequence[float] | None
+) -> tuple[float, ...]:
+    """FWHM per axis: `fwhm` broadcast to the PSF dims, or measured."""
+    if fwhm is None:
+        return psf_fwhm(psf)
+    if isinstance(fwhm, int | float):
+        fwhm = (float(fwhm),) * psf.ndim
+    fwhm = tuple(float(w) for w in fwhm)
+    if len(fwhm) != psf.ndim or min(fwhm) <= 0:
+        raise ValueError("fwhm must be positive, one value per PSF dim")
+    return fwhm
+
+
+def kernel_shape(
+    psf: Tensor, fwhm: float | Sequence[float] | None = None
+) -> tuple[int, ...]:
+    """Shape of the filtered back-projector kernels, per axis.
+
+    The kernel b = DFT⁻¹(B) of a sharp filter rings over many PSF widths.
+    It is kept on a support of 12 widths w per axis (odd, and at least
+    the PSF shape K), with w the larger of the FWHM of the PSF and the
+    resolution `fwhm`:
+
+        Kₐ' = max(Kₐ, 2 ⌈6 wₐ⌉ + 1).
+
+    Parameters
+    ----------
+    psf : Tensor
+        Point spread function, `(*K)`.
+    fwhm : float or sequence of float, optional
+        Resolution per axis, in pixels. Default: the FWHM of `psf`.
+
+    Returns
+    -------
+    tuple of int
+        Kernel shape K'.
+    """
+    psf = torch.as_tensor(psf)
+    try:
+        measured = psf_fwhm(psf)
+    except ValueError:
+        measured = None
+    widths = _widths(psf, fwhm)
+    if measured is not None:
+        widths = tuple(
+            max(a, b) for a, b in zip(widths, measured, strict=True)
+        )
+    half = SUPPORT / 2
+    return tuple(
+        max(int(k), 2 * math.ceil(half * w) + 1)
+        for k, w in zip(psf.shape, widths, strict=True)
+    )
+
+
+def _pad_centred(psf: Tensor, shape: Sequence[int]) -> Tensor:
+    """Zero-pad a PSF centred at `K // 2` to `shape`, centred again."""
+    if tuple(shape) == tuple(psf.shape):
+        return psf
+    out = psf.new_zeros(tuple(shape))
+    index = tuple(
+        slice(n // 2 - k // 2, n // 2 - k // 2 + k)
+        for n, k in zip(shape, psf.shape, strict=True)
+    )
+    out[index] = psf
+    return out
+
+
 def back_projector(
     psf: Tensor,
     kind: str = "wiener-butterworth",
@@ -112,14 +183,21 @@ def back_projector(
 
     with ε² = 1/β² − 1, so that the Butterworth gain at the cutoff is β
     (Eq. 23). The kernel is b = DFT⁻¹(B) (Eqs. 22 and 26), normalised to
-    unit sum (B(0) = 1), as the iteration requires.
+    unit sum (B(0) = 1), as the iteration requires. |F|² is the squared
+    modulus of the OTF (the paper writes [DFT(f)]², for a real, symmetric
+    OTF). The FWHM of the PSF is measured with
+    [`psf_fwhm`][optix.deconv.utils.psf_fwhm] unless given.
 
-    The filters are sampled on the DFT grid of the PSF array, and the
-    kernel has the shape of the PSF, centred at index `K // 2`; a larger
-    (zero-padded) PSF array samples them more finely. The FWHM of the
-    PSF is measured with [`psf_fwhm`][optix.deconv.utils.psf_fwhm]
-    unless given. |F|² is the squared modulus of the OTF (the paper
-    writes [DFT(f)]², for a real, symmetric OTF).
+    **Sampling.** The traditional kernel is the flipped PSF, `(*K)`. The
+    Gaussian kernel is sampled in space on the grid of shape
+    [`kernel_shape`][optix.deconv.utils.kernel_shape] K'. The Butterworth
+    and WB filters are sampled on a DFT grid twice as large as K' along
+    each axis (F is the DFT of the zero-padded PSF), and b is cropped to
+    K' around its centre, where its ringing has decayed (the paper
+    defines b on the image grid, Eq. 12). The frequency response of b
+    then follows Eq. 21 or 25 whatever the size of the PSF array (to
+    about 3 % of its peak with the default parameters). The kernels are
+    centred at index `K' // 2`.
 
     Parameters
     ----------
@@ -135,13 +213,13 @@ def back_projector(
     order : float
         Butterworth order n > 0.
     fwhm : float or sequence of float, optional
-        Resolution (FWHM of the PSF) per axis, in pixels. Default:
-        measured on `psf`.
+        Resolution per axis, in pixels: the cutoff frequency is 1/FWHM.
+        Default: the FWHM of `psf`.
 
     Returns
     -------
     Tensor
-        Kernel b, `(*K)`, of unit sum.
+        Kernel b, `(*K)` (traditional) or `(*K')`, of unit sum.
     """
     if kind not in _KINDS:
         raise ValueError(f"kind must be one of {_KINDS}, got {kind!r}")
@@ -152,43 +230,42 @@ def back_projector(
     shape = tuple(psf.shape)
     centre = tuple(k // 2 for k in shape)
     dims = tuple(range(psf.ndim))
-    if kind != "traditional":
-        if fwhm is None:
-            fwhm = psf_fwhm(psf)
-        elif isinstance(fwhm, int | float):
-            fwhm = (float(fwhm),) * psf.ndim
-        fwhm = tuple(float(w) for w in fwhm)
-        if len(fwhm) != psf.ndim or min(fwhm) <= 0:
-            raise ValueError("fwhm must be positive, one value per PSF dim")
+    if kind == "traditional":
+        otf = torch.fft.fftn(torch.roll(psf, [-c for c in centre], dims))
+        b = torch.fft.ifftn(otf.conj()).real
+        return torch.roll(b, list(centre), dims)
+    widths = _widths(psf, fwhm)
+    out = kernel_shape(psf, widths)
     if kind == "gaussian":
         grids = torch.meshgrid(
             *(
-                torch.arange(k, dtype=psf.dtype, device=psf.device) - c
-                for k, c in zip(shape, centre, strict=True)
+                torch.arange(k, dtype=psf.dtype, device=psf.device) - k // 2
+                for k in out
             ),
             indexing="ij",
         )
-        r2 = sum(g.square() / w**2 for g, w in zip(grids, fwhm, strict=True))
+        r2 = sum(g.square() / w**2 for g, w in zip(grids, widths, strict=True))
         b = torch.exp(-4 * math.log(2) * r2)
         return b / b.sum()
-    otf = torch.fft.fftn(torch.roll(psf, [-c for c in centre], dims))
-    if kind == "traditional":
-        spec = otf.conj()
-    else:
-        if not 0.0 < cutoff_gain < 1.0:
-            raise ValueError("cutoff_gain must be in (0, 1)")
-        if not order > 0:
-            raise ValueError("order must be positive")
-        eps2 = 1.0 / cutoff_gain**2 - 1.0
-        k2 = _freqs(shape, [1.0 / w for w in fwhm], psf)
-        spec = 1.0 / torch.sqrt(1.0 + eps2 * k2**order)
-        if kind == "wiener-butterworth":
-            if not wiener > 0:
-                raise ValueError("wiener must be positive")
-            spec = spec * otf.conj() / (otf.abs().square() + wiener)
-        spec = spec / spec.flatten()[0]
+    if not 0.0 < cutoff_gain < 1.0:
+        raise ValueError("cutoff_gain must be in (0, 1)")
+    if not order > 0:
+        raise ValueError("order must be positive")
+    if kind == "wiener-butterworth" and not wiener > 0:
+        raise ValueError("wiener must be positive")
+    grid = tuple(next_fast_len(OVERSAMPLE * k) for k in out)
+    buf = psf.new_zeros(grid)
+    buf[tuple(slice(0, k) for k in shape)] = psf
+    otf = torch.fft.fftn(torch.roll(buf, [-c for c in centre], dims))
+    eps2 = 1.0 / cutoff_gain**2 - 1.0
+    k2 = _freqs(grid, [1.0 / w for w in widths], psf)
+    spec = 1.0 / torch.sqrt(1.0 + eps2 * k2**order)
+    if kind == "wiener-butterworth":
+        spec = spec * otf.conj() / (otf.abs().square() + wiener)
     b = torch.fft.ifftn(spec).real
-    return torch.roll(b, list(centre), dims)
+    b = torch.roll(b, [k // 2 for k in out], dims)
+    b = b[tuple(slice(0, k) for k in out)]
+    return b / b.sum()
 
 
 class BackProjection:
@@ -224,7 +301,8 @@ class BackProjection:
         ----------
         kernel : Tensor
             Kernel b, `(*K)` with K at most the PSF shape of `op` along
-            each dim, centred at index `K // 2`, of unit sum.
+            each dim (zero-pad the PSF of `op` to fit a larger kernel),
+            centred at index `K // 2`, of unit sum.
         op : PaddedConvolution
             Blur operator H of the block, which sets the grids.
         """
@@ -270,8 +348,8 @@ class WienerButterworth(RichardsonLucy):
 
     Guo et al. (2020) replace the transposed PSF of the Richardson–Lucy
     update by a back projector b chosen so that the product of the
-    transfer functions, DFT(b)·DFT(f), is as flat as possible up to the
-    resolution limit (Supplementary Note 1, after Zeng & Gullberg 2000):
+    transfer functions, DFT(b)·DFT(f), is close to flat over the pass
+    band of the PSF (Supplementary Note 1, after Zeng & Gullberg 2000):
 
         e⁽ᵏ⁺¹⁾ = e⁽ᵏ⁾ · B[y / (H e⁽ᵏ⁾)] / B1,
 
@@ -283,7 +361,8 @@ class WienerButterworth(RichardsonLucy):
         DFT(b) ∝ conj(F) / (|F|² + α) · 1 / √(1 + ε² [∑ₐ (kₐ/k_cₐ)²]ⁿ),
 
     with F the OTF, k_c = 1/FWHM of the PSF per axis, and ε² = 1/β² − 1
-    (β the Butterworth gain at the cutoff). See
+    (β the Butterworth gain at the cutoff; the WB gain there is β times
+    the Wiener gain, Eq. 27). See
     [`back_projector`][optix.deconv.utils.back_projector] for the
     Gaussian and Butterworth back projectors the paper compares, and
     the traditional one (b the flipped PSF: plain Richardson–Lucy).
@@ -296,16 +375,33 @@ class WienerButterworth(RichardsonLucy):
     by 0.001 (Methods). On the margin of the object domain, outside the
     image, it is the mean of the image (not specified in the paper).
 
+    !!! note "Cutoff frequency and the figures of the paper"
+        The cutoff is k_c = 1/FWHM of the PSF per axis, as defined in the
+        text (Supplementary Note 2, §4.1). The WB filter plotted in
+        Supplementary Fig. S2.3 corresponds to a cutoff about 1.3 times
+        higher than 1/FWHM of the PSF of Fig. S2.1, and the Butterworth
+        filter of Fig. S2.2b is drawn with a higher order than the n = 8
+        of its caption. A higher cutoff passes more of the OTF and
+        sharpens the estimate faster per iteration; it is set by passing
+        a smaller `fwhm` (e.g. the FWHM of the PSF divided by 1.3).
+
+    **Kernel support.** The filtered kernels ring over many PSF widths:
+    b is kept on 12 widths per axis (see
+    [`kernel_shape`][optix.deconv.utils.kernel_shape] and
+    [`back_projector`][optix.deconv.utils.back_projector]), and the PSF
+    is zero-padded to that support, so that the padded grid of each
+    block and the default halo (twice the support) cover the kernel.
+
     !!! warning "Convergence"
         With an unmatched back projector the iteration is not the
         expectation-maximisation algorithm: the Poisson likelihood need
         not increase, the flux need not be conserved, and convergence is
         not guaranteed (Zeng & Gullberg 2000 give conditions on b, which
-        the paper notes the truncation below invalidates). The WB
-        iteration reaches a resolution-limited estimate in about one
-        iteration; more iterations can introduce artefacts (main text,
-        Discussion). The WB back projector has negative lobes, so the
-        update can produce negative values: as in the paper, they are
+        the paper notes the truncation below invalidates). The paper
+        uses a few WB iterations (1-5) where Richardson–Lucy needs tens;
+        more iterations can introduce artefacts (main text, Discussion).
+        The WB back projector has negative lobes, so the update can
+        produce negative values: as in the paper, they are
         set to 0 at each iteration, and a pixel set to 0 stays at 0.
 
     Boundaries, blocks, layouts and the extensions (camera model,
@@ -482,7 +578,8 @@ class WienerButterworth(RichardsonLucy):
             Iteration cap of the χ² stopping rule. Default: 100.
         background, poisson_gaussian, damping, halo, block
             Extensions and blocking, as in
-            [`RichardsonLucy`][optix.deconv.RichardsonLucy].
+            [`RichardsonLucy`][optix.deconv.RichardsonLucy]. The halo is
+            at least the kernel support K' (default: twice).
         faithful, dtype, device, layout
             See [`Estimator`][optix.Estimator].
         """
@@ -516,8 +613,18 @@ class WienerButterworth(RichardsonLucy):
         if not float(opts["order"]) > 0:
             raise ValueError("order must be positive")
 
+    def _psf(self, backend: dict) -> Tensor:
+        """PSF zero-padded to the kernel support (operator grid, halo)."""
+        psf = super()._psf(backend)
+        if self.options["back_projector"] == "traditional":
+            return psf
+        return _pad_centred(psf, kernel_shape(psf, self.options["fwhm"]))
+
     def kernel(self, **backend: object) -> Tensor:
-        """The back-projector kernel b of the PSF, `(*K)`.
+        """The back-projector kernel b of the PSF, `(*K')`.
+
+        See [`back_projector`][optix.deconv.utils.back_projector] and
+        [`kernel_shape`][optix.deconv.utils.kernel_shape].
 
         Parameters
         ----------

@@ -44,5 +44,6 @@ Deconvolution with a known point spread function.
         - biggs_andrews_alpha
         - chi2_probability
         - back_projector
+        - kernel_shape
         - BackProjection
         - psf_fwhm
