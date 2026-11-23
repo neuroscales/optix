@@ -1,4 +1,7 @@
-"""Pixel-wise sCMOS calibration (Huang et al., Nat Methods 2013)."""
+"""Pixel-wise sCMOS calibration (Huang et al., Nat Methods 2013).
+
+After [Huang et al. 2013](https://doi.org/10.1038/nmeth.2488).
+"""
 
 from collections.abc import Callable
 
@@ -34,8 +37,9 @@ def gain_regression(
 ) -> tuple[Tensor, Tensor]:
     """Per-pixel slope of the variance on the mean, through the origin.
 
-    For every pixel, solves (Huang et al. 2013, Supplementary Note,
-    Eq. 2.3)
+    For every pixel, solves
+    ([Huang et al. 2013, Supplementary Note,
+    Eq. 2.3](https://doi.org/10.1038/nmeth.2488))
 
         ĝ = argmin_g ∑ₖ ((vᵏ − var) − g·(D̄ᵏ − o))²,
 
@@ -101,6 +105,8 @@ def gain_regression(
 class SCMOSCalibration(CalibrationEstimator):
     """Pixel-wise sCMOS camera calibration (Huang et al., 2013).
 
+    After [Huang et al. 2013](https://doi.org/10.1038/nmeth.2488).
+
     Each pixel follows
 
         ADU = g·Poisson(λ) + o + 𝒩(0, var),
@@ -136,7 +142,7 @@ class SCMOSCalibration(CalibrationEstimator):
         `fit(levels, dark=darks)`: `levels` is a sequence of stacks, one
         per illumination level (each with at least two samples per group),
         `darks` a stack of dark frames. Every stack is streamed once
-        (Welford/Pebay moments). Maps are `(*group, *spatial)`.
+        (Welford/Pébay moments). Maps are `(*group, *spatial)`.
 
     !!! references "References"
         1. Huang F, Hartwich TMP, Rivera-Molina FE, Lin Y, Duim WC, Long JJ,
