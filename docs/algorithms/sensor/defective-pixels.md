@@ -32,13 +32,14 @@ particular.
 ## Probabilistic model
 
 Good pixels: $y_{mp} \sim \mathcal{N}(o_p, \sigma^2_p)$ for the dark frames
-$m = 1 \ldots M$, with $o_p$ and $\sigma^2_p$ similar across pixels. From the
-temporal moments of each pixel, the dark mean $\mathbf{o}$, the variance
-$\boldsymbol{\sigma}^2$, the skewness $\mathbf{g}_1$ and the non-excess kurtosis
-$\boldsymbol{\beta}_2$, a pixel is flagged when
+$m = 1 \ldots M$ and pixels $p = 1 \ldots P$, with $o_p$ and $\sigma^2_p$
+similar across pixels. From the temporal moments of each pixel, the dark mean
+$\mathbf{o} \in \mathbb{R}^P$, the variance $\boldsymbol{\sigma}^2$, the
+skewness $\mathbf{g}_1$ and the non-excess kurtosis $\boldsymbol{\beta}_2$ (all
+in $\mathbb{R}^P$), a pixel is flagged when
 
 $$
-|z(o_p)| > t, \qquad z(\sigma^2_p) > t, \qquad |z(\beta_{2,p})| > t,
+\lvert z(o_p) \rvert > t, \qquad z(\sigma^2_p) > t, \qquad \lvert z(\beta_{2,p}) \rvert > t,
 \qquad\text{or}\qquad \frac{g_{1,p}^2 + 1}{\beta_{2,p}} > b,
 $$
 
@@ -48,6 +49,17 @@ $$
 z(x_p) = \frac{x_p - \operatorname{med}_p x}{1.4826\,\operatorname{MAD}_p x}.
 $$
 
+| Symbol | Meaning | Shape |
+|---|---|---|
+| $y_{mp}$ | dark frame $m$ at pixel $p$ (ADU) | scalar, per pixel and frame |
+| $\mathbf{o}$ | temporal mean of the dark frames: offset (ADU) | $\mathbb{R}^P$, per pixel |
+| $\boldsymbol{\sigma}^2$ | temporal variance: read-noise variance (ADU²) | $\mathbb{R}^P$, per pixel |
+| $\mathbf{g}_1$ | temporal skewness | $\mathbb{R}^P$, per pixel |
+| $\boldsymbol{\beta}_2$ | temporal kurtosis, not excess ($3$ for a Gaussian) | $\mathbb{R}^P$, per pixel |
+| $z(\cdot)$ | robust z-score across the pixels of a group | $\mathbb{R}^P$; median and MAD per group |
+| $t$, $b$ | thresholds (`threshold`, `bimodality`) | scalars, whole stack |
+| $M$, $P$ | numbers of dark frames and of pixels | scalars, whole stack |
+
 The last test is Sarle's bimodality coefficient: $1/3$ for a Gaussian, $5/9$
 for a uniform distribution, $1$ for a two-level (RTS) signal. There is no paper,
 so no native-notation tab.
@@ -55,22 +67,31 @@ so no native-notation tab.
 ## Inference / derivation
 
 There is nothing to infer: the four masks are threshold tests on per-pixel
-moments, and `defective` is their union. The median and MAD ignore non-finite
+moments, and `defective` is their union. Statistically, $\mathbf{o}$ and
+$\boldsymbol{\sigma}^2$ are method-of-moments (Gaussian maximum-likelihood)
+estimates, and each test is outlier detection against the population of
+pixels, whose centre and spread are estimated robustly (median and MAD, the
+high-breakdown counterparts of mean and standard deviation). The median and MAD ignore non-finite
 values. Replacement takes, for each defective pixel, the (lower) median of its
 $3^d - 1$ neighbours that are in bounds and not defective; a pixel without such
 neighbours is left unchanged.
 
 ## Algorithm
 
-```text
-Input: dark stack, threshold t = 5, bimodality b = 5/9
-1. Stream the stack once: per-pixel mean, variance, skewness, kurtosis.
-2. masks = {offset: |z(mean)| > t, variance: z(var) > t,
-            kurtosis: |z(kurtosis)| > t, rts: (skew² + 1)/kurtosis > b}
-3. defective = union of the masks.
-Return SensorEstimate(offset=mean, variance=var, defective)
-apply: replace each defective pixel by the median of its good neighbours.
-```
+**Input:** dark frames $\mathbf{y}_1, \ldots, \mathbf{y}_M \in \mathbb{R}^P$;
+threshold $t = 5$, bimodality $b = 5/9$. \
+**Output:** `SensorEstimate` with $\mathbf{o}$, $\boldsymbol{\sigma}^2$ and
+`defective`; the individual masks in `masks`.
+
+1. **Moments.** Stream the stack once: per-pixel mean $\mathbf{o}$, variance
+   $\boldsymbol{\sigma}^2$, skewness $\mathbf{g}_1$ and kurtosis $\boldsymbol{\beta}_2$.
+2. **Tests.** Per pixel:
+    1. `offset`: $\lvert z(o_p) \rvert > t$;
+    2. `variance`: $z(\sigma^2_p) > t$;
+    3. `kurtosis`: $\lvert z(\beta_{2,p}) \rvert > t$;
+    4. `rts`: $(g_{1,p}^2 + 1) / \beta_{2,p} > b$.
+3. **Union.** `defective` is the union of the four masks.
+4. **Apply.** Replace each defective pixel by the median of its good neighbours.
 
 ## Faithful mode and extensions
 
