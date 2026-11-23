@@ -2,6 +2,7 @@
 
 from . import (
     attenuation,
+    background,
     basis,
     deconv,
     destripe,
@@ -26,6 +27,7 @@ __all__ = [
     "Tags",
     "__version__",
     "attenuation",
+    "background",
     "basis",
     "config",
     "deconv",
