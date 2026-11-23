@@ -1,8 +1,9 @@
 """Retrospective illumination function (Singh et al., J Microsc 2014).
 
-Faithful mode follows the paper. The extensions (disk median, Gaussian
-and polynomial smoothing, automatic size, robust-minimum rescaling) follow
-CellProfiler's CorrectIlluminationCalculate module (BSD-3-Clause).
+After [Singh et al. 2014](https://doi.org/10.1111/jmi.12178). Faithful mode
+follows the paper. The extensions (disk median, Gaussian and polynomial
+smoothing, automatic size, robust-minimum rescaling) follow CellProfiler's
+CorrectIlluminationCalculate module (BSD-3-Clause).
 """
 
 import itertools
@@ -138,15 +139,17 @@ class IlluminationFunction(CalibrationEstimator):
 
     The illumination correction function (ICF) is
 
-        F = S(mean_t (I_t − D)),   x = (I − D)/F,
+        f = S(meanᵢ (yᵢ − d)),   x = (y − d)/f,
 
     the per-pixel average of all images of a batch (e.g. a plate and
-    channel) smoothed by S; each image is corrected by dividing it by F.
+    channel) smoothed by S; each image is corrected by dividing it by f.
+    ([Singh et al. 2014](https://doi.org/10.1111/jmi.12178): F = f, I = y.)
 
-    Faithful mode follows the paper: per-pixel **mean** over all images,
-    then a **median filter with a window of 500 pixels** (Singh et al.,
-    "Computing illumination correction functions", Fig. 1), then division.
-    The paper does not rescale the ICF and does not subtract a dark image.
+    Faithful mode follows the paper: per-pixel **mean** over all images, then a
+    **median filter with a window of 500 pixels** ([Singh et al. 2014,
+    "Computing illumination correction functions", Fig.
+    1](https://doi.org/10.1111/jmi.12178)), then division. The paper does not
+    rescale the ICF and does not subtract a dark field.
 
     !!! note "Interpretation"
         The paper's "median filter with window size = 500 pixels" is

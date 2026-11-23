@@ -72,7 +72,12 @@ def test_simulate_shading():
     x = torch.ones(3, 4, 5)
     y = simulate_shading(x, sh)
     torch.testing.assert_close(
-        y, sh.flat + 2 + torch.arange(3.0)[:, None, None]
+        y, sh.flat * (1 + torch.arange(3.0)[:, None, None]) + 2
+    )
+    raw = sh.replace(meta={**sh.meta, "baseline_units": "raw"})
+    torch.testing.assert_close(
+        simulate_shading(x, raw),
+        sh.flat + 2 + torch.arange(3.0)[:, None, None],
     )
     torch.testing.assert_close(simulate_shading(x, ShadingEstimate()), x)
 

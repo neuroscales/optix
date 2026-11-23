@@ -1,5 +1,6 @@
-"""Global fit of Foi et al. (2008): LS initialisation and ML (Nelder-Mead).
+"""Global fit of the noise model: LS initialisation and ML (Nelder-Mead).
 
+Follows [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399):
 Section III-D (non-clipped), V-B (clipped) and VI-B/C (MAD). The model
 is σ²(y) = a y + b in the normalised units of the paper (data
 in [0, 1]). Everything here is float64 on the CPU: the problem has
@@ -306,10 +307,11 @@ def nelder_mead(
     tol: float,
     callback: Callable[[float], object] | None = None,
 ) -> tuple[Tensor, float, bool, str]:
-    """Minimise `f` with the downhill simplex of Nelder and Mead (1965).
+    """Minimise `f` with the downhill simplex of
+    [Nelder and Mead (1965)](https://doi.org/10.1093/comjnl/7.4.308).
 
     Standard coefficients: reflection 1, expansion 2, contraction 1/2,
-    shrinkage 1/2. The initial simplex is `x0` and `x0 + step_k e_k`.
+    shrinkage 1/2. The initial simplex is `x0` and `x0 + stepₖ eₖ`.
 
     Not specified in the paper: the initial simplex and the stopping
     rule. The search stops when the spread of `f` over the simplex is

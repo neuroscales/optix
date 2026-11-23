@@ -1,16 +1,18 @@
-"""Clipped-observation functions of Foi et al. (2008), Section IV-VI.
+"""Clipped-observation functions of the noise fit, Section IV-VI.
+
+After [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399).
 
 ν ~ 𝒩(μ, 1) and ν̃ = max(0, ν) (Eq. 31):
 
-- E_m(μ) = E{ν̃} (Eq. 32) and S_m(μ) = std{ν̃} (Eq. 33) have closed
+- Eₘ(μ) = E{ν̃} (Eq. 32) and Sₘ(μ) = std{ν̃} (Eq. 33) have closed
   forms, evaluated here exactly and without cancellation;
-- E_r(ρ) = μ / E{ν̃} and S_r(ρ) = std{ν̃} as functions of
+- Eᵣ(ρ) = μ / E{ν̃} and Sᵣ(ρ) = std{ν̃} as functions of
   ρ = E{ν̃} / std{ν̃} (Section IV-B.1b, Fig. 9) have none: the paper
   interpolates them with Eq. (62) and the coefficients of Table IV,
   which are used here;
-- the MAD counterparts S_mᵐᵃᵈ, E_rᵐᵃᵈ, S_rᵐᵃᵈ (Section VI-C) are only
+- the MAD counterparts Sₘᵐᵃᵈ, Eᵣᵐᵃᵈ, Sᵣᵐᵃᵈ (Section VI-C) are only
   defined numerically (Table III); Eq. (62) with the coefficients of
-  Table V is used. Its S_mᵐᵃᵈ is exactly 0 below μ ≈ −2.5, outside
+  Table V is used. Its Sₘᵐᵃᵈ is exactly 0 below μ ≈ −2.5, outside
   the μ ∈ [−1, 5] of Table III.
 
 All functions work in float64.
@@ -35,7 +37,7 @@ RHO_RANGE = (0.65, 11.0)
 
 _SQRT_2PI = math.sqrt(2 * math.pi)
 
-# Table IV / V: coefficients p_k of p(t) = ∑ₖ pₖ tᵏ, highest first.
+# Table IV / V: coefficients pₖ of p(t) = ∑ₖ pₖ tᵏ, highest first.
 _TABLE_IV = {
     "S_m": (
         1.4308530e-6, 3.2172868e-7, -2.6295693e-5, -8.5123452e-5,
@@ -88,10 +90,10 @@ def E_m(mu: Tensor) -> Tensor:
 
 
 def S_m(mu: Tensor, robust: bool = False) -> Tensor:
-    """std{max(0, ν)} (Eq. 33), or S_mᵐᵃᵈ (Section VI-C).
+    """std{max(0, ν)} (Eq. 33), or Sₘᵐᵃᵈ (Section VI-C).
 
     `S_m` is the exact closed form of Eq. (33), evaluated without
-    cancellation. S_mᵐᵃᵈ is (1 + tanh(p(μ))) / 2 with the coefficients of
+    cancellation. Sₘᵐᵃᵈ is (1 + tanh(p(μ))) / 2 with the coefficients of
     Table V (Eq. 62).
     """
     mu = torch.as_tensor(mu, dtype=torch.float64)
@@ -123,19 +125,19 @@ def S_r(rho: Tensor, robust: bool = False) -> Tensor:
 
 
 def _censored(mu: Tensor, robust: bool, spread: bool) -> tuple:
-    """(E_m(μ), S_m(μ)) of Eqs. (32)-(33), free of cancellation.
+    """(Eₘ(μ), Sₘ(μ)) of Eqs. (32)-(33), free of cancellation.
 
     For μ ≥ 0 the moments are written about μ (as in
     [`clipped_normal_moments`][optix.special.clipped_normal_moments]).
     For μ < 0 (mostly clipped), with t = −μ and the Mills ratio
     R(t) = Φ(−t)/φ(t) = √(π/2)·erfcx(t/√2):
 
-        E_m = φ(t)·(1 − t·R)
-        S_m² = φ(t)·((t² + 1)·R − t) − E_m²
+        Eₘ = φ(t)·(1 − t·R)
+        Sₘ² = φ(t)·((t² + 1)·R − t) − Eₘ²
 
-    The direct forms lose all digits there: at μ = −5, S_m² ≈ 2·10⁻⁸ is
-    the difference of two terms ≈ 25. With `robust`, S_mᵐᵃᵈ (Table V)
-    replaces S_m.
+    The direct forms lose all digits there: at μ = −5, Sₘ² ≈ 2·10⁻⁸ is
+    the difference of two terms ≈ 25. With `robust`, Sₘᵐᵃᵈ (Table V)
+    replaces Sₘ.
     """
     neg = mu < 0
     # mu >= 0: moments about mu
@@ -168,10 +170,10 @@ def clipped_curve(
 ) -> tuple[Tensor, Tensor | None]:
     """Expectation and std of the clipped data, Eqs. (44)-(45), (50)-(51).
 
-    ỹ = σ E_m(y/σ) − y + 1 − σ E_m((1 − y)/σ) and
-    σ̃ = σ S_m(y/σ) S_m((1 − y)/σ) for data clipped to [0, 1] (double
+    ỹ = σ Eₘ(y/σ) − y + 1 − σ Eₘ((1 − y)/σ) and
+    σ̃ = σ Sₘ(y/σ) Sₘ((1 − y)/σ) for data clipped to [0, 1] (double
     censoring, under the assumption of Section IV-B that a value is not
-    clipped from both sides). With `robust`, S_mᵐᵃᵈ replaces S_m in σ̃
+    clipped from both sides). With `robust`, Sₘᵐᵃᵈ replaces Sₘ in σ̃
     (Section VI-C.1).
 
     Parameters
@@ -198,13 +200,13 @@ def inverse_init(
 
     Eqs. (54)-(56) (and (47)-(48)): with ρ₀ = √((ŷ/σ̂)² + ε²) and
     ρ₁ = √(((1 − ŷ)/σ̂)² + ε²), the unclipped expectation is
-    ŷ E_r(ρ₀) − ŷ + 1 − (1 − ŷ) E_r(ρ₁) and the unclipped standard
-    deviation is σ̂ / (S_r(ρ₀) S_r(ρ₁)).
+    ŷ Eᵣ(ρ₀) − ŷ + 1 − (1 − ŷ) Eᵣ(ρ₁) and the unclipped standard
+    deviation is σ̂ / (Sᵣ(ρ₀) Sᵣ(ρ₁)).
 
     Returns
     -------
     y, scale : Tensor
-        Unclipped expectation and the factor 1 / (S_r(ρ₀) S_r(ρ₁)) that
+        Unclipped expectation and the factor 1 / (Sᵣ(ρ₀) Sᵣ(ρ₁)) that
         multiplies the standard deviation.
     """
     rho0 = torch.sqrt((yhat / shat) ** 2 + eps**2)
