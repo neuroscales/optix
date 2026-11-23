@@ -34,7 +34,7 @@ baseline:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d}
+    \mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \mathbf{d}
     $$
 
 === "Smith et al. 2015"
@@ -49,8 +49,8 @@ distribution (below) and is stored as produced (`meta["flat_norm"] == "none"`).
 rescales by the mean gain $\bar{f}$ ("dynamic range corrected"):
 
 $$
-\hat{\mathbf{x}}_i
-= \underbrace{\frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}}}_{\text{direct}}
+\hat{\mathbf{x}}_n
+= \underbrace{\frac{\mathbf{y}_n - \mathbf{d}}{\mathbf{f}}}_{\text{direct}}
 \,\underbrace{\bar{f}}_{\text{dynamic range}}
 \;\underbrace{+\;\bar{d}}_{\text{zero light}} .
 $$
@@ -59,15 +59,15 @@ $$
 multiplies it by $\bar{f}$, and `"zero_light"` also adds $\bar{d}$, the mean
 dark field.
 
-Frames have $P$ pixels, flattened into vectors; products and divisions of
+Frames have $\lvert\Omega\rvert$ pixels, flattened into vectors; products and divisions of
 vectors are pixel-wise.
 
 | optix | [Smith et al. 2015](https://doi.org/10.1038/nmeth.3323) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}_i$ | $I_o$ | recorded image $i$ | $\mathbb{R}^P$, one per frame |
-| $\mathbf{x}_i$ | $I$ | latent (shading-free) image $i$ | $\mathbb{R}^P$, one per frame |
-| $\mathbf{f}$ | $v$ | illumination gain (flat field) | $\mathbb{R}^P$, shared by all frames of a group |
-| $\mathbf{d}$ | $z$ | zero-light term (dark field) | $\mathbb{R}^P$, shared by all frames of a group |
+| $\mathbf{y}_n$ | $I_o$ | recorded image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{x}_n$ | $I$ | latent (shading-free) image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{f}$ | $v$ | illumination gain (flat field) | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\mathbf{d}$ | $z$ | zero-light term (dark field) | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
 | $\bar{f}$, $\bar{d}$ | | spatial means of $\mathbf{f}$ and $\mathbf{d}$ | scalars, per group |
 | $\mathbf{r}$ | $x$ | pixel position | 2-D coordinate |
 
@@ -80,7 +80,7 @@ transform of one distribution $\mathbf{Q}$ common to all pixels:
 === "optix"
 
     $$
-    q_n(\mathbf{r}) = f(\mathbf{r})\,Q_n + c(\mathbf{r}), \qquad
+    q_m(\mathbf{r}) = f(\mathbf{r})\,Q_m + c(\mathbf{r}), \qquad
     \mathbf{c} = \mathbf{d} - \mathbf{f}\,Z_Q
     $$
 
@@ -94,7 +94,7 @@ transform of one distribution $\mathbf{Q}$ common to all pixels:
     b(x) = z(x) - v(x)\,Z_Q \tag{8}
     $$
 
-with $n = 1 \ldots K$ the quantile levels ($K = 100$ by default),
+with $m = 1 \ldots K$ the quantile levels ($K = 100$ by default),
 $\mathbf{q}(\mathbf{r}) \in \mathbb{R}^K$ and $\mathbf{Q} \in \mathbb{R}^K$, and
 $(Z_Q, Z_q)$ the zero-light point,
 through which every line passes. $\mathbf{Q}$ is the robust mean of the
@@ -110,8 +110,8 @@ The fields minimise an energy, not a likelihood:
     $$
 
     $$
-    E_f = \sum_{\mathbf{r}} \sum_n \tfrac{w^2}{2}
-    \log\Bigl(1 + \bigl(\tfrac{Q_n f(\mathbf{r}) + c(\mathbf{r}) - q_n(\mathbf{r})}{w}\bigr)^2\Bigr),
+    E_f = \sum_{\mathbf{r}} \sum_m \tfrac{w^2}{2}
+    \log\Bigl(1 + \bigl(\tfrac{Q_m f(\mathbf{r}) + c(\mathbf{r}) - q_m(\mathbf{r})}{w}\bigr)^2\Bigr),
     \qquad
     E_r = \sum_{t \in T} \Bigl\lVert \tfrac{1}{\lvert T \rvert}\, t^2\, \nabla^2 G_t * \mathbf{f} \Bigr\rVert^2 ,
     $$
@@ -184,7 +184,7 @@ zero-light point, constrained by $E_z$ and $E_b$.
 
 ## Algorithm
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$,
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$,
 optionally in groups. \
 **Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$ and $\hat{\mathbf{d}}$.
 
