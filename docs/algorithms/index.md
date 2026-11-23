@@ -21,6 +21,8 @@ example. The sections follow the modules of the
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
 | | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
+| | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
+| | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
