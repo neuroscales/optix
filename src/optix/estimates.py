@@ -42,6 +42,7 @@ __all__ = [
     "Classification",
     "Estimate",
     "PSFEstimate",
+    "PupilEstimate",
     "SensorEstimate",
     "ShadingEstimate",
 ]
@@ -451,3 +452,29 @@ class PSFEstimate(Estimate):
     fwhm: Tensor | None = None
     count: Tensor | None = None
     centers: Tensor | None = None
+
+
+@dataclass(eq=False)
+class PupilEstimate(Estimate):
+    """Scalar pupil function of a microscope, and its Zernike expansion.
+
+    The pupil is sampled on the discrete Fourier grid of the lateral
+    image grid it was estimated from: k = (i − K // 2) / (K · Δ) along
+    each axis, so that k = 0 is at index `K // 2`. `meta` records the
+    optics (`wavelength`, `na`, `n`) and the voxel size `spacing`
+    `(Δz, Δy, Δx)` they refer to.
+
+    Attributes
+    ----------
+    pupil : Tensor, optional
+        (*group, Ky, Kx) complex pupil function, 0 outside |k| ≤ NA/λ.
+    zernike_magnitude : Tensor, optional
+        (*group, J) Zernike coefficients of the magnitude, Noll indices
+        1 … J (`meta["zernike"] == "noll"`).
+    zernike_phase : Tensor, optional
+        (*group, J) Zernike coefficients of the phase, in radians.
+    """
+
+    pupil: Tensor | None = None
+    zernike_magnitude: Tensor | None = None
+    zernike_phase: Tensor | None = None
