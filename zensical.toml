@@ -28,6 +28,7 @@ nav = [
       "algorithms/shading/basic.md",
       "algorithms/shading/cidre.md",
       "algorithms/shading/likar-entropy.md",
+      "algorithms/shading/kask.md",
       "algorithms/shading/illumination-function.md",
       "algorithms/shading/gamma-mixture.md",
     ]},
