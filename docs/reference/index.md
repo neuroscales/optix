@@ -16,6 +16,7 @@ the reference to look up a signature.
 | [`optix.sensor`](sensor.md) | sensor calibration estimators and variance-stabilising transforms |
 | [`optix.shading`](shading.md) | shading estimators and `correct` |
 | [`optix.deconv`](deconv.md) | Richardson–Lucy deconvolution and `richardson_lucy` |
+| [`optix.background`](background.md) | `RollingBall`, `TopHat`, `rolling_ball` and `top_hat`: background subtraction by grey-scale opening |
 | [`optix.models`](models.md) | simulators of the camera and shading models |
 | [`optix.distributions`](distributions.md) | `Gamma`, `Normal`, `Dirichlet`, `Categorical`, statistics and conjugate updates |
 | [`optix.distributions.functional`](functional.md) | the pure tensor kernels behind the distributions |
