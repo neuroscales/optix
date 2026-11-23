@@ -21,18 +21,17 @@ class NormalExpectations(NamedTuple):
 class Normal(Distribution):
     """Normal distribution, elementwise (event shape `()`).
 
-    Notes
-    -----
-    Give exactly one of `var`, `std` or `precision`. It is stored as
-    given; the others are derived on access. The canonical parameters of
-    [`functional`][optix.distributions.functional] are
-    `(mean, precision)`.
+    !!! note
+        Give exactly one of `var`, `std` or `precision`. It is stored as
+        given; the others are derived on access. The canonical parameters of
+        [`functional`][optix.distributions.functional] are
+        `(mean, precision)`.
 
-    A "diagonal" multivariate Normal is this class with a trailing batch
-    dim of size K; reduce it yourself, e.g. `kl_divergence(q, p).sum(-1)`.
+        A "diagonal" multivariate Normal is this class with a trailing batch
+        dim of size K; reduce it yourself, e.g. `kl_divergence(q, p).sum(-1)`.
 
-    Exponential family: T(x) = (x, x²), η = (λμ, −λ/2),
-    A = λμ² / 2 − ½ log λ, log h = −½ log(2π).
+        Exponential family: T(x) = (x, x²), η = (λμ, −λ/2),
+        A = λμ² / 2 − ½ log λ, log h = −½ log(2π).
     """
 
     _forms = {

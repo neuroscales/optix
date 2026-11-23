@@ -113,6 +113,9 @@ def exact_inverse_table(
     on a grid of y (trapezoidal rule over n ∈ [−10, 10]) and inverts it
     on a uniform grid of D.
 
+    !!! note
+        Computed in float64 on the CPU.
+
     Parameters
     ----------
     s2 : (S,) Tensor
@@ -130,9 +133,6 @@ def exact_inverse_table(
         Uniform grid of D from 0 to the smallest E{f | ymax}.
     table : (S, nd) Tensor
         y such that E{f_σ(z) | y} = D (0 below E{f | 0}).
-
-    !!! note
-        Computed in float64 on the CPU.
     """
     f64 = {"dtype": torch.float64, "device": "cpu"}
     s2 = torch.as_tensor(s2).to(**f64).reshape(-1)
