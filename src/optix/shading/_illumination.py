@@ -15,6 +15,7 @@ from torch import Tensor
 
 from .._estimator import Tags
 from ..estimates import SensorEstimate, ShadingEstimate
+from ..filters import median_disk, median_filter
 from ..io import ArrayLike, WritableArrayLike
 from ..sensor._base import CalibrationEstimator, as_map
 from ._darkflat import _is_map, correct
@@ -65,26 +66,11 @@ def median_smooth(x: Tensor, radius: int, *, rows: int = 64) -> Tensor:
     """Median filter with a disk of `radius` (2D; CellProfiler extension).
 
     Pixels outside the image are ignored (as a rank filter). Computed in
-    strips of `rows` rows. Lower median (`torch.nanmedian`).
+    strips of `rows` rows. Lower median (`torch.nanmedian`). See
+    [`median_disk`][optix.filters.median_disk].
     """
-    if x.ndim != 2:
-        raise ValueError("median smoothing needs 2 spatial dims")
-    r = int(radius)
-    offs = [
-        (i, j)
-        for i, j in itertools.product(range(-r, r + 1), repeat=2)
-        if i * i + j * j <= r * r
-    ]
-    h, w = x.shape
-    pad = F.pad(x[None, None], (r, r, r, r), value=math.nan)[0, 0]
-    out = torch.empty_like(x)
-    for s in range(0, h, rows):
-        e = min(h, s + rows)
-        stack = torch.stack(
-            [pad[s + r + i : e + r + i, r + j : r + j + w] for i, j in offs]
-        )
-        out[s:e] = stack.nanmedian(0).values
-    return out
+    _check_2d(x)
+    return median_disk(x, radius, rows=rows)
 
 
 def median_window(x: Tensor, size: int, *, budget: int = 1 << 24) -> Tensor:
@@ -92,33 +78,19 @@ def median_window(x: Tensor, size: int, *, budget: int = 1 << 24) -> Tensor:
 
     The window of pixel (i, j) spans rows i − ⌊size/2⌋ … i + ⌈size/2⌉ − 1
     (likewise for columns); pixels outside the image are ignored. Lower
-    median (`torch.nanmedian`). Computed in blocks of at most `budget`
-    window values. A side larger than 2·n − 1 along a dim of length n is
-    equivalent to 2·n − 1 there (every window then spans the whole dim).
+    median (`torch.nanmedian`). A side larger than 2·n − 1 along a dim of
+    length n is equivalent to 2·n − 1 there (every window then spans the
+    whole dim). The cost per pixel does not grow with `size`; `budget`
+    bounds the memory of small windows, which are sorted. See
+    [`median_filter`][optix.filters.median_filter].
     """
+    _check_2d(x)
+    return median_filter(x, size, budget=budget)
+
+
+def _check_2d(x: Tensor) -> None:
     if x.ndim != 2:
         raise ValueError("median smoothing needs 2 spatial dims")
-    h, w = x.shape
-    sh, sw = min(size, 2 * h - 1), min(size, 2 * w - 1)
-    th, tw = sh // 2, sw // 2
-    pad = F.pad(
-        x[None, None], (tw, sw - tw - 1, th, sh - th - 1), value=math.nan
-    )
-    pad = pad[0, 0]
-    out = torch.empty_like(x)
-    per = max(1, budget // (sh * sw))
-    cols = min(w, per)
-    rows = max(1, per // cols)
-    for r in range(0, h, rows):
-        re = min(h, r + rows)
-        for c in range(0, w, cols):
-            ce = min(w, c + cols)
-            win = pad[r : re + sh - 1, c : ce + sw - 1].unfold(0, sh, 1)
-            win = win.unfold(1, sw, 1)  # (rows, cols, sh, sw)
-            out[r:re, c:ce] = (
-                win.reshape(re - r, ce - c, -1).nanmedian(-1).values
-            )
-    return out
 
 
 def fit_polynomial(x: Tensor, degree: int = 2) -> Tensor:
@@ -188,10 +160,12 @@ class IlluminationFunction(CalibrationEstimator):
         CorrectIlluminationCalculate (BSD-3-Clause) where the paper defers
         to it, and are off by default.
 
-    !!! warning "Cost"
-        The exact square median costs O(size²) per pixel: the paper's
-        500-pixel window on a 1280×1024 image is very slow. A
-        constant-time (histogram) median is planned.
+    !!! note "Cost"
+        The exact square median
+        ([`median_filter`][optix.filters.median_filter]) costs the same per
+        pixel whatever the window size: the paper's
+        500-pixel window on a 1280×1024 image takes a few seconds on one
+        CPU thread.
 
     !!! note
         `fit(images, dark=None)`. `dark` (extension) is subtracted from the
