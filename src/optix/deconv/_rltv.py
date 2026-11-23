@@ -41,9 +41,9 @@ def tv_curvature(
     ndim : int
         Number of trailing (spatial) axes.
     epsilon : float, optional
-        Floor ε of |∇f|. Default: the single-precision round-off level
-        of f, ε = 2⁻²³ · max|f|, the same whatever the working dtype, so
-        that float32 and float64 runs solve the same problem.
+        Floor ε of |∇f|. Default: ε = eps · max|f|, with eps the machine
+        epsilon of the dtype of f: a floor at the round-off level of the
+        working dtype, only to avoid 0/0 (not in the paper).
 
     Returns
     -------
@@ -57,9 +57,8 @@ def tv_curvature(
         norm.addcmul_(g, g)
     norm.sqrt_()
     if epsilon is None:
-        info = torch.finfo(torch.float32)
-        tiny = torch.finfo(f.dtype).tiny
-        epsilon = max(float(f.abs().max()) * info.eps, tiny)
+        info = torch.finfo(f.dtype)
+        epsilon = max(float(f.abs().max()) * info.eps, info.tiny)
     norm.clamp_(min=float(epsilon))
     div = torch.zeros_like(f)
     for d, g in zip(dims, grad, strict=True):
@@ -99,8 +98,10 @@ class RichardsonLucyTV(RichardsonLucy):
 
     **Discretisation of the TV term.** Not specified in the paper:
     forward differences for ∇, backward differences for div, unit voxel
-    spacing along every axis, and the unit normal ∇o/|∇o| set to 0
-    where the gradient is at the round-off level (see
+    spacing along every axis (λ_TV acts per voxel, also along an
+    anisotropic axis; the paper's data are anisotropic and it does not
+    say whether it weighted the axial differences), and the unit normal
+    ∇o/|∇o| set to 0 where the gradient is at the round-off level (see
     [`tv_curvature`][optix.deconv.utils.tv_curvature]). The paper gives
     no ε for |∇o|; one can be set with `epsilon`.
 
@@ -114,15 +115,23 @@ class RichardsonLucyTV(RichardsonLucy):
     as in the paper; its scale does not matter, since both the
     Richardson–Lucy correction and the TV term are invariant to the
     scale of o. Pixels at 0 in the start stay at 0 (multiplicative
-    update). Outside the observed region (see Boundaries), the start is
-    the mean of the image.
+    update): with `start="data"`, every zero-count voxel stays at 0 for
+    the whole run, as in the paper; `start="uniform"` avoids this for
+    sparse, photon-limited data. Outside the observed region (see
+    Boundaries), the start is the mean of the image.
 
     **Stopping rule.** The paper stops "at convergence, defined when the
     relative difference between two images is less than a threshold"
     of 10⁻⁵. The relative difference is ‖oₖ₊₁ − oₖ‖₂ / ‖oₖ‖₂ on the
     observed block (the norm is not specified in the paper), and the
     iteration is capped at `max_iter` = 1000 (not specified in the
-    paper). A fixed number of iterations is selected with `n_iter`.
+    paper). With the default ε the threshold is usually not reached: the
+    one-step-late TV iteration keeps oscillating in flat noisy regions,
+    where the normals ∇o/|∇o| keep changing direction, and the relative
+    change plateaus near 1.5 · 10⁻³, so `max_iter` is the effective
+    stop. A fixed number of iterations is selected with `n_iter`; a
+    larger `epsilon` (extension) smooths the TV term and gives a stop
+    that does trigger.
 
     **Boundaries and blocks.** As in
     [`RichardsonLucy`][optix.deconv.RichardsonLucy]: the object is
@@ -254,7 +263,8 @@ class RichardsonLucyTV(RichardsonLucy):
             specified in the paper).
         epsilon : float, optional
             Floor ε of |∇f| in the TV term. Default: None, the round-off
-            level of the estimate (not specified in the paper).
+            level of the working dtype times max|f|, only to avoid 0/0
+            (not specified in the paper).
         start : {"data", "uniform"}
             Starting estimate: the measured image, or (extension) the
             uniform image of the same integrated intensity. Default (Dey

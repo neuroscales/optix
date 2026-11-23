@@ -324,9 +324,12 @@ def rl_block(
         )
         stop = False
         if n_iter is None and tol is not None:
-            old = op.crop(f).double()
-            change = (op.crop(new).double() - old).norm()
-            stop = bool(change <= tol * old.norm())
+            old = op.crop(f)
+            f64 = torch.float64
+            change = torch.linalg.vector_norm(op.crop(new) - old, dtype=f64)
+            stop = bool(
+                change <= tol * torch.linalg.vector_norm(old, dtype=f64)
+            )
         if accelerate:
             if n > 0:  # the first update only sets the starting image
                 g1, g2 = new - y, g1

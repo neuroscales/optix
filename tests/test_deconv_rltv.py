@@ -216,24 +216,22 @@ def test_lazy_zarr_input_and_output(tmp_path):
     torch.testing.assert_close(torch.from_numpy(dst[:]), ref)
 
 
-def test_default_epsilon_does_not_depend_on_dtype():
-    f = torch.rand(16, 16, dtype=F64) * 100
-    a = tv_curvature(f, 2)
-    b = tv_curvature(f.float(), 2).double()
-    # same ε in both dtypes: only float32 round-off remains
-    assert float((a - b).abs().max()) < 1e-3
-
-
 def test_float32_matches_float64():
     _, psf, data = boxes_2d(seed=5)
     a = richardson_lucy_tv(data, psf, n_iter=30, dtype=F64)
     b = richardson_lucy_tv(
         data.float(), psf.float(), n_iter=30, dtype="float32"
     )
-    # the TV term div(∇f/|∇f|) with ε at round-off is non-smooth, so float32
-    # rounding flips unit-gradient directions in flat regions: ~6e-4 on
+    # the normals ∇f/|∇f| vary like 1/|∇f|, so where |∇f| is small against
+    # the noise the iteration amplifies round-off (by ~1e3-1e4): ~6e-4 on
     # recent torch, 1.1e-3 on torch 2.3 (plain RL: ~1e-5)
     assert float((a - b).abs().max() / a.max()) < 3e-3
+    # a smooth TV term (ε of about a count) keeps a tight check on that path
+    a = richardson_lucy_tv(data, psf, n_iter=30, epsilon=1.0, dtype=F64)
+    b = richardson_lucy_tv(
+        data.float(), psf.float(), n_iter=30, epsilon=1.0, dtype="float32"
+    )
+    assert float((a - b).abs().max() / a.max()) < 1e-4
 
 
 # -- options ----------------------------------------------------------------
