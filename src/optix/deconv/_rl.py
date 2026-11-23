@@ -188,6 +188,7 @@ def rl_block(
     back: Callable[[Tensor], Tensor] | None = None,
     accelerate: bool = False,
     trace: dict | None = None,
+    step: Callable[..., Tensor] | None = None,
 ) -> tuple[Tensor, int]:
     """Richardson–Lucy iterations on one block, optionally accelerated.
 
@@ -196,7 +197,12 @@ def rl_block(
     data : Tensor
         Observed block y (counts), `op.shape`.
     op : PaddedConvolution
-        Blur operator H.
+        Blur operator H. With a `step` hook, any object with the
+        attributes `norm` (Hᵀ1 on the object grid, which sets the
+        support of the estimate), `shape` (of `data`) and the methods
+        `forward` (object to data) and `adjoint` (data to object, used
+        with `flat`) will do, e.g. a
+        [`Multiview`][optix.deconv.utils.Multiview].
     start : float or Tensor
         Starting estimate f⁽⁰⁾ > 0: a constant or a tensor on `op.grid`.
     n_iter : int, optional
@@ -242,6 +248,25 @@ def rl_block(
         pixels set to 0) and `"effective"` (estimated number of
         unaccelerated iterations, ∑ₖ ηₖ, [Biggs and Andrews 1997,
         Eq. 12](https://doi.org/10.1364/AO.36.001766)).
+    step : callable, optional
+        Update used in place of [`rl_step`][optix.deconv.utils.rl_step],
+        e.g. the update over several views,
+        [`Multiview.step`][optix.deconv.utils.Multiview.step], with `op`
+        a [`Multiview`][optix.deconv.utils.Multiview] and `data` the
+        views stacked. It is called once per iteration as
+        `step(f, data, op, inv_norm=, background=, damping=, mu=,
+        flat=, back=)` and returns the new estimate on the object grid:
+        `f` the current estimate (or the extrapolated prediction with
+        `accelerate`), `data` the data (or the conditional mean of the
+        counts with `expect`), `inv_norm` the reciprocal of Hᵀ1 (of
+        Hᵀβ with `flat`, of B1 with `back`) on the support, 0
+        elsewhere, and `mu` the expected data β·H f + b at `f` if
+        already computed (by the χ² test or `expect`), else None; the
+        other keywords are those given to `rl_block`. A hook may ignore
+        `inv_norm` (it need not be the normaliser of its update) but
+        must accept every keyword; a hook that also takes `**kwargs`
+        keeps working if keywords are added to this call. Default:
+        `rl_step`.
 
     Returns
     -------
@@ -294,7 +319,7 @@ def rl_block(
             y = f
         if expect is not None and mu is None:
             mu = _expected(y, op, background, flat)
-        new = rl_step(
+        new = (rl_step if step is None else step)(
             y,
             data if expect is None else expect(mu),
             op,
