@@ -45,12 +45,15 @@ baseline, and, in the paper, no dark field:
     I_{\text{corrected}} = \frac{I}{F}
     $$
 
-| optix | [Singh et al. 2014](https://doi.org/10.1111/jmi.12178) |
-|---|---|
-| $\mathbf{y}_i$ | $I$ (an image of the batch) |
-| $\hat{\mathbf{x}}_i$ | $I_{\text{corrected}}$ |
-| $\mathbf{f}$ | $F$ (the illumination correction function) |
-| $\mathbf{d}$ | — (not modelled) |
+Frames have $P$ pixels, flattened into vectors, and a batch (group) has $N$
+frames; products and divisions of vectors are pixel-wise.
+
+| optix | [Singh et al. 2014](https://doi.org/10.1111/jmi.12178) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_i$ | $I$ | recorded image $i$ of the batch | $\mathbb{R}^P$, one per frame |
+| $\mathbf{x}_i$, $\hat{\mathbf{x}}_i$ | $I_{\text{corrected}}$ | latent image and its estimate | $\mathbb{R}^P$, one per frame |
+| $\mathbf{f}$ | $F$ | flat field (illumination correction function) | $\mathbb{R}^P$, shared by all frames of a group |
+| $\mathbf{d}$ | — (not modelled) | dark field, optional | $\mathbb{R}^P$, shared by all frames of a group |
 
 Because the flat is never normalised in faithful mode, the corrected images
 are rescaled by the mean brightness of the batch: $\hat{\mathbf{x}}_i$ is the
@@ -78,11 +81,12 @@ operator $\mathcal{S}$:
     F = \operatorname{median}_{500}\!\left(\frac{1}{N}\sum_{n=1}^{N} I_n\right)
     $$
 
-| optix | [Singh et al. 2014](https://doi.org/10.1111/jmi.12178) |
-|---|---|
-| $\frac{1}{N}\sum_i \mathbf{y}_i$ | average image of the batch |
-| $\mathcal{S}$ | median filter, window of 500 pixels |
-| $\hat{\mathbf{f}}$ | $F$ |
+| optix | [Singh et al. 2014](https://doi.org/10.1111/jmi.12178) | Meaning | Shape |
+|---|---|---|---|
+| $\frac{1}{N}\sum_i \mathbf{y}_i$ | $\frac{1}{N}\sum_n I_n$ | average image of the batch | $\mathbb{R}^P$, per group |
+| $\bar{x}$ | | mean latent intensity of the batch | scalar, per group |
+| $\mathcal{S}$ | $\operatorname{median}_{500}$ | smoothing operator (paper: median filter, window of 500 pixels) | $\mathbb{R}^P \to \mathbb{R}^P$ |
+| $\hat{\mathbf{f}}$ | $F$ | estimated flat field | $\mathbb{R}^P$, per group |
 
 ## Inference / derivation
 
@@ -95,19 +99,33 @@ the units of the data); the `"robust-min"` extension resolves it as
 CellProfiler does, by dividing by the 2nd percentile of the positive values
 after clipping below it, so that $\hat{\mathbf{f}} \ge 1$.
 
+**Statistical counterpart.** The per-pixel mean is a method-of-moments
+estimate of $\bar{x}\,\mathbf{f}$ (from $\mathbb{E}[\mathbf{y}_i] =
+\bar{x}\,\mathbf{f} + \mathbf{d}$), and also its maximum-likelihood estimate
+under i.i.d. Gaussian residuals; the median is the corresponding Laplace
+(robust, L1) estimate. The median filter is a robust local M-estimate that
+plays the role of a smoothness prior.
+
 ## Algorithm
 
-```text
-Input: stack Y (N frames), optional dark d, options statistic, smoothing, size, rescale
-1. a = per-pixel mean (or median) of Y over frames     one streaming pass
-2. if d is given: a = a − d                             extension
-3. f = S(a)                                            median of side `size` (paper: 500)
-4. if rescale == "robust-min": f = max(f, q₀.₀₂) / q₀.₀₂ extension
-Return ShadingEstimate(flat=f, dark=d)
-apply: x̂ = (y − d) / f
-```
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$,
+optional dark field $\mathbf{d} \in \mathbb{R}^P$; options `statistic`,
+`smoothing`, `size`, `rescale`. \
+**Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$ (and $\mathbf{d}$ when
+given).
 
-Each group of a layout gets its own function.
+For each group of a layout:
+
+1. **Average:** $\mathbf{a} = \frac{1}{N}\sum_i \mathbf{y}_i$ (or the
+   per-pixel median with `statistic="median"`), in one streaming pass.
+2. **Subtract the dark field** (extension): $\mathbf{a} \leftarrow \mathbf{a} - \mathbf{d}$.
+3. **Smooth:** $\hat{\mathbf{f}} = \mathcal{S}(\mathbf{a})$, by default a
+   square median of side `size` $= 500$.
+4. **Rescale** (extension, `rescale="robust-min"`):
+   $\hat{\mathbf{f}} \leftarrow \max(\hat{\mathbf{f}}, q_{0.02}) / q_{0.02}$,
+   with $q_{0.02}$ the 2nd percentile of the positive values.
+
+`apply` returns $\hat{\mathbf{x}}_i = (\mathbf{y}_i - \mathbf{d}) / \hat{\mathbf{f}}$.
 
 ## Faithful mode and extensions
 
