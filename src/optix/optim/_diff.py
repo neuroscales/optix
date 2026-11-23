@@ -6,6 +6,8 @@ from collections.abc import Sequence
 import torch
 from torch import Tensor
 
+from ._operators import _CirculantBase
+
 __all__ = [
     "Gradient",
     "Hessian",
@@ -86,7 +88,7 @@ def rfft_frequencies(
     dtype: torch.dtype = torch.float64,
     device: torch.device | str | None = None,
 ) -> list[Tensor]:
-    """Frequencies νₐ = kₐ/Nₐ of `torch.fft.rfftn` on a grid, per axis.
+    """Frequencies ξₐ = kₐ/Nₐ of `torch.fft.rfftn` on a grid, per axis.
 
     Parameters
     ----------
@@ -118,7 +120,7 @@ def _complex(dtype: torch.dtype) -> torch.dtype:
     return torch.complex128 if dtype == torch.float64 else torch.complex64
 
 
-class _Differences:
+class _Differences(_CirculantBase):
     """Shared parts of the difference operators."""
 
     def __init__(
@@ -150,40 +152,25 @@ class _Differences:
     def _factors(
         self, grid: Sequence[int], dtype: torch.dtype, device: object
     ) -> list[Tensor]:
-        """wₐ D̂ₐ(ν) = wₐ (e^{2πiνₐ} − 1), broadcastable, per axis."""
+        """wₐ D̂ₐ(ξ) = wₐ (e^{2πiξₐ} − 1), broadcastable, per axis.
+
+        The phase factors are computed in float64 (cos ω − 1 cancels at
+        low frequencies in float32), then cast.
+        """
         if self.boundary != "periodic":
             raise ValueError("Fourier symbols need boundary='periodic'")
         if len(grid) != self.ndim:
             raise ValueError(f"grid must have {self.ndim} dims")
-        freqs = rfft_frequencies(grid, dtype=dtype, device=device)
+        freqs = rfft_frequencies(grid, dtype=torch.float64, device=device)
         out = []
         for w, f in zip(self.weights, freqs, strict=True):
-            phase = torch.polar(torch.ones_like(f), 2 * math.pi * f)
-            out.append(w * (phase - 1).to(_complex(dtype)))
+            omega = 2 * math.pi * f
+            # e^{iω} − 1 = −2 sin²(ω/2) + i sin ω (no cancellation)
+            phase = torch.complex(
+                -2 * torch.sin(omega / 2).square(), torch.sin(omega)
+            )
+            out.append((w * phase).to(_complex(dtype)))
         return out
-
-    def gram(
-        self,
-        grid: Sequence[int],
-        *,
-        dtype: torch.dtype = torch.float64,
-        device: object = None,
-    ) -> Tensor:
-        """∑_c |symbol_c|², the symbol of AᵀA (half spectrum, real)."""
-        total = None
-        for s in self.symbols(grid, dtype=dtype, device=device):
-            p = s.real.square() + s.imag.square()
-            total = p if total is None else total + p
-        return total
-
-    def symbols(
-        self,
-        grid: Sequence[int],
-        *,
-        dtype: torch.dtype = torch.float64,
-        device: object = None,
-    ) -> list[Tensor]:
-        raise NotImplementedError
 
 
 class Gradient(_Differences):
@@ -243,7 +230,7 @@ class Gradient(_Differences):
         dtype: torch.dtype = torch.float64,
         device: object = None,
     ) -> list[Tensor]:
-        """Transfer function of each component, wₐ(e^{2πiνₐ} − 1).
+        """Transfer function of each component, wₐ(e^{2πiξₐ} − 1).
 
         Parameters
         ----------

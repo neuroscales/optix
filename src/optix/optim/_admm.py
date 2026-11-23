@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from ._functions import Function
+from ._operators import Circulant, Convolution, Identity, as_circulant
 
 __all__ = ["AdmmResult", "Term", "admm_fft"]
 
@@ -16,23 +17,23 @@ class Term(NamedTuple):
 
     Attributes
     ----------
-    operator : None, Tensor or object
-        The circulant operator A: None for the identity; a complex
-        tensor, the transfer function of a single-component operator on
-        the half spectrum of `torch.fft.rfftn` (e.g. the `otf` of
-        [`PaddedConvolution`][optix.deconv.utils.PaddedConvolution]); or
-        an object with a `symbols(grid, dtype=, device=)` method that
-        returns the transfer function of each of its C components (e.g.
-        [`Hessian`][optix.optim.Hessian]).
+    operator : Circulant, Tensor or None
+        The operator A, a [`Circulant`][optix.optim.Circulant] (for
+        example [`Hessian`][optix.optim.Hessian] or
+        [`Convolution`][optix.optim.Convolution]). Two shorthands are
+        accepted: None for the [`Identity`][optix.optim.Identity], and a
+        complex tensor for the `Convolution` with that transfer function
+        on the half spectrum of `torch.fft.rfftn` (e.g. the `otf` of
+        [`PaddedConvolution`][optix.deconv.utils.PaddedConvolution]).
     function : Function
         f, applied to the split variable z = A x of shape `(C, *N)`
-        (C = 1 for the identity and a single transfer function).
+        (C = 1 for the identity and a convolution).
     region : tuple of slice, optional
         Restricts f to `z[:, *region]`; f is 0 elsewhere, so z = A x + u
         there. None: the whole grid.
     """
 
-    operator: object
+    operator: Circulant | Tensor | None
     function: Function
     region: tuple[slice, ...] | None = None
 
@@ -52,6 +53,13 @@ class AdmmResult(NamedTuple):
         Number of iterations.
     change : float
         Last relative change ‖xᵏ⁺¹ − xᵏ‖₂ / ‖xᵏ‖₂ (inf if not measured).
+    primal_residual : float
+        Last primal residual ‖r‖₂ = (∑ₖ ‖Aₖ x − zₖ‖²)^½ (Boyd et al.
+        2011, §3.3).
+    dual_residual : float
+        Last dual residual ‖s‖₂ (Boyd et al. 2011, §3.3): ρ‖∑ₖ Aₖᵀ(zₖ −
+        zₖ_prev)‖ = ρ‖∑ₖ Aₖᵀ uₖ‖ for `order="x-first"`, ρ‖A(x − x_prev)‖
+        for `order="z-first"` (inf if not measured).
     """
 
     x: Tensor
@@ -59,25 +67,20 @@ class AdmmResult(NamedTuple):
     duals: list[Tensor]
     n_iter: int
     change: float
+    primal_residual: float = float("inf")
+    dual_residual: float = float("inf")
 
 
 def _symbols(
-    operator: object, grid: tuple[int, ...], dtype: torch.dtype, device: object
+    operator: Circulant,
+    grid: tuple[int, ...],
+    dtype: torch.dtype,
+    device: object,
 ) -> list[Tensor] | None:
-    if operator is None:
+    """Transfer functions of the components; None for the identity."""
+    if isinstance(operator, Identity):
         return None
-    if isinstance(operator, Tensor):
-        if not operator.is_complex():
-            operator = operator.to(
-                torch.complex128 if dtype == torch.float64 else torch.complex64
-            )
-        return [operator.to(device)]
-    if hasattr(operator, "symbols"):
-        return list(operator.symbols(grid, dtype=dtype, device=device))
-    raise TypeError(
-        "operator must be None, a transfer function or have symbols(): "
-        f"got {type(operator).__name__}"
-    )
+    return list(operator.symbols(grid, dtype=dtype, device=device))
 
 
 def _norm(x: Tensor) -> float:
@@ -124,6 +127,15 @@ def admm_fft(
     Iterations stop when ‖xᵏ⁺¹ − xᵏ‖₂ ≤ `tol`·‖xᵏ‖₂ (tested once
     ‖xᵏ‖₂ > 0) or after `max_iter` iterations. The norms of x are
     computed in float64.
+
+    !!! warning "A small change is not convergence"
+        The relative-change test is the stopping rule of Ikoma et al.
+        (2018) and Lefkimmiatis & Unser (2013). ADMM can move slowly
+        while still far from the minimiser, so a stop by this test does
+        not certify convergence. The primal and dual residuals of the
+        last iterate (Boyd et al. 2011, §3.3) are returned in
+        [`AdmmResult`][optix.optim.AdmmResult]; both tend to 0 at a
+        solution.
 
     !!! references "References"
         1. Boyd S, Parikh N, Chu E, Peleato B, Eckstein J. *Distributed
@@ -201,9 +213,13 @@ def admm_fft(
         Backend. Default: those of `x0`, else of the first transfer
         function in `terms`, else the default dtype on the CPU.
     trace : dict, optional
-        Filled with per-iteration lists `"change"` (relative change of
-        x, nan when not measured) and `"residual"` (primal residual
-        (∑ₖ ‖Aₖ x − zₖ‖²)^½).
+        Filled during the run (a callback can read it) with
+        per-iteration lists: `"change"` (relative change of x, nan when
+        not measured), `"residual"` (primal residual), `"dual_residual"`
+        (see [`AdmmResult`][optix.optim.AdmmResult]) and `"objective"`
+        (∑ₖ fₖ(zₖ) at the split variables, in float64; it equals the
+        objective at x once the primal residual is 0). The last two cost
+        extra FFTs and reductions and are only computed with a trace.
     callback : callable, optional
         `callback(k, x)` after each iteration.
 
@@ -218,11 +234,16 @@ def admm_fft(
         raise ValueError(f"rho must be positive, got {rho}")
     if order not in ("x-first", "z-first"):
         raise ValueError(f"order must be 'x-first' or 'z-first': {order!r}")
+    operators = [as_circulant(term.operator, grid) for term in terms]
     if dtype is None or device is None:
         like = x0
         if like is None:
             like = next(
-                (t.operator for t in terms if isinstance(t.operator, Tensor)),
+                (
+                    op.transfer
+                    for op in operators
+                    if isinstance(op, Convolution)
+                ),
                 None,
             )
         if dtype is None:
@@ -234,7 +255,7 @@ def admm_fft(
         if device is None:
             device = None if like is None else like.device
     t = 1.0 / float(rho)
-    symbols = [_symbols(term.operator, grid, dtype, device) for term in terms]
+    symbols = [_symbols(op, grid, dtype, device) for op in operators]
     half = (*grid[:-1], grid[-1] // 2 + 1)
     den = torch.zeros(half, dtype=dtype, device=device)
     for sym in symbols:
@@ -259,6 +280,18 @@ def admm_fft(
             out[c] = torch.fft.irfftn(s * spec, s=grid, dim=dims)
         return out
 
+    def adjoint_sum(fields: list[Tensor]) -> Tensor:
+        """∑ₖ Aₖᵀ wₖ, `(*N)`."""
+        acc = None
+        for sym, w in zip(symbols, fields, strict=True):
+            for c in range(w.shape[0]):
+                r = torch.fft.rfftn(w[c], dim=dims)
+                if sym is not None:
+                    r *= sym[c].conj()
+                acc = r if acc is None else acc.add_(r)
+                del r
+        return torch.fft.irfftn(acc, s=grid, dim=dims)
+
     def solve(splits: list[Tensor], duals: list[Tensor]) -> Tensor:
         rhs = None
         for sym, z, u in zip(symbols, splits, duals, strict=True):
@@ -272,9 +305,13 @@ def admm_fft(
         return torch.fft.irfftn(rhs, s=grid, dim=dims)
 
     def prox(k: int, v: Tensor) -> Tensor:
+        """prox of fₖ/ρ on the region; never returns `v` itself."""
         term = terms[k]
         if term.region is None:
-            return term.function.prox(v, t)
+            z = term.function.prox(v, t)
+            if z is v or z.data_ptr() == v.data_ptr():
+                z = z.clone()  # v is updated in place afterwards
+            return z
         index = (slice(None), *term.region)
         z = v.clone()
         z[index] = term.function.prox(v[index], t)
@@ -287,6 +324,20 @@ def admm_fft(
             ** 2
             for c in range(a.shape[0])
         )
+
+    def objective(splits: list[Tensor]) -> float:
+        total = 0.0
+        for term, z in zip(terms, splits, strict=True):
+            zr = z if term.region is None else z[(slice(None), *term.region)]
+            total += float(term.function.value(zr))
+        return total
+
+    def dual_residual(dx: Tensor | None) -> float:
+        if order == "x-first":
+            return float(rho) * _norm(adjoint_sum(duals))
+        spec = torch.fft.rfftn(dx, dim=dims)
+        total = sum(sq_dist(apply(sym, spec, dx)) for sym in symbols)
+        return float(rho) * total**0.5
 
     x = (
         torch.zeros(grid, dtype=dtype, device=device)
@@ -308,9 +359,12 @@ def admm_fft(
         splits = [
             prox(k, apply(sym, spec, x)) for k, sym in enumerate(symbols)
         ]
-    changes: list[float] = []
-    residuals: list[float] = []
+    if trace is not None:
+        for key in ("change", "residual", "dual_residual", "objective"):
+            trace[key] = []
     change = float("inf")
+    primal = float("inf")
+    dual = float("inf")
     n = 0
     while n < max_iter:
         x_new = solve(splits, duals)
@@ -339,18 +393,26 @@ def admm_fft(
         del spec
         n += 1
         prev = _norm(x)
-        step = _norm(x_new - x)
+        dx = x_new - x
+        step = _norm(dx)
         x = x_new
         change = step / prev if prev > 0 else float("nan")
-        changes.append(change)
-        residuals.append(res2**0.5)
+        primal = res2**0.5
+        stop = n >= max_iter or (
+            tol is not None and prev > 0 and change <= tol
+        )
+        if trace is not None or stop:
+            dual = dual_residual(dx)
+        del dx
+        if trace is not None:
+            trace["change"].append(change)
+            trace["residual"].append(primal)
+            trace["dual_residual"].append(dual)
+            trace["objective"].append(objective(splits))
         if callback is not None:
             callback(n, x)
-        if tol is not None and prev > 0 and change <= tol:
+        if stop:
             break
-    if trace is not None:
-        trace["change"] = changes
-        trace["residual"] = residuals
     if change != change:  # nan: never measured
         change = float("inf")
-    return AdmmResult(x, splits, duals, n, change)
+    return AdmmResult(x, splits, duals, n, change, primal, dual)

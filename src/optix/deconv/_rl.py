@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from .._estimator import Estimator, Tags
+from .._estimator import Tags
 from ..estimates import SensorEstimate
 from ..io import (
     ArrayLike,
@@ -15,10 +15,8 @@ from ..io import (
     Layout,
     WritableArrayLike,
     blocks,
-    chunks_of,
-    flush,
-    prepare_out,
 )
+from ._block import _BlockDeconvolution
 from ._fft import PaddedConvolution
 
 __all__ = [
@@ -332,7 +330,7 @@ class _Block:
     variance: Tensor | float = 0.0
 
 
-class RichardsonLucy(Estimator):
+class RichardsonLucy(_BlockDeconvolution):
     """Richardson–Lucy deconvolution with a known PSF, block by block.
 
     Model: the image y is a Poisson sample of the blurred object,
@@ -532,31 +530,6 @@ class RichardsonLucy(Estimator):
             raise ValueError("psf must have a positive sum")
         return psf / total
 
-    def _halo(self, psf: Tensor) -> tuple[int, ...]:
-        halo = self.options["halo"]
-        need = tuple(psf.shape)
-        if halo is None:
-            return tuple(2 * k for k in need)
-        halo = (
-            (int(halo),) * psf.ndim
-            if isinstance(halo, int)
-            else tuple(int(h) for h in halo)
-        )
-        if len(halo) != psf.ndim:
-            raise ValueError("halo must have one entry per PSF dim")
-        if any(h < k for h, k in zip(halo, need, strict=True)):
-            raise ValueError(
-                f"halo {halo} must be at least the PSF size {need}"
-            )
-        return halo
-
-    def _labeled_for(self, data: ArrayLike) -> Labeled:
-        if isinstance(data, Labeled):
-            return data
-        psf = self.psf
-        ndim = 2 if psf is None else psf.ndim
-        return self._labeled(data, Layout.default(len(data.shape), ndim))
-
     def _maps(self, data: Labeled, backend: dict) -> dict[str, Tensor | None]:
         """Sensor maps, broadcast to `(*group, *spatial)`."""
         shape = data.layout.map_shape(data.array)
@@ -568,17 +541,6 @@ class RichardsonLucy(Estimator):
                 if value is not None:
                     out[name] = torch.broadcast_to(value.to(**backend), shape)
         return out
-
-    @staticmethod
-    def _region(chunk: Chunk) -> tuple[slice, ...]:
-        """Loaded region (core + halo) along the spatial axes."""
-        region = []
-        for core, inner, n in zip(
-            chunk.spatial, chunk.inner, chunk.data.shape, strict=True
-        ):
-            start = core.start - inner.start
-            region.append(slice(start, start + n))
-        return tuple(region)
 
     def _prepare(self, chunk: Chunk, maps: dict) -> _Block:
         """Counts y (electrons with a sensor)."""
@@ -621,9 +583,22 @@ class RichardsonLucy(Estimator):
             trace=trace,
         )
 
-    def _start(self, chunk: Chunk) -> object:
+    def _block_input(self, chunk: Chunk) -> float:
         """Per-image input of `_solve`: the start level of the image."""
         return float(self.level[chunk.group + chunk.samples].squeeze())
+
+    def _fitted_images(self) -> tuple[int, ...] | None:
+        return None if self.level is None else tuple(self.level.shape)
+
+    def _begin_apply(self) -> None:
+        if self._accelerate:
+            self.history.extras.setdefault("effective_iterations", [])
+
+    def _after_block(self, trace: dict) -> None:
+        if self._accelerate:
+            self.history.extras["effective_iterations"].append(
+                float(trace["effective"])
+            )
 
     def _overhead(self) -> float:
         """Working buffers per loaded voxel, for the block size."""
@@ -666,66 +641,14 @@ class RichardsonLucy(Estimator):
         if self._accelerate:
             self.history.extras["effective_iterations"] = []
 
-    def _apply(
-        self, data: ArrayLike, out: WritableArrayLike | None
-    ) -> WritableArrayLike:
-        if self.level is None:
-            raise RuntimeError("Call fit(data) before apply(data)")
-        data = self._labeled_for(data)
-        group, sample, _ = data.layout.shape_of(data.array)
-        if tuple(self.level.shape) != group + sample:
-            raise ValueError(
-                "apply(data) needs the data given to fit (images per "
-                f"group/sample {tuple(self.level.shape)}, got "
-                f"{group + sample})"
-            )
-        backend = self._backend(data)
-        psf = self._psf(backend)
-        halo = self._halo(psf)
-        raw = data.array
-        target = out.array if isinstance(out, Labeled) else out
-        if out is not None and target is raw:
-            raise ValueError("In-place deconvolution is not possible")
-        out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
-        maps = self._maps(data, backend)
-        ops: dict[tuple[int, ...], PaddedConvolution] = {}
-        iterations = self.history.extras.setdefault("iterations", [])
-        effective = (
-            self.history.extras.setdefault("effective_iterations", [])
-            if self._accelerate
-            else []
-        )
-        trace: dict = {}
-        chunks = blocks(
-            data,
-            self.options["block"],
-            halo,
-            overhead=self._overhead(),
-            contiguous=True,
-            align=chunks_of(out),
-            **backend,
-        )
-        for chunk in chunks:
-            blk = self._prepare(chunk, maps)
-            key = tuple(blk.data.shape)
-            if key not in ops:
-                ops[key] = PaddedConvolution(psf, key)
-            op = ops[key]
-            start = self._start(chunk)
-            f, n = self._solve(blk, op, start, trace)
-            iterations.append(float(n))
-            if self._accelerate:
-                effective.append(float(trace["effective"]))
-            chunk.store(out, op.crop(f)[chunk.inner])
-        flush(out)
-        return out
-
     def _extra_state(self) -> dict[str, object]:
+        state = super()._extra_state()
         sensor = None if self.sensor is None else self.sensor._payload()
-        return {"psf": self.psf, "level": self.level, "sensor": sensor}
+        state.update(level=self.level, sensor=sensor)
+        return state
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
-        self.psf = state.get("psf")
+        super()._load_extra_state(state)
         self.level = state.get("level")
         sensor = state.get("sensor")
         if sensor is not None:

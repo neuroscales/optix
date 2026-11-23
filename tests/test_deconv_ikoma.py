@@ -6,6 +6,7 @@ import warnings
 import pytest
 import torch
 
+import optix
 from optix import load
 from optix.deconv import Ikoma, ikoma
 from optix.deconv.utils import PaddedConvolution, transfer_function
@@ -90,16 +91,62 @@ def test_defaults_and_paper_rules():
     assert est.is_faithful
     y = ((data - OFFSET) / GAIN).clamp(min=-(READ**2) / GAIN**2)
     assert float(est.peak) == pytest.approx(float(y.max()))
-    nu = 0.1 / float(y.max())  # ∑S = 1 for a 2-D PSF
+    q = float(torch.quantile(y.flatten(), 0.999))
+    assert float(est.robust_peak) == pytest.approx(q, rel=1e-12)
+    nu = 0.1 / q  # ∑S = 1 for a 2-D PSF
     assert float(est.nu) == pytest.approx(nu)
     assert float(est.rho) == pytest.approx(6000 * nu / float(y.max()))
     est.apply(data)
-    n = est.history.extras["iterations"][0]
-    change = est.history.extras["change"][0]
-    assert n <= 150 and (change < 1e-3 or n == 150)
+    extras = est.history.extras
+    for key in ("primal_residual", "dual_residual"):
+        assert len(extras[key]) == 1 and math.isfinite(extras[key][0])
     none = Ikoma(psf, regulariser="none", dtype=F64).fit(data, init=sensor())
     assert float(none.rho) == pytest.approx(6 / float(y.max()))
     assert none.is_faithful
+
+
+def test_stopping_rule():
+    """Stops at the first iterate with relative change ≤ 10⁻³, before
+    the cap of 150; one iteration fewer is above the tolerance."""
+    psf = gaussian2d()
+    x, data = simulate((64, 64), psf, 100.0, seed=3)
+    est = Ikoma(psf, dtype=F64).fit(data, init=sensor())
+    est.apply(data)
+    n = int(est.history.extras["iterations"][0])
+    change = est.history.extras["change"][0]
+    assert 2 < n < 150, n
+    assert change <= 1e-3
+    short = Ikoma(psf, max_iter=n - 1, dtype=F64).fit(data, init=sensor())
+    short.apply(data)
+    assert short.history.extras["iterations"][0] == n - 1
+    assert short.history.extras["change"][0] > 1e-3
+    # the cap: max_iter iterations when the tolerance is not reached
+    capped = Ikoma(psf, max_iter=5, dtype=F64).fit(data, init=sensor())
+    capped.apply(data)
+    assert capped.history.extras["iterations"][0] == 5
+    assert capped.history.extras["change"][0] > 1e-3
+
+
+def test_robust_peak_streamed():
+    """The 99.9th percentile is exact when fit streams small chunks, and
+    a hot pixel changes max ỹ (so ρ) but not the default ν."""
+    psf = gaussian2d(5, 1.0)
+    x, data = simulate((40, 50), psf, 40.0, seed=11)
+    stack = torch.stack([data, 2 * data - OFFSET])
+    ref = Ikoma(psf, dtype=F64).fit(stack, init=sensor())
+    with optix.config(memory=8 * 40 * 7):
+        small = Ikoma(psf, dtype=F64).fit(stack, init=sensor())
+    torch.testing.assert_close(small.robust_peak, ref.robust_peak)
+    for i in range(2):
+        y = ((stack[i] - OFFSET) / GAIN).clamp(min=-(READ**2) / GAIN**2)
+        q = float(torch.quantile(y.flatten(), 0.999))
+        assert float(ref.robust_peak[i]) == pytest.approx(q, rel=1e-12)
+    hot = data.clone()
+    hot[3, 4] += 1e4
+    a = Ikoma(psf, dtype=F64).fit(data, init=sensor())
+    b = Ikoma(psf, dtype=F64).fit(hot, init=sensor())
+    assert float(b.peak) > 10 * float(a.peak)
+    assert float(b.nu) == pytest.approx(float(a.nu), rel=0.02)
 
 
 def test_matches_admm_written_out():
@@ -122,6 +169,80 @@ def test_matches_admm_written_out():
         terms, op.grid, rho=6000 * nu / float(y.max()), max_iter=40, tol=None
     )
     torch.testing.assert_close(out, op.crop(res.x))
+
+
+def test_s16_s19_written_out_3d():
+    """3-D, independent of admm_fft: SI Eqs. (S9)–(S19) with full complex
+    FFTs, the Hessian symbols built here, and the literal Eq. (S17)."""
+    psf = widefield3d(3, 5)
+    shape = (6, 8, 7)
+    x, data = simulate(shape, psf, 30.0, seed=12)
+    nu, k = 0.02, 25
+    est = Ikoma(psf, nu=nu, max_iter=k, tol=None, dtype=F64)
+    out = est.fit(data, init=sensor()).apply(data)
+    var = READ**2 / GAIN**2
+    y = ((data - OFFSET) / GAIN).clamp(min=-var)
+    rho = 6000 * nu / float(y.max())
+    grid = PaddedConvolution(psf, shape).grid
+    # OTF: the PSF centred at index K // 2, moved to the origin
+    h = torch.zeros(grid, dtype=F64)
+    h[tuple(slice(0, n) for n in psf.shape)] = psf
+    h = torch.roll(h, [-(n // 2) for n in psf.shape], dims=(0, 1, 2))
+    a_hat = torch.fft.fftn(h)
+    # D̂ₐ = e^{2πikₐ/Nₐ} − 1; H packs D_aa, then √2·D_ab (a < b) (S5, S7)
+    d_hat = []
+    for a, n in enumerate(grid):
+        w = torch.exp(2j * math.pi * torch.arange(n, dtype=F64) / n) - 1
+        shp = [1, 1, 1]
+        shp[a] = n
+        d_hat.append(w.reshape(shp))
+    pairs = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)]
+    h_hat = [
+        (1 if a == b else math.sqrt(2)) * d_hat[a] * d_hat[b] for a, b in pairs
+    ]
+
+    def op(sym, v):
+        return torch.fft.ifftn(sym * torch.fft.fftn(v)).real
+
+    def opt(sym, v):
+        return torch.fft.ifftn(sym.conj() * torch.fft.fftn(v)).real
+
+    den = a_hat.abs() ** 2 + 1 + sum(s.abs() ** 2 for s in h_hat)
+    obs = tuple(slice(0, n) for n in shape)
+    z1 = torch.zeros(grid, dtype=F64)
+    z2 = torch.zeros(grid, dtype=F64)
+    z3 = torch.zeros((6, *grid), dtype=F64)
+    u1, u2, u3 = (
+        torch.zeros_like(z1),
+        torch.zeros_like(z2),
+        torch.zeros_like(z3),
+    )
+    for _ in range(k):
+        rhs = (
+            a_hat.conj() * torch.fft.fftn(z1 - u1)
+            + torch.fft.fftn(z2 - u2)
+            + sum(
+                s.conj() * torch.fft.fftn(z3[c] - u3[c])
+                for c, s in enumerate(h_hat)
+            )
+        )
+        xk = torch.fft.ifftn(rhs / den).real  # (S16)
+        v1 = op(a_hat, xk) + u1
+        b = (1 - rho * (v1[obs] - var)) / (2 * rho)
+        z1 = v1.clone()  # (S17): identity outside C
+        z1[obs] = -b + torch.sqrt(b**2 + (y + rho * var * v1[obs]) / rho)
+        z2 = (xk + u2).clamp(min=0)  # (S18)
+        v3 = torch.stack([op(s, xk) for s in h_hat]) + u3
+        norm = v3.norm(dim=0)
+        z3 = v3 * (1 - (nu / rho) / norm.clamp(min=1e-300)).clamp(
+            min=0
+        )  # (S19)
+        u1 = u1 + op(a_hat, xk) - z1
+        u2 = u2 + xk - z2
+        u3 = u3 + torch.stack([op(s, xk) for s in h_hat]) - z3
+    torch.testing.assert_close(
+        out, xk[obs], rtol=1e-8, atol=1e-8 * float(xk.abs().max())
+    )
 
 
 def test_recovery_and_table1_ordering():
@@ -232,6 +353,36 @@ def test_blocks_vs_whole_image():
     assert diffs[1] < 0.05 * float(whole.max())
 
 
+def test_memory_budget_on_the_fft_grid():
+    """Blocks are sized on the FFT grid, and a budget that leaves blocks
+    of mostly halo raises with the memory needed."""
+    psf = gaussian2d(9, 1.6)
+    data = torch.poisson(torch.full((256, 256), 20.0, dtype=F64))
+    est = Ikoma(psf, max_iter=5, dtype=F64).fit(data)
+    grid = PaddedConvolution(psf, data.shape).grid
+    need = 8 * (est._grid_buffers() * math.prod(grid) + 4 * data.numel())
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with optix.config(memory=int(need * 1.01)):
+            est.apply(data)  # whole image
+    assert est.history.extras["iterations"] == [5.0]
+    with optix.config(memory=int(need * 0.99)):
+        with pytest.warns(RuntimeWarning, match="blocks"):
+            est.apply(data)  # 2 × 1 blocks of 128 × 256 (+ halo)
+    assert len(est.history.extras["iterations"]) == 1 + 2
+    # 3-D: the core would be a small part of each loaded block
+    psf3 = widefield3d(5, 9)
+    stack = torch.poisson(torch.full((12, 64, 64), 20.0, dtype=F64))
+    est = Ikoma(psf3, max_iter=3, dtype=F64).fit(stack)
+    with optix.config(memory="4MB"):
+        with pytest.raises(ValueError, match="whole image needs about"):
+            est.apply(stack)
+        # an explicit block is respected
+        out = Ikoma(psf3, block=(None, 32, 32), max_iter=3, dtype=F64)
+        with pytest.warns(RuntimeWarning, match="blocks"):
+            out.fit(stack).apply(stack)
+
+
 def test_float32_matches_float64():
     psf = gaussian2d()
     for peak in (1.0, 100.0, 1e4):
@@ -266,6 +417,43 @@ def test_sensor_units_and_shading():
     torch.testing.assert_close(out, ref)
     with pytest.warns(RuntimeWarning, match="baseline"):
         Ikoma(psf).fit(raw, init=[s, sh.replace(baseline=torch.zeros(1))])
+
+
+def test_read_noise_with_flat_field():
+    """σ̃² = variance / (gain·f)² with a flat f (unit median)."""
+    psf = gaussian2d(7, 1.2)
+    gen = torch.Generator().manual_seed(10)
+    e = torch.poisson(20 * scene((32, 36), 10) + 1, generator=gen)
+    flat = 0.5 + torch.rand(32, 36, generator=gen, dtype=F64)
+    dark = 60 + torch.rand(32, 36, generator=gen, dtype=F64)
+    gain, var = 3.0, 16.0
+    raw = e * gain + 4 * torch.randn(32, 36, generator=gen, dtype=F64)
+    raw = raw * flat + dark
+    s = SensorEstimate(
+        offset=torch.tensor(50.0, dtype=F64),
+        gain=torch.tensor(gain, dtype=F64),
+        variance=torch.tensor(var, dtype=F64),
+    )
+    sh = ShadingEstimate(flat=flat, dark=dark)
+    out = ikoma(raw, psf, sensor=s, shading=sh, dtype=F64, max_iter=30)
+    f = flat / flat.median()
+    corrected = (raw - dark) / (f * gain)
+    noise = var / (gain * f) ** 2
+    ref_sensor = SensorEstimate(
+        offset=torch.tensor(0.0, dtype=F64),
+        gain=torch.tensor(1.0, dtype=F64),
+        variance=noise,
+    )
+    ref = ikoma(corrected, psf, sensor=ref_sensor, dtype=F64, max_iter=30)
+    torch.testing.assert_close(out, ref)
+    # without the flat² factor the result differs
+    flat_only = SensorEstimate(
+        offset=torch.tensor(0.0, dtype=F64),
+        gain=torch.tensor(1.0, dtype=F64),
+        variance=torch.tensor(var / gain**2, dtype=F64),
+    )
+    other = ikoma(corrected, psf, sensor=flat_only, dtype=F64, max_iter=30)
+    assert float((other - out).abs().max()) > 1e-3 * float(out.abs().max())
 
 
 def test_psf_norm_plane_vs_sum():
@@ -312,6 +500,14 @@ def test_options_and_faithfulness():
     assert not Ikoma(psf, regulariser="tv").is_faithful
     assert not Ikoma(psf, max_iter=10).is_faithful
     assert not Ikoma(psf, weights=(1.0, 0.5)).is_faithful
+    # halo and block are memory settings, not method choices
+    assert Ikoma(psf, halo=12).is_faithful
+    assert Ikoma(psf, block=(8, None)).is_faithful
+    est = Ikoma(psf, block=(10, 10), halo=10)
+    data = torch.poisson(torch.full((20, 20), 5.0))
+    with pytest.warns(RuntimeWarning, match="blocks"):
+        est.fit(data).apply(data)
+    assert est.is_faithful
     for bad in (
         dict(regulariser="l1"),
         dict(psf_norm="max"),

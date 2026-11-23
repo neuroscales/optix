@@ -1,6 +1,7 @@
 """Tests of optix.optim (proximity operators, differences, ADMM)."""
 
 import math
+import random
 
 import pytest
 import torch
@@ -8,13 +9,18 @@ import torch
 from optix.deconv.utils import linear_filter, transfer_function
 from optix.optim import (
     Box,
+    Circulant,
+    Convolution,
     Gradient,
     GroupL2,
     Hessian,
+    Identity,
+    LinearOperator,
     ShiftedPoisson,
     SquaredL2,
     Term,
     admm_fft,
+    as_circulant,
     diff,
     project_group_l2,
     prox_box,
@@ -340,23 +346,49 @@ def test_admm_optimality_certificate():
         assert float((ax - z).norm()) < 1e-6 * float(res.x.norm())
 
 
+def _python_poisson_data(seed, grid, fwd):
+    """Truth with a zero block and Poisson data, from Python's RNG.
+
+    `random.Random` is the same on every platform and Python version, so
+    the problem does not depend on torch's samplers.
+    """
+    rng = random.Random(seed)
+    truth = torch.tensor(
+        [
+            [2 + 20 * rng.random() for _ in range(grid[1])]
+            for _ in range(grid[0])
+        ],
+        dtype=F64,
+    )
+    truth[4:8, 3:9] = 0.0
+    mean = fwd(truth).clamp(min=0)
+
+    def poisson(lam):  # inversion
+        u, k, p = rng.random(), 0, math.exp(-lam)
+        c = p
+        while u > c:
+            k += 1
+            p *= lam / k
+            c += p
+        return k
+
+    return torch.tensor(
+        [[poisson(float(m)) for m in row] for row in mean], dtype=F64
+    )
+
+
 def test_admm_poisson_ml_is_rl_fixed_point():
     """σ² = 0, ν = 0: x·(1 − Aᵀ(y/Ax)/Aᵀ1) = 0 (KKT of Poisson ML, x ≥ 0).
 
     A mild periodic blur, so that the ML problem is well conditioned.
+    The data come from Python's RNG (platform independent). The KKT
+    conditions are checked at z₂ = x₊, which is exactly 0 on the active
+    set, after a solve that must have converged.
     """
-    g = gen(11)
     grid = (16, 18)
     psf = torch.tensor([0.1, 0.8, 0.1], dtype=F64)
     psf = psf[:, None] * psf[None]
     otf = transfer_function(psf, grid)
-    truth = 2 + 20 * torch.rand(grid, generator=g, dtype=F64)
-    truth[4:8, 3:9] = 0.0
-    ax = torch.fft.irfftn(otf * torch.fft.rfftn(truth), s=grid)
-    y = torch.poisson(ax.clamp(min=0), generator=g)
-    terms = [Term(otf, ShiftedPoisson(y)), Term(None, Box(0.0))]
-    res = admm_fft(terms, grid, rho=0.1, max_iter=5000, tol=1e-12)
-    x = res.x.clamp(min=0)
 
     def fwd(v):
         return torch.fft.irfftn(otf * torch.fft.rfftn(v), s=grid)
@@ -364,8 +396,192 @@ def test_admm_poisson_ml_is_rl_fixed_point():
     def adj(r):
         return torch.fft.irfftn(otf.conj() * torch.fft.rfftn(r), s=grid)
 
+    y = _python_poisson_data(1, grid, fwd)
+    assert float(y.sum()) == 3128.0  # the same data everywhere
+    terms = [Term(otf, ShiftedPoisson(y)), Term(None, Box(0.0))]
+    max_iter = 10000
+    res = admm_fft(terms, grid, rho=1.0, max_iter=max_iter, tol=1e-12)
+    assert res.n_iter < max_iter, "ADMM did not converge"
+    assert res.primal_residual < 1e-8 * float(res.x.norm())
+    x = res.splits[1][0]
+    assert bool((x >= 0).all())
     grad = 1 - adj(y / fwd(x).clamp(min=1e-300)) / adj(torch.ones_like(y))
-    assert float((x * grad).abs().max()) < 1e-6 * float(x.max())
+    assert float((x * grad).abs().max()) < 1e-8 * float(x.max())
     zero = x == 0
     assert zero.any()  # the constraint is active somewhere
-    assert float(grad[zero].min()) > -1e-6
+    assert float(grad[zero].min()) > -1e-8
+
+
+def test_admm_residuals_and_trace():
+    """Primal/dual residuals (Boyd et al. 2011, §3.3) written out, and the
+    trace (filled during the run) for both orders."""
+    otf, y, grid, region = poisson_problem(var=4.0)
+    nu = 0.5
+    terms = [
+        Term(otf, ShiftedPoisson(y, 4.0), region),
+        Term(None, Box(0.0)),
+        Term(Hessian(2), GroupL2(nu)),
+    ]
+    ops = [Convolution(otf, grid), Identity(2), Hessian(2)]
+    rho, k = 0.05, 12
+    for order in ("x-first", "z-first"):
+        seen = []
+        trace = {}
+
+        def callback(n, x, seen=seen, trace=trace):
+            seen.append(len(trace["change"]))
+
+        prev = admm_fft(
+            terms, grid, rho=rho, max_iter=k - 1, tol=None, order=order
+        )
+        res = admm_fft(
+            terms,
+            grid,
+            rho=rho,
+            max_iter=k,
+            tol=None,
+            order=order,
+            trace=trace,
+            callback=callback,
+        )
+        assert seen == list(range(1, k + 1))  # lists grow during the run
+        assert set(trace) == {
+            "change",
+            "residual",
+            "dual_residual",
+            "objective",
+        }
+        assert all(len(v) == k for v in trace.values())
+        r = sum(
+            float((op.forward(res.x) - z).square().sum())
+            for op, z in zip(ops, res.splits, strict=True)
+        )
+        if order == "x-first":
+            # s = ρ Aᵀ(zᵏ⁺¹ − zᵏ); r = A xᵏ⁺¹ − zᵏ⁺¹
+            s = sum(
+                op.adjoint(z - zp)
+                for op, z, zp in zip(ops, res.splits, prev.splits, strict=True)
+            )
+        else:
+            # s = ρ A(xᵏ⁺¹ − xᵏ); r = A xᵏ⁺¹ − zᵏ (z is updated last)
+            s = torch.cat([op.forward(res.x - prev.x) for op in ops], dim=0)
+            r = sum(
+                float((op.forward(res.x) - z).square().sum())
+                for op, z in zip(ops, prev.splits, strict=True)
+            )
+        s = rho * float(s.norm())
+        assert res.dual_residual == pytest.approx(s, rel=1e-8)
+        assert trace["dual_residual"][-1] == pytest.approx(s, rel=1e-8)
+        assert res.primal_residual == pytest.approx(r**0.5, rel=1e-8)
+        assert trace["residual"][-1] == res.primal_residual
+        # objective at the splits: ∑ₖ fₖ(zₖ)
+        z = res.splits
+        obj = float(
+            terms[0].function.value(z[0][(slice(None), *region)])
+        ) + float(GroupL2(nu).value(z[2]))
+        assert trace["objective"][-1] == pytest.approx(obj, rel=1e-10)
+    # long run: both residuals go to 0, the objective settles
+    long = {}
+    res = admm_fft(terms, grid, rho=rho, max_iter=3000, tol=1e-10, trace=long)
+    assert res.primal_residual < 1e-6 * float(res.x.norm())
+    assert res.dual_residual < 1e-6 * float(res.x.norm())
+    assert long["objective"][-1] == pytest.approx(
+        objective(res.x.clamp(min=0), otf, terms[0].function, region, nu),
+        rel=1e-8,
+    )
+
+
+def test_admm_prox_returning_its_argument():
+    """A prox that returns v itself (here f = 0) must not alias zₖ and uₖ."""
+
+    class Zero:
+        def value(self, z):
+            return torch.zeros((), dtype=F64)
+
+        def prox(self, v, t):
+            return v  # the argument itself
+
+    class ZeroCopy(Zero):
+        def prox(self, v, t):
+            return v.clone()
+
+    g = gen(12)
+    grid = (12, 10)
+    data = torch.randn(grid, generator=g, dtype=F64)
+    base = [
+        Term(None, SquaredL2(1.0, data)),
+        Term(Gradient(2), SquaredL2(0.3)),
+    ]
+    out = {}
+    for f in (Zero(), ZeroCopy()):
+        terms = [*base, Term(Hessian(2), f)]
+        out[type(f)] = admm_fft(terms, grid, rho=1.0, max_iter=50, tol=None)
+    res, ref = out[Zero], out[ZeroCopy]
+    torch.testing.assert_close(res.x, ref.x, rtol=0, atol=0)
+    assert float(res.duals[2].abs().max()) == 0  # u = A x + u − z = 0
+    assert float(res.splits[2].abs().max()) > 0
+    assert res.splits[2].data_ptr() != res.duals[2].data_ptr()
+
+
+def test_operator_protocols():
+    """Every operator is a Circulant; Term accepts None and tensors."""
+    g = gen(13)
+    grid = (10, 12)
+    psf = torch.rand(3, 3, generator=g, dtype=F64)
+    otf = transfer_function(psf / psf.sum(), grid)
+    conv = Convolution(otf, grid)
+    ops = [Identity(2), conv, Gradient(2), Hessian(2)]
+    x = torch.randn(grid, generator=g, dtype=F64)
+    for op in ops:
+        assert isinstance(op, LinearOperator) and isinstance(op, Circulant)
+        y = op.forward(x)
+        assert y.shape[1:] == grid and y.shape[0] == len(op.symbols(grid))
+        r = torch.randn(y.shape, generator=g, dtype=F64)
+        lhs = float((y * r).sum())
+        rhs = float((x * op.adjoint(r)).sum())
+        assert lhs == pytest.approx(rhs, rel=1e-10)
+        # the symbols are the operator, and ‖A‖² bounds the gram
+        spec = torch.fft.rfftn(x)
+        for c, sym in enumerate(op.symbols(grid)):
+            yc = torch.fft.irfftn(sym * spec, s=grid)
+            torch.testing.assert_close(yc, y[c])
+        assert float(op.gram(grid).max()) <= op.norm2 * (1 + 1e-12)
+    assert conv.norm2 == pytest.approx(float(otf.abs().square().max()))
+    assert isinstance(as_circulant(None, grid), Identity)
+    assert isinstance(as_circulant(otf, grid), Convolution)
+    with pytest.raises(TypeError):
+        as_circulant("blur", grid)
+    with pytest.raises(ValueError):
+        Convolution(otf, (8, 8))
+    # a Convolution object and the bare transfer function give one solve
+    y = torch.randn(grid, generator=g, dtype=F64)
+    a = admm_fft(
+        [Term(otf, SquaredL2(1.0, y)), Term(None, SquaredL2(0.2))],
+        grid,
+        rho=1.0,
+        max_iter=20,
+        tol=None,
+    )
+    b = admm_fft(
+        [Term(conv, SquaredL2(1.0, y)), Term(Identity(2), SquaredL2(0.2))],
+        grid,
+        rho=1.0,
+        max_iter=20,
+        tol=None,
+    )
+    torch.testing.assert_close(a.x, b.x, rtol=0, atol=0)
+
+
+def test_symbols_float32_low_frequencies():
+    """Phase factors are built in float64: float32 symbols are accurate
+    to float32 rounding at the lowest frequencies."""
+    grid = (4096, 6)
+    for cls in (Gradient, Hessian):
+        op = cls(2)
+        s32 = op.symbols(grid, dtype=torch.float32)
+        s64 = op.symbols(grid, dtype=F64)
+        for a, b in zip(s32, s64, strict=True):
+            a, b = torch.broadcast_tensors(a.to(torch.complex128), b)
+            nz = b.abs() > 0
+            rel = ((a - b).abs()[nz] / b.abs()[nz]).max()
+            assert float(rel) < 1e-6, (cls.__name__, float(rel))

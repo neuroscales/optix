@@ -9,14 +9,23 @@ regularised estimators (for example
   `prox_squared_l2`, `prox_shifted_poisson`, `prox_conjugate`.
 - Functions pairing a value and a prox: `Box`, `GroupL2`, `SquaredL2`,
   `ShiftedPoisson`.
-- Linear operators with forward, adjoint and Fourier symbol: `diff`,
-  `diff_adjoint`, `Gradient`, `Hessian`.
+- Linear operators: the protocols `LinearOperator` (forward, adjoint,
+  norm2) and `Circulant` (adds the Fourier symbols); `Identity`,
+  `Convolution` (a transfer function), the finite differences `diff`,
+  `diff_adjoint`, `Gradient` and `Hessian`; `as_circulant`.
 - Solvers: `admm_fft`.
 """
 
 from ._admm import AdmmResult, Term, admm_fft
 from ._diff import Gradient, Hessian, diff, diff_adjoint, rfft_frequencies
 from ._functions import Box, Function, GroupL2, ShiftedPoisson, SquaredL2
+from ._operators import (
+    Circulant,
+    Convolution,
+    Identity,
+    LinearOperator,
+    as_circulant,
+)
 from ._prox import (
     project_group_l2,
     prox_box,
@@ -29,14 +38,19 @@ from ._prox import (
 __all__ = [
     "AdmmResult",
     "Box",
+    "Circulant",
+    "Convolution",
     "Function",
     "Gradient",
     "GroupL2",
     "Hessian",
+    "Identity",
+    "LinearOperator",
     "ShiftedPoisson",
     "SquaredL2",
     "Term",
     "admm_fft",
+    "as_circulant",
     "diff",
     "diff_adjoint",
     "project_group_l2",

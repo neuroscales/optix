@@ -7,11 +7,12 @@ from collections.abc import Sequence
 import torch
 from torch import Tensor
 
-from .._estimator import Estimator, Tags, _same
+from .._estimator import Tags, _same
 from ..estimates import SensorEstimate, ShadingEstimate
 from ..io import ArrayLike, Chunk, Labeled, Layout, WritableArrayLike
 from ..optim import (
     Box,
+    Convolution,
     Gradient,
     GroupL2,
     Hessian,
@@ -20,19 +21,18 @@ from ..optim import (
     admm_fft,
 )
 from ._fft import PaddedConvolution
-from ._rl import _Block
-from ._variational import _Variational
+from ._variational import _Problem, _Variational
 
 __all__ = ["Ikoma", "ikoma"]
 
 _REGULARISER = ("hessian", "tv", "none")
 _PSF_NORM = ("plane", "sum")
-#: Constant κ of the default weight ν = κ·∑S / max ỹ (not in the paper).
+#: Constant κ of the default weight ν = κ·∑S / q₉₉.₉(ỹ) (not in the paper).
 _KAPPA = 0.1
-#: Working buffers per loaded voxel (FFT grid, splits, duals), per
-#: number of regulariser components C: base + per_component·C.
-_OVERHEAD_BASE = 17.0
-_OVERHEAD_COMPONENT = 6.0
+#: Working buffers of `admm_fft` per voxel of the FFT grid (measured
+#: peak), per number of regulariser components C: base + per_component·C.
+_GRID_BASE = 21.0
+_GRID_COMPONENT = 2.5
 
 
 class Ikoma(_Variational):
@@ -72,8 +72,22 @@ class Ikoma(_Variational):
     (Eq. S19). All variables start at 0; ρ = 6000ν / max(ỹ)
     (ρ = 6 / max(ỹ) without a regulariser); the iterations stop when
     ‖xᵏ⁺¹ − xᵏ‖₂ < 10⁻³ ‖xᵏ‖₂ or after 150 iterations. The result is x
-    (which may be slightly negative; the paper does not say whether x
-    or z₂ is returned), restricted to the observed voxels.
+    restricted to the observed voxels (the paper does not say whether
+    x or z₂ is returned); it is not projected onto x ≥ 0.
+
+    **The stopping rule is part of the method.** With the paper's ρ
+    rule, tolerance and iteration cap, the result is an early-stopped
+    ADMM iterate, not the minimiser of the objective above. On
+    simulated 2-D data (γ = 2, σ = 3, peaks of 10 to 1000
+    photoelectrons) it is 26 to 34 % (relative ℓ2) away from the
+    minimiser, and its SNR is 2 to 4.5 dB higher; 13 to 26 % of its
+    voxels are negative, by less than 0.4 % of the peak. The stop
+    therefore regularises too: the result depends on `tol`, `max_iter`
+    and `rho`, not only on ν, and tightening `tol` with the default ν
+    lowers the SNR. Each solve records its number of iterations, last
+    relative change and last primal and dual residuals in
+    `history.extras` (`"iterations"`, `"change"`, `"primal_residual"`,
+    `"dual_residual"`); the residuals tend to 0 only at convergence.
 
     **PSF.** Normalised so that each xy-plane (the last two spatial
     axes) sums to 1 (SI §H): x is then in photoelectrons per exposure
@@ -89,28 +103,38 @@ class Ikoma(_Variational):
     scans 0.005–0.100 on its experimental stacks) and gives no default.
     The default here is not in the paper:
 
-        ν = κ · ∑S / max ỹ,   κ = 0.1,
+        ν = κ · ∑S / q₉₉.₉(ỹ),   κ = 0.1,
 
-    per image, with ∑S the sum of the normalised PSF (1 for
-    `psf_norm="sum"`, the number of planes for `"plane"`). It is the
-    scale-invariant choice: writing x = s x̂ with s = max ỹ, the
-    shifted-Poisson fidelity in x̂ is, to second order, a weighted least
-    squares with the noise variance of the data, and ν‖H x‖ = ν s ‖H x̂‖.
-    A fixed weight κ on the normalised image x̂ (a prior that does not
-    depend on the photon count) therefore gives ν = κ/s, and the read
-    noise drops out. The ∑S factor makes the default the same for both
-    PSF normalisations. κ was calibrated on simulated data (blobs,
-    filaments and their mixture, 2-D and 3-D, Gaussian and Gaussian-beam
-    PSFs, peaks of 10, 100 and 1000 photoelectrons, γ = 2, σ = 3 as in
-    the paper's simulation). There, the 1/max ỹ scaling had a smaller mean
-    loss than 1/√max ỹ or 1/max ỹ^¾. The SNR is on average 1.3 dB below
-    the best ν of a fine grid. The worst case, about 4 dB, comes from
-    the image content: smooth blobs want a larger ν, thin filaments a
-    smaller one. Pass `nu` to set the weight; the values used are in
-    `nu` and `rho` after `fit`.
+    per image, with q₉₉.₉(ỹ) the 99.9th percentile of the prepared
+    data (computed exactly in the single pass of `fit`; unlike max ỹ, a
+    hot pixel or a single bright bead barely changes it) and ∑S the sum
+    of the normalised PSF (1 for `psf_norm="sum"`, the number of planes
+    for `"plane"`). The 1/peak scaling is that of a MAP estimate with a
+    prior on the normalised image x̂ = x/s (s the peak) that is the same
+    at every photon count, −log p(x̂) = κ‖H x̂‖ + const: the objective
+    ℓ(x; ỹ) + κ‖H x̂‖ is ℓ(x; ỹ) + (κ/s)‖H x‖, so ν = κ/s. The rule does
+    not use σ̃²; with read noise the shifted-Poisson likelihood is not
+    homogeneous in s (the Poisson one is, ℓ(s x̂; s ŷ) = s ℓ(x̂; ŷ) up
+    to a constant), so it is an approximation there. The ∑S factor makes
+    the default the same for both PSF normalisations.
+
+    κ was calibrated for the default stopping rule (the paper's
+    `tol`, `max_iter` and ρ rule) and is not valid with other values of
+    them. Calibration data: blobs, filaments and their mixture, 2-D and
+    3-D, Gaussian and Gaussian-beam PSFs, peaks of 10, 100 and 1000
+    photoelectrons, γ = 2, σ = 3 as in the paper's simulation, three
+    seeds each (54 cases). There, κ = 0.1 minimises the mean loss of SNR
+    against the best ν of a fine grid: 1.2 dB on average, 4.8 dB in the
+    worst case. The loss comes from the image content: smooth blobs
+    want a larger ν (best κ up to 0.5), thin filaments a smaller one
+    (best κ ≈ 0.006 to 0.03). In 6 of the 54 cases (2-D blobs at 1000
+    and 2-D filaments at 100 photoelectrons) the default is 0.6 to
+    1.1 dB below no regulariser at all. Pass `nu` to set the weight;
+    the values used are in `nu` and `rho` after `fit`.
 
     **Camera calibration.** From the estimates given to `fit`
-    (`init=sensor`, `init=shading` or both):
+    (`init=sensor`, `init=shading` or both), which describe the raw
+    data:
 
     - [`SensorEstimate`][optix.estimates.SensorEstimate]: ỹ =
       (y − offset)/gain, σ̃² = variance/gain² (maps allowed). The paper
@@ -118,9 +142,13 @@ class Ikoma(_Variational):
       one, the data are taken in electrons with σ̃² = 0 (Poisson).
     - [`ShadingEstimate`][optix.estimates.ShadingEstimate]: the dark
       field d (which includes the camera offset) is subtracted in place
-      of the offset, and the data are divided by the flat field,
+      of the offset, and the data are divided by the flat field f,
       rescaled to unit median as in the paper's Methods, before the
-      division by the gain. A per-frame baseline is ignored.
+      division by the gain: ỹ = (y − d)/(f·gain). The read-noise
+      variance of the corrected data is then σ̃² = variance/(f·gain)²;
+      with f ≡ 1 this is the paper's model. The shot noise of the
+      corrected data, of variance (A x)/f, is still modelled as A x
+      (the paper's approximation). A per-frame baseline is ignored.
 
     **Blocks.** An image that fits in the memory budget is solved
     whole. A larger one is cut into blocks with a halo (default: twice
@@ -128,8 +156,15 @@ class Ikoma(_Variational):
     of its own with the unknown boundary, keeping its core; ν and ρ are
     those of the whole image. The ADMM x-update is a global solve, so
     the block-wise result is not the whole-image one near the seams; a
-    `RuntimeWarning` says when an image is split. Sample and group
-    axes are iterated over.
+    `RuntimeWarning` says when an image is split. The memory of a
+    block is counted on its FFT grid N (the loaded block plus the PSF,
+    rounded up), about 21 + 2.5·C buffers per grid voxel, with C the
+    number of regulariser components (6 for the 3-D Hessian). When the
+    budget only allows blocks whose core is less than a quarter of the
+    loaded block, `apply` raises a `ValueError` that gives the memory a
+    whole-image solve needs. `halo` and `block` are memory settings:
+    they do not change `is_faithful`. Sample and group axes are iterated
+    over.
 
     Paper notation: ỹ, σ̃, A, H, ν, ρ as here; the PSF is h.
 
@@ -175,7 +210,9 @@ class Ikoma(_Variational):
     rho : Tensor
         ADMM penalty ρ per image, after `fit`.
     peak : Tensor
-        max ỹ per image.
+        max ỹ per image (used by the ρ rule).
+    robust_peak : Tensor
+        99.9th percentile q₉₉.₉(ỹ) per image (used by the default ν).
 
     Examples
     --------
@@ -206,8 +243,9 @@ class Ikoma(_Variational):
     }
     recommended = dict(paper)
     #: Options that do not make an estimate unfaithful: ν is tuned per
-    #: data set in the paper, "none" is one of its variants.
-    _free = ("nu",)
+    #: data set in the paper; `halo` and `block` are memory settings
+    #: (the regulariser variants are handled in `_resolve`).
+    _free = ("nu", "halo", "block")
 
     def __init__(
         self,
@@ -236,8 +274,9 @@ class Ikoma(_Variational):
             of the spatial axes of the layout, centred at index
             `K // 2`. Normalised as set by `psf_norm`.
         nu : float, optional
-            Regularisation weight ν ≥ 0. Default: 0.1·∑S / max ỹ per
-            image (see above; not in the paper).
+            Regularisation weight ν ≥ 0. Default: 0.1·∑S / q₉₉.₉(ỹ) per
+            image (see above; not in the paper, calibrated for the
+            default `rho`, `max_iter` and `tol`).
         regulariser : {"hessian", "tv", "none"}
             Penalty: Frobenius norm of the Hessian (default, the paper's
             method), isotropic total variation (extension), or none.
@@ -257,23 +296,24 @@ class Ikoma(_Variational):
         halo : int or sequence of int, optional
             Halo width per spatial axis, at least the PSF size along that
             axis. Default: twice the PSF size (not specified in the
-            paper).
+            paper). A memory setting: does not change `is_faithful`.
         block : sequence of int or None, optional
             Core block size per spatial axis (None entries: whole
             extent). Default: chosen from the memory budget, the whole
-            image when it fits.
+            image when it fits. A memory setting: does not change
+            `is_faithful`.
         faithful, dtype, device, layout
             See [`Estimator`][optix.Estimator].
         """
-        Estimator.__init__(self, dtype=dtype, device=device, layout=layout)
+        super().__init__(dtype=dtype, device=device, layout=layout)
         params = {k: v for k, v in locals().items() if k != "psf"}
         self._resolve(faithful, params)
         self._faithful_options = self.is_faithful
         self.psf = psf
         self.sensor: SensorEstimate | None = None
         self.shading: ShadingEstimate | None = None
-        self.level: Tensor | None = None
         self.peak: Tensor | None = None
+        self.robust_peak: Tensor | None = None
         self.noise: Tensor | None = None
         self.nu: Tensor | None = None
         self.rho: Tensor | None = None
@@ -366,7 +406,7 @@ class Ikoma(_Variational):
         out["dark"] = full(None if shading is None else shading.dark)
         return out
 
-    def _prepare(self, chunk: Chunk, maps: dict) -> _Block:
+    def _prepare(self, chunk: Chunk, maps: dict) -> _Problem:
         """Electrons ỹ (clipped at −σ̃²) and read noise σ̃²."""
         index = chunk.group + self._region(chunk)
 
@@ -390,8 +430,10 @@ class Ikoma(_Variational):
         v = at("variance")
         if v is not None:
             var = v if gain is None else v / gain.square()
+            if flat is not None:
+                var = var / flat.square()
         y = torch.maximum(y, -torch.as_tensor(var).to(y))
-        return _Block(y, variance=var)
+        return _Problem(y, variance=var)
 
     def _setup_images(self, psf: Tensor) -> None:
         opts = self.options
@@ -401,8 +443,14 @@ class Ikoma(_Variational):
                 "Ikoma needs data with a positive maximum in every image"
             )
         if opts["nu"] is None:
+            robust = self.robust_peak
+            if not bool((robust > 0).all()):
+                raise ValueError(
+                    "Ikoma needs data with a positive 99.9th percentile in "
+                    "every image for the default nu: pass nu"
+                )
             scale = float(psf.sum(dtype=torch.float64))
-            nu = _KAPPA * scale / peak
+            nu = _KAPPA * scale / robust
         else:
             nu = torch.full_like(peak, float(opts["nu"]))
         if opts["rho"] is not None:
@@ -416,7 +464,7 @@ class Ikoma(_Variational):
         self.nu = nu
         self.rho = rho
 
-    def _overhead(self) -> float:
+    def _grid_buffers(self) -> float:
         psf = self.psf
         ndim = 2 if psf is None else torch.as_tensor(psf).ndim
         comps = {
@@ -424,7 +472,7 @@ class Ikoma(_Variational):
             "tv": ndim,
             "none": 0,
         }[self.options["regulariser"]]
-        return _OVERHEAD_BASE + _OVERHEAD_COMPONENT * comps
+        return _GRID_BASE + _GRID_COMPONENT * comps
 
     def _regulariser(self, ndim: int) -> object:
         reg = self.options["regulariser"]
@@ -437,17 +485,20 @@ class Ikoma(_Variational):
 
     def _solve(
         self,
-        blk: _Block,
+        blk: _Problem,
         op: PaddedConvolution,
-        start: object,
+        index: tuple[int, ...],
         trace: dict | None = None,
     ) -> tuple[Tensor, int]:
-        index = start
         nu = float(self.nu[index].squeeze())
         rho = float(self.rho[index].squeeze())
         region = tuple(slice(0, n) for n in op.shape)
         terms = [
-            Term(op.otf, ShiftedPoisson(blk.data, blk.variance), region),
+            Term(
+                Convolution(op.otf, op.grid),
+                ShiftedPoisson(blk.data, blk.variance),
+                region,
+            ),
             Term(None, Box(0.0)),
         ]
         reg = self._regulariser(op.ndim)
@@ -463,13 +514,17 @@ class Ikoma(_Variational):
             dtype=blk.data.dtype,
             device=blk.data.device,
         )
+        extras = self.history.extras
         change = res.change if math.isfinite(res.change) else math.nan
-        self.history.extras.setdefault("change", []).append(change)
+        extras.setdefault("change", []).append(change)
+        extras.setdefault("primal_residual", []).append(res.primal_residual)
+        extras.setdefault("dual_residual", []).append(res.dual_residual)
         return res.x, res.n_iter
 
     def _extra_state(self) -> dict[str, object]:
         state = super()._extra_state()
-        shading = self.shading
+        sensor, shading = self.sensor, self.shading
+        state["sensor"] = None if sensor is None else sensor._payload()
         state["shading"] = None if shading is None else shading._payload()
         state["nu"] = self.nu
         state["rho"] = self.rho
@@ -477,6 +532,9 @@ class Ikoma(_Variational):
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
         super()._load_extra_state(state)
+        sensor = state.get("sensor")
+        if sensor is not None:
+            self.sensor = SensorEstimate._from_payload(sensor)
         shading = state.get("shading")
         if shading is not None:
             self.shading = ShadingEstimate._from_payload(shading)
