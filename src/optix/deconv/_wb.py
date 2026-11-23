@@ -560,7 +560,11 @@ class WienerButterworth(RichardsonLucy):
         return self._backs[key]
 
     def _solve(
-        self, blk: _Block, op: PaddedConvolution, level: float
+        self,
+        blk: _Block,
+        op: PaddedConvolution,
+        level: float,
+        trace: dict | None = None,
     ) -> tuple[Tensor, int]:
         opts = self.options
         start: float | Tensor = level
@@ -578,6 +582,8 @@ class WienerButterworth(RichardsonLucy):
             background=blk.background,
             damping=float(opts["damping"]),
             back=self._back(op),
+            accelerate=self._accelerate,
+            trace=trace,
         )
 
 

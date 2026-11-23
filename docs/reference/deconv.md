@@ -12,6 +12,7 @@ Deconvolution with a known point spread function.
       members:
         - RichardsonLucy
         - WienerButterworth
+        - BiggsAndrews
 
 ## Transforms
 
@@ -23,6 +24,7 @@ Deconvolution with a known point spread function.
       members:
         - richardson_lucy
         - wiener_butterworth
+        - biggs_andrews
 
 ## Utilities
 
@@ -39,6 +41,7 @@ Deconvolution with a known point spread function.
         - next_fast_len
         - rl_step
         - rl_block
+        - biggs_andrews_alpha
         - chi2_probability
         - back_projector
         - BackProjection

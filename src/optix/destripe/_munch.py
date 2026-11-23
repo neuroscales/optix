@@ -53,10 +53,7 @@ def _check(
     wavelet: object, level: object, sigma: object, levels: object
 ) -> tuple[Wavelet, int, list[float], set[int]]:
     if wavelet is None or level is None or sigma is None:
-        raise ValueError(
-            "The wavelet-FFT filter needs wavelet=, level= and sigma= (the "
-            "paper's three free parameters)"
-        )
+        raise ValueError("wavelet, level and sigma must not be None")
     w = get_wavelet(wavelet)
     if isinstance(level, bool) or int(level) != level or level < 1:
         raise ValueError(f"level must be an integer >= 1, got {level!r}")
@@ -85,9 +82,9 @@ def _check(
 def wavelet_fft(
     data: Tensor,
     *,
-    wavelet: str | Wavelet,
-    level: int,
-    sigma: float | Sequence[float],
+    wavelet: str | Wavelet = "db10",
+    level: int = 4,
+    sigma: float | Sequence[float] = 1.5,
     axis: int = -2,
     levels: Sequence[int] | None = None,
 ) -> Tensor:
@@ -134,14 +131,14 @@ def wavelet_fft(
     data : Tensor
         Frames `(..., H, W)` (floating point; other dtypes are converted
         to the configured dtype).
-    wavelet : str or Wavelet
+    wavelet : str or Wavelet, default `"db10"`
         `"dbN"` (N = 1, …, 45) or `"haar"`. The paper recommends
         Daubechies wavelets with more than three vanishing moments,
         db10–db15 being a good compromise (Section 3.8).
-    level : int
+    level : int, default 4
         Highest decomposition level L ≥ 1 (`decNum` in Fig. 5). It sets
         the widest stripes removed (Section 3.6).
-    sigma : float or sequence of float
+    sigma : float or sequence of float, default 1.5
         Damping width σ ≥ 0 of Eq. (9), in frequency samples of each band;
         0 is the limit σ → 0 (ideal stripes). One value for all levels
         (as in the paper), or one per level, finest first (Section 2.3
@@ -163,6 +160,13 @@ def wavelet_fft(
 
     Notes
     -----
+    The defaults (db10, L = 4, σ = 1.5) are the paper's suggestions for
+    typical data (Section 3.8: σ = 1.5 and L = 4 remove the visible
+    stripes of the Lena image and of the tomography data of Section 4.2,
+    and db10–db15 is the recommended wavelet size). Heavier or wider
+    stripes need a larger L or σ (σ = 7 and L = 8 for the FIB-nt image of
+    Section 4.1).
+
     The filter is linear and stateless, and costs O(N·F) for N pixels
     and a filter of length F.
     """
@@ -208,8 +212,9 @@ class WaveletFFT(Estimator):
 
     !!! note
         The paper leaves its three parameters (wavelet, highest level L,
-        damping width σ) to be tuned to the data (Section 4.4); they have
-        no default and must be given.
+        damping width σ) to be tuned to the data (Section 4.4). The
+        defaults, db10, L = 4 and σ = 1.5, are the paper's suggestions for
+        typical data (Section 3.8); any value is faithful to the paper.
 
     !!! references "References"
         1. Münch B, Trtik P, Marone F, Stampanoni M. *Stripe and ring
@@ -237,9 +242,10 @@ class WaveletFFT(Estimator):
         reference="doi:10.1364/OE.17.008567",
     )
     paper = {
-        "wavelet": None,
-        "level": None,
-        "sigma": None,
+        # suggestions of Section 3.8 for typical data
+        "wavelet": "db10",
+        "level": 4,
+        "sigma": 1.5,
         "axis": -2,
         "levels": None,
     }
@@ -264,14 +270,17 @@ class WaveletFFT(Estimator):
 
         Parameters
         ----------
-        wavelet : str
+        wavelet : str, default `"db10"`
             `"dbN"` (N = 1, …, 45) or `"haar"`; see
             [`wavelet_fft`][optix.destripe.wavelet_fft].
-        level : int
+        level : int, default 4
             Highest decomposition level L ≥ 1.
-        sigma : float or sequence of float
+        sigma : float or sequence of float, default 1.5
             Damping width σ ≥ 0 of Eq. (9) (one value, or one per level,
             finest first).
+
+            The three defaults are the paper's suggestions for typical
+            data (Section 3.8).
         axis : int or str
             Spatial axis along which the stripes run: a position among the
             two spatial axes of the layout (0 or -2: the first, 1 or -1:
@@ -285,9 +294,7 @@ class WaveletFFT(Estimator):
         """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
-        if self.options["sigma"] is not None and not isinstance(
-            self.options["sigma"], int | float
-        ):
+        if not isinstance(self.options["sigma"], int | float):
             self.options["sigma"] = [float(s) for s in self.options["sigma"]]
         if self.options["levels"] is not None:
             self.options["levels"] = [int(v) for v in self.options["levels"]]
@@ -297,8 +304,7 @@ class WaveletFFT(Estimator):
             if name not in self._free
         )
         o = self.options
-        if o["wavelet"] is not None and o["level"] is not None:
-            _check(o["wavelet"], o["level"], o["sigma"] or 0.0, o["levels"])
+        _check(o["wavelet"], o["level"], o["sigma"], o["levels"])
 
     def fit(
         self,
