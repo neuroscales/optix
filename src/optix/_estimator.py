@@ -97,7 +97,7 @@ class History:
             self.extras.setdefault(key, []).append(float(value))
 
     def gain(self) -> float:
-        """Relative change of the last step, `(L_t - L_{t-1}) / |L_t|`.
+        """Relative change of the last step, `(Lₜ − Lₜ₋₁) / |Lₜ|`.
 
         Returns `inf` with fewer than two records.
         """
@@ -107,7 +107,7 @@ class History:
         return (last - prev) / (abs(last) + 1e-30)
 
     def check(self, tol: float, *, monotone: bool = False) -> bool:
-        """Whether `|L_t - L_{t-1}| / |L_t| < tol`; sets `converged`.
+        """Whether `|Lₜ − Lₜ₋₁| / |Lₜ| < tol`; sets `converged`.
 
         Parameters
         ----------

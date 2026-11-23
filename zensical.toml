@@ -7,6 +7,7 @@ nav = [
   ]},
   {"Concepts" = [
     "concepts/index.md",
+    "concepts/notation.md",
     "concepts/axes-and-layouts.md",
     "concepts/image-formation.md",
     "concepts/estimators.md",
@@ -14,6 +15,34 @@ nav = [
   ]},
   {"Algorithms" = [
     "algorithms/index.md",
+    {"Sensor" = [
+      "algorithms/sensor/poisson-gaussian.md",
+      "algorithms/sensor/generalized-anscombe.md",
+      "algorithms/sensor/photon-transfer-curve.md",
+      "algorithms/sensor/scmos-calibration.md",
+      "algorithms/sensor/dark-flat-calibration.md",
+      "algorithms/sensor/defective-pixels.md",
+    ]},
+    {"Shading" = [
+      "algorithms/shading/basic.md",
+      "algorithms/shading/cidre.md",
+      "algorithms/shading/illumination-function.md",
+      "algorithms/shading/gamma-mixture.md",
+    ]},
+    {"Deconvolution" = [
+      "algorithms/deconv/richardson-lucy.md",
+      "algorithms/deconv/biggs-andrews.md",
+      "algorithms/deconv/snyder.md",
+      "algorithms/deconv/wiener.md",
+      "algorithms/deconv/tikhonov.md",
+      "algorithms/deconv/wiener-butterworth.md",
+    ]},
+    {"Destriping" = [
+      "algorithms/destripe/wavelet-fft.md",
+    ]},
+    {"Point-spread function" = [
+      "algorithms/psf/bead-psf.md",
+    ]},
     "algorithms/_template.md",
   ]},
   {"Contributing" = [
@@ -105,7 +134,7 @@ show_root_heading = true
 [project.markdown_extensions.pymdownx.arithmatex]
 generic = true
 [project.markdown_extensions.toc]
-toc_depth = 2
+toc_depth = 3
 [project.markdown_extensions.markdown_grid_tables]
 [project.markdown_extensions.attr_list]
 [project.markdown_extensions.pymdownx.details]
