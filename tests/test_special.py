@@ -233,3 +233,113 @@ def test_fit_dirichlet_bounds():
         e, torch.ones(3, dtype=torch.float64), 32, bounds=(1e-3, 1e3)
     )
     torch.testing.assert_close(free, boxed)
+
+
+# -- Poisson counts through Gaussian noise (Snyder et al. 1993, Eq. 21) ----
+def _poisson_normal_brute(r, mu, var, m=0.0):
+    """E[n | r] and log p(r) by direct summation, 50 digits."""
+    mpmath = pytest.importorskip("mpmath")
+    mp = mpmath.mp.clone()
+    mp.dps = 50
+    r, mu, var, m = mp.mpf(r), mp.mpf(mu), mp.mpf(var), mp.mpf(m)
+    num = den = mp.mpf(0)
+    # every n within 60 standard deviations of r − m and of μ
+    spread = 60 * mp.sqrt(var + mu) + 60
+    lo = max(0, int(min(r - m, mu) - spread))
+    hi = int(max(r - m, mu) + spread)
+    for n in range(lo, hi):
+        w = mp.exp(
+            n * mp.log(mu) - mp.loggamma(n + 1) - (r - n - m) ** 2 / (2 * var)
+        )
+        num += n * w
+        den += w
+    logp = mp.log(den) - mu - mp.log(2 * mp.pi * var) / 2
+    return float(num / den), float(logp)
+
+
+_PN_CASES = [
+    # (r, μ, σ²): low counts and small σ, where F ≈ integer counts
+    (0.0, 0.5, 0.01),
+    (3.0, 0.5, 0.01),
+    (2.4, 1.0, 0.25),
+    (0.3, 4.0, 1e-4),
+    (-5.0, 10.0, 0.25),
+    (20.0, 1.0, 1.0),
+    (7.0, 1e-30, 1.0),
+    (5.0, 3.0, 1.0),
+    # large σ
+    (50.0, 2.0, 225.0),
+    (-30.0, 0.1, 225.0),
+    (1000.0, 1000.0, 225.0),
+    (1e5, 1e5, 100.0),
+]
+
+
+def test_poisson_normal_against_brute_force():
+    from optix.special import poisson_normal_logpdf, poisson_normal_mean
+
+    cases = torch.tensor(_PN_CASES, dtype=torch.float64)
+    r, mu, var = cases.unbind(1)
+    mean = poisson_normal_mean(r, mu, var)
+    logp = poisson_normal_logpdf(r, mu, var)
+    for i, case in enumerate(_PN_CASES):
+        ref_mean, ref_logp = _poisson_normal_brute(*case)
+        assert float(mean[i]) == pytest.approx(ref_mean, rel=1e-13, abs=0)
+        assert float(logp[i]) == pytest.approx(ref_logp, rel=1e-13, abs=1e-12)
+    # offset m: a shift of the data
+    shifted = poisson_normal_mean(r + 7.5, mu, var, offset=7.5)
+    torch.testing.assert_close(shifted, mean, rtol=1e-12, atol=1e-12)
+
+
+def test_poisson_normal_limits():
+    from optix.special import poisson_normal_mean
+
+    gen = torch.Generator().manual_seed(0)
+    # σ → 0: F → r − m (returned exactly at σ² = 0)
+    r = torch.poisson(
+        torch.full((500,), 3.0, dtype=torch.float64), generator=gen
+    )
+    torch.testing.assert_close(
+        poisson_normal_mean(r + 2, 3.0, 0.0, offset=2), r
+    )
+    torch.testing.assert_close(
+        poisson_normal_mean(r + 2, 3.0, 1e-6, offset=2), r
+    )
+    # large σ and μ: F ≈ μ (r + σ²)/(μ + σ²), the shifted-Poisson E-step
+    mu, var = 900.0, 400.0
+    r = mu + (mu + var) ** 0.5 * torch.randn(
+        500, generator=gen, dtype=torch.float64
+    )
+    shifted = mu * (r + var) / (mu + var)
+    mean = poisson_normal_mean(r, mu, var)
+    assert float(((mean - shifted) / shifted).abs().max()) < 2e-3
+    # low counts, small σ: they differ (F ≈ the nearest count)
+    r = torch.tensor([1.3, 2.8], dtype=torch.float64)
+    mean = poisson_normal_mean(r, 1.0, 0.04)
+    torch.testing.assert_close(
+        mean, torch.tensor([1.0, 3.0], dtype=torch.float64), atol=0.05, rtol=0
+    )
+    assert float((mean - 1.0 * (r + 0.04) / 1.04).abs().min()) > 0.1
+
+
+def test_poisson_normal_batches_and_dtypes():
+    from optix.special import poisson_normal_logpdf, poisson_normal_mean
+
+    gen = torch.Generator().manual_seed(1)
+    mu = 10 * torch.rand(40, 30, generator=gen, dtype=torch.float64)
+    var = 0.1 + 20 * torch.rand(40, 30, generator=gen, dtype=torch.float64)
+    r = torch.poisson(mu, generator=gen) + var.sqrt() * torch.randn(
+        40, 30, generator=gen, dtype=torch.float64
+    )
+    ref = poisson_normal_mean(r, mu, var)
+    small = poisson_normal_mean(r, mu, var, max_terms=100)
+    torch.testing.assert_close(small, ref, rtol=1e-14, atol=1e-14)
+    f32 = poisson_normal_mean(r.float(), mu.float(), var.float())
+    assert f32.dtype == torch.float32
+    torch.testing.assert_close(f32.double(), ref, rtol=1e-5, atol=1e-5)
+    lp = poisson_normal_logpdf(r.float(), mu.float(), var.float())
+    torch.testing.assert_close(
+        lp.double(), poisson_normal_logpdf(r, mu, var), rtol=1e-5, atol=1e-4
+    )
+    with pytest.raises(ValueError, match="variance"):
+        poisson_normal_mean(r, mu, -var)
