@@ -38,10 +38,14 @@ invariant: the PSF depends on the position in the field (aberrations that grow
 off-axis, a light sheet that thickens away from its waist, depth-dependent
 blur). The PSFs $\mathbf{h}_s$ are known at $S$ nodes $\mathbf{r}_s$ of a
 rectangular grid, in 2 or 3 dimensions; each is centred at index `K // 2` and
-normalised to unit sum. As for [Richardson–Lucy](richardson-lucy.md), light from
-outside the field of view is blurred into it: the object is estimated on a
-domain extended by the PSF support, and the blur crops back to the observed
-region.
+normalised to unit sum. As in the paper
+([§1](https://doi.org/10.1137/S106482759528507X), where the matrix is square, and
+§3.2.1, zero padding along the exterior borders), the unknowns are the pixels of
+the image and the object is zero outside it (`boundary="zero"`). With the extension
+`boundary="extended"`, the object is instead estimated on a domain extended by the
+PSF support, as for [Richardson–Lucy](richardson-lucy.md), so that light from
+outside the field of view can be blurred into it; the system is then
+underdetermined and early stopping selects the solution.
 
 ## Probabilistic model
 
@@ -107,11 +111,12 @@ rule and compares solutions after a fixed number of iterations.
 
 **Fast products** ([§3](https://doi.org/10.1137/S106482759528507X)). $\mathbf{A}\mathbf{x}$ is
 evaluated with FFTs on a padded grid, as a sum of $S$ circular convolutions
-followed by the pixel weights, cropped to the observed region. The adjoint is the
-exact transpose,
+followed by the pixel weights, cropped to the observed region (the object
+is masked to the image with `boundary="zero"`). The adjoint is the exact
+transpose,
 
 $$
-\mathbf{A}^\top \mathbf{r} = \sum_s \mathbf{H}_s^\top \mathbf{W}_s\, \mathbf{r},
+\mathbf{A}^\top \mathbf{e} = \sum_s \mathbf{H}_s^\top \mathbf{W}_s\, \mathbf{e},
 $$
 
 with $\mathbf{H}_s^\top$ the correlation with $\mathbf{h}_s$ (multiplication by the
@@ -128,7 +133,7 @@ c_j = \sum_{\mathbf{d} \equiv j \,(\mathrm{mod}\ \rho)} \prod_a \left(1 - \frac{
 $$
 
 with $h(\mathbf{d})$ the PSF at offset $\mathbf{d}$ from its centre, and eigenvalues
-$\lambda_i$ given by its DFT. The block-diagonal matrix $\mathbf{C}$ of these
+given by its DFT, one per frequency. The block-diagonal matrix $\mathbf{C}$ of these
 blocks has its eigenvalues of magnitude below $\tau$ replaced by 1, which gives
 $\mathbf{C}_\tau$ (after Hanke, Nagy and Plemmons 1993, as in [§4](https://doi.org/10.1137/S106482759528507X)): it matches
 $\mathbf{A}$ on the large singular values (the signal subspace) and leaves the
@@ -137,10 +142,10 @@ system, with $\mathbf{P} = \mathbf{C}_\tau^{-1}$ applied by one FFT pair per reg
 
 $$
 \begin{aligned}
-\mathbf{s}_0 &= \mathbf{P}^\top \mathbf{A}^\top \mathbf{y}, \quad \mathbf{p}_0 = \mathbf{s}_0, \quad \mathbf{r}_0 = \mathbf{y}, \quad \mathbf{x}_0 = \mathbf{0},\\
+\mathbf{s}_0 &= \mathbf{P}^\top \mathbf{A}^\top \mathbf{y}, \quad \mathbf{p}_0 = \mathbf{s}_0, \quad \mathbf{e}_0 = \mathbf{y}, \quad \mathbf{x}_0 = \mathbf{0},\\
 \mathbf{t}_k &= \mathbf{P}\mathbf{p}_k, \quad \mathbf{q}_k = \mathbf{A}\mathbf{t}_k, \quad \alpha_k = \|\mathbf{s}_k\|^2 / \|\mathbf{q}_k\|^2,\\
-\mathbf{x}_{k+1} &= \mathbf{x}_k + \alpha_k \mathbf{t}_k, \quad \mathbf{r}_{k+1} = \mathbf{r}_k - \alpha_k \mathbf{q}_k,\\
-\mathbf{s}_{k+1} &= \mathbf{P}^\top \mathbf{A}^\top \mathbf{r}_{k+1}, \quad
+\mathbf{x}_{k+1} &= \mathbf{x}_k + \alpha_k \mathbf{t}_k, \quad \mathbf{e}_{k+1} = \mathbf{e}_k - \alpha_k \mathbf{q}_k,\\
+\mathbf{s}_{k+1} &= \mathbf{P}^\top \mathbf{A}^\top \mathbf{e}_{k+1}, \quad
 \mathbf{p}_{k+1} = \mathbf{s}_{k+1} + \frac{\|\mathbf{s}_{k+1}\|^2}{\|\mathbf{s}_k\|^2}\,\mathbf{p}_k .
 \end{aligned}
 $$
@@ -156,12 +161,13 @@ Input: data y, PSFs h_s on a grid with node positions r_s,
        interpolation = "constant", precondition = True, tau = 0, n_iter = 14
 For each block of the image (the whole image when it fits in memory):
     Build A on the block from the weights at the global pixel positions
+    (zero boundary: the unknowns are the image pixels, zero outside)
     If precondition: build C_tau, one circulant block per region of the block
-    x(0) = 0; r = y; s = P' A' r; p = s
+    x(0) = 0; e = y; s = P' A' e; p = s
     Repeat n_iter times (or until s = 0 or q = 0):
         t = P p;  q = A t;  alpha = |s|² / |q|²
-        x += alpha t;  r -= alpha q
-        s_new = P' A' r;  p = s_new + (|s_new|² / |s|²) p;  s = s_new
+        x += alpha t;  e -= alpha q
+        s_new = P' A' e;  p = s_new + (|s_new|² / |s|²) p;  s = s_new
     Keep the core of x, cropped to the observed region
 Return the restored image
 ```
@@ -171,46 +177,58 @@ The number of iterations made per block is recorded in
 
 ## Faithful mode and extensions
 
-`faithful=True` (the default) reproduces the paper: piecewise-constant weights,
-preconditioned CG with $\tau = 0$ (all experiments of
-[§5](https://doi.org/10.1137/S106482759528507X)), 14 iterations (the
-preconditioned solutions of Fig. 5.8), no stopping criterion. The defaults of
-`faithful=False` are the same: the keywords below select the paper's
-alternatives, and none is an extension.
+`faithful=True` (the default) reproduces the paper: zero boundary (the object is
+zero outside the image), piecewise-constant weights, preconditioned CG with
+$\tau = 0$ (all experiments of [§5](https://doi.org/10.1137/S106482759528507X)),
+14 iterations (the preconditioned solutions of Fig. 5.8), no stopping criterion.
+The paper's own options, `interpolation` (§3.2.2), `precondition` (the plain CG
+of its comparisons) and `tau` (§4), keep the estimator faithful: they select
+variants of the method. `boundary="extended"` is the one extension, and makes the
+estimator non-faithful. The defaults of `faithful=False` are the same.
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
 | `interpolation` | weights of the blur model: region indicators (§3.2.1) or linear (§3.2.2) | `"constant"` | `"constant"` |
 | `precondition` | preconditioned CG, or plain CG (the paper's reference method) | `True` | `True` |
-| `tau` | truncation level $\tau$ of the preconditioner | 0 | 0 |
+| `tau` | truncation level $\tau$ of the preconditioner | 0 | 0 (0.1–0.3 for smooth PSFs, see below) |
+| `boundary` | unknowns on the image, zero outside (paper), or an object extended past the image by the PSF support (extension) | `"zero"` | `"zero"` |
 | `n_iter` | number of iterations | 14 | 14 |
 | `halo` | halo width per spatial axis, at least the PSF size | `None` (twice the PSF size) | `None` |
 | `block` | core block size per spatial axis | `None` (from the memory budget) | `None` |
 
 !!! warning "Smooth PSFs need $\tau > 0$"
-    The PSFs of the paper have a sharp core, so the eigenvalues of $\mathbf{C}$
-    stay away from 0 and $\tau = 0$ works (§4: "for moderately ill-posed
-    problems with little noise, we can take $\tau \approx 0$"). For smooth PSFs
-    such as a Gaussian, the eigenvalues of $\mathbf{C}$ decay to tiny values, and
-    $\mathbf{C}_\tau^{-1}$ with $\tau = 0$ amplifies the mismatch between
-    $\mathbf{C}$ and $\mathbf{A}$ at the region boundaries and the noise: the
-    iteration diverges from the first iterations. Choose $\tau$ a few per cent of
-    the largest eigenvalue (about 1 for unit-sum PSFs), or `precondition=False`.
-    The paper also notes that the preconditioner does not help on smooth images,
-    and is less effective as the number of regions grows.
+    The paper's experiments use $\tau = 0$ (§5), and §4 notes that "for
+    moderately ill-posed problems with little noise, we can take
+    $\tau \approx 0$". A likely reason why this works there is that the HST PSFs
+    have a sharp core, which keeps the eigenvalues of $\mathbf{C}$ away from 0; the
+    paper does not say so. For smooth PSFs such as a Gaussian, the eigenvalues of
+    $\mathbf{C}$ decay to tiny values, and $\mathbf{C}_\tau^{-1}$ with $\tau = 0$
+    amplifies the mismatch between $\mathbf{C}$ and $\mathbf{A}$ at the region
+    boundaries, even without noise: PCG diverges from the first iterations. Choose
+    $\tau \approx 0.1$–$0.3$ of the largest eigenvalue (about 1 for unit-sum PSFs),
+    the larger values for wider PSFs; with smaller $\tau$ the first iterates can
+    still overshoot. With Gaussian PSFs ($\sigma$ = 0.7–2 pixels) and such $\tau$,
+    PCG after 14 iterations is about as accurate as plain CG, or somewhat worse
+    (0–30 % higher error on a checkerboard object), not better: the speed-up of
+    §5 should not be expected for smooth PSFs. The paper notes something similar
+    for smooth images, and a preconditioner that is less effective as the number
+    of regions grows. `precondition=False` avoids the issue.
 
 Choices that the paper does not specify:
 
 - the number of iterations is that of Fig. 5.8; there is no stopping rule;
 - CGLS starts from $\mathbf{x}^{(0)} = \mathbf{0}$;
-- the object outside the observed region (the margin of the padded grid) is
-  extended by the PSF support and is not preconditioned;
+- object pixels outside the piecewise-constant regions of a block (outside the
+  image with `boundary="extended"`, or in the margin around an inner block) are
+  not preconditioned;
 - region boundaries lie half-way between neighbouring node positions, and the
   weights are constant beyond the outermost nodes;
 - each PSF is normalised to unit sum;
 - eigenvalues that vanish to round-off (below the machine epsilon times the
   largest magnitude) are also replaced by 1, so that $\tau = 0$ is defined;
-- the halo of blocks is twice the PSF size.
+- the halo of blocks is twice the PSF size;
+- the diagonal of the triangulation of `interpolation="linear"` is a choice (the
+  paper only asks for a triangulation, and Fig. 3.2 draws the other diagonal).
 
 ## Memory and streaming
 
@@ -218,19 +236,28 @@ Large images are cut into blocks with a halo (`blocks`, halo streaming), as for
 [Richardson–Lucy](richardson-lucy.md#memory-and-streaming). Each block, core plus
 halo, is restored as an image of its own and only its core is kept. The weights
 come from global positions, so the blur of a block is exactly the whole-image
-blur restricted to it. The preconditioner of a block uses the parts of the regions
-that fall in it, and the CG inner products are computed per block, so
-block-wise and whole-image results differ slightly away from the image edges. An
-image that fits in the memory budget is restored as a single block, which is
-then exact.
+blur restricted to it, and with the zero boundary the unknowns of a block are its
+pixels plus the image pixels within the PSF support around them.
 
-A block holds the weights and the transfer functions of the $S_b$ terms that touch
-it (nodes with a non-zero weight in the block), and about sixteen working
-buffers. Each term is convolved over the whole padded grid of the block (the
-paper convolves region by region, which has the same result), so the cost of one
-iteration is $S_b$ forward and $S_b$ adjoint FFT pairs, plus one FFT pair per region
-for the preconditioner. Smaller blocks touch fewer terms; `block` and `halo`
-trade memory for seam quality.
+Each block runs a complete CGLS on its own least-squares problem, with its own
+inner products and step sizes, and its preconditioner uses the parts of the
+regions that fall in it. The step sizes depend on the data and the number of
+iterations sets the regularisation, so each block is regularised differently: the
+block-wise result is a valid CG restoration, but not the whole-image iterate.
+With Gaussian PSFs and blocks of 16–32 pixels, the two differ by 10–30 % in
+relative L2 norm, while both are about as close to the true object. An image that
+fits in the memory budget is restored as a single block, which is the
+whole-image iterate.
+
+A block holds, for each of the $T$ PSFs whose weights meet it, a weight map and a
+transfer function, and the CG and FFT buffers (about sixteen per voxel, plus three
+per term in the memory budget). Each term is convolved over the whole padded
+grid of the block, so a product costs $T$ FFT pairs, plus one FFT pair per region
+for the preconditioner. The paper's region-by-region products
+([§3.2.1](https://doi.org/10.1137/S106482759528507X)) give the same result, except
+for the zero padding along the borders of each region against the extension of the
+object, with about the storage of a single spatially invariant convolution. Smaller
+blocks meet fewer terms; `block` and `halo` trade memory for seam quality.
 
 ## Usage
 
@@ -271,7 +298,8 @@ torch.Size([3, 3, 15, 15])
 True
 ```
 
-Common variations: `interpolation="linear"` for weights interpolated between
+Common variations: `boundary="extended"` for an object extended past the image;
+`interpolation="linear"` for weights interpolated between
 nodes; `precondition=False` for plain CG; a 3-D grid of 3-D PSFs, `psf` of shape
 `(*G, *K)` with three grid and three kernel axes; a `zarr` array as input, with
 `out`, processed block by block. The function

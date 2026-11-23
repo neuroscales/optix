@@ -20,7 +20,9 @@ approximations are available, `model=`:
   bilinear (trilinear in 3-D) interpolation, so the PSF at every pixel is the
   interpolation of the sampled PSFs;
 - `"modes"`: the kernels are the principal modes of the sampled PSFs, of which
-  the first `rank` are kept, which is the best low-rank approximation of the PSFs;
+  the first `rank` are kept, and the weights are their coefficients interpolated
+  between nodes (the practical scheme of Flicker and Rigaut 2005, which departs
+  from the paper's equations, see below);
 - `"optimal"`: kernels and weights are fitted to a PSF known at every pixel (a
   function `psf_model`), keeping the localised weights of the interpolation.
 
@@ -102,10 +104,10 @@ squared distances between the true PSF and its approximation over all pixels.
 
 **Interpolation** ([§2.3](https://doi.org/10.1007/s11263-015-0817-x), Eqs. 21–22).
 The PSFs are sampled at $S$ nodes of a rectangular grid. Each column of $\mathbf{K}$
-is approximated by the weighted sum of the sampled columns $\mathbf{k}_s$,
+is approximated by the weighted sum of the sampled columns $\mathbf{h}_s$,
 
 $$
-\mathbf{K} \approx \sum_{s} \mathbf{k}_s \boldsymbol{\varphi}_s^\top,
+\mathbf{K} \approx \sum_{s} \mathbf{h}_s \boldsymbol{\varphi}_s^\top,
 \qquad
 \mathbf{A} \approx \sum_s \mathbf{H}_s \operatorname{diag}(\boldsymbol{\varphi}_s),
 $$
@@ -117,15 +119,20 @@ the symmetries of the sampled PSFs ([§3.2](https://doi.org/10.1007/s11263-015-0
 Because the weights are zero outside their support, a block is convolved only with
 the kernels of the nodes whose weights are non-zero in it.
 
-**Modes** ([§2.4](https://doi.org/10.1007/s11263-015-0817-x), Eqs. 26–28). Let
-$\mathbf{K}_0 \in \mathbb{R}^{L \times S_0}$ hold the $S_0$ sampled PSFs. Its
-singular value decomposition $\mathbf{K}_0 = \mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$
-gives, by the Eckart–Young theorem, the closest rank-$R$ approximation
-$\mathbf{K}_0 \approx \sum_{s \le R} \mathbf{u}_s\, \sigma_s \mathbf{v}_s^\top$
-(Eq. 27), whose error is $\sum_{s > R} \sigma_s^2$. The kernels are the modes
-$\mathbf{h}_s = \mathbf{u}_s$ (they are not positive nor normalised) and the
-weights are the mode coefficients $\sigma_s \mathbf{v}_s$ of the nodes,
-interpolated between nodes with the weights $\boldsymbol{\varphi}$ (Eq. 28). The
+**Modes** ([§2.4](https://doi.org/10.1007/s11263-015-0817-x), Eqs. 26–28; this
+departs from the paper). In the paper, $\mathbf{K}$ holds the PSF of *every* pixel
+($L \times M$), its singular value decomposition
+$\mathbf{K} = \mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$ gives the closest rank-$R$
+approximation $\sum_{s \le R} \mathbf{u}_s\, \sigma_s \mathbf{v}_s^\top$ (Eq. 27, Eckart–Young),
+and $\sigma_s \mathbf{v}_s$ are the weights over the whole field (Eq. 28), with no
+interpolation. The model implements the practical scheme of Flicker and Rigaut
+(2005): the SVD is that of the matrix $\mathbf{K}_0 \in \mathbb{R}^{L \times S_0}$ of
+the $S_0$ *sampled* PSFs, the kernels are the first $R$ modes
+$\mathbf{h}_s = \mathbf{u}_s$ (not positive nor normalised), and the weights are the
+mode coefficients $\sigma_s \mathbf{v}_s$ of the nodes, interpolated between nodes
+with the weights $\boldsymbol{\varphi}$. Eckart–Young then holds for the samples
+only: the truncation is the best rank-$R$ approximation of $\mathbf{K}_0$, with
+error $\sum_{s > R} \sigma_s^2$ on them, and not of the PSFs over the field. The
 weights are not localised: each mode is convolved over the whole field. With
 $R = S_0$ the model equals the interpolation.
 
@@ -149,15 +156,17 @@ $$
 $$
 
 For fixed kernels, the weights of pixel $j$ are the projection of its PSF
-$\mathbf{K}_{\cdot j}$ on the $2^d$ kernels $\mathbf{C}_j$ of its grid cell, in $d$
+$\mathbf{K}_{\cdot j}$ on the $2^d$ kernels $\mathbf{C}'_j$ of its grid cell, in $d$
 dimensions,
 
 $$
-\boldsymbol{\omega}_j = (\mathbf{C}_j^\top \mathbf{C}_j)^{-1} \mathbf{C}_j^\top \mathbf{K}_{\cdot j}
+\boldsymbol{\omega}_j = (\mathbf{C}'^\top_j \mathbf{C}'_j)^{-1} \mathbf{C}'^\top_j \mathbf{K}_{\cdot j}
 \qquad (37),
 $$
 
-constant within a cell. Each alternation lowers the error, and ten are enough
+$\mathbf{C}'_j$ is the same for every pixel of a cell, so the matrix
+$(\mathbf{C}'^\top_j \mathbf{C}'_j)^{-1}\mathbf{C}'^\top_j$ is computed once per cell; the weights
+$\boldsymbol{\omega}_j$ themselves depend on the PSF of the pixel. Each alternation lowers the error, and ten are enough
 (`n_alt=10`). The operator is then Eq. 38,
 $\mathbf{A} \approx \sum_s \operatorname{conv}(\mathbf{c}_s)\operatorname{diag}(\mathbf{w}_s)$,
 at the cost of the interpolation model, with errors about an order of magnitude
@@ -176,7 +185,8 @@ Build the terms (kernels h_s, weights w_s):
                    start from the interpolation terms
                    repeat n_alt times:
                        C = K W (W'W)⁻¹                         (Eq. 35)
-                       w_j = pinv(C_j) K_j for every pixel j   (Eq. 37)
+                       w_j = pinv(C'_j) K_j for every pixel j  (Eq. 37)
+                   one more pass: store w_j of every pixel (2^d values each)
 For a block at a global position: evaluate the weights at the global pixel
 positions and apply A = Σ H_s W_s with FFTs on a padded grid; adjoint:
 A' = Σ W_s H_s'
@@ -190,7 +200,7 @@ model of the paper is a value of `model`, and none is an extension.
 
 | Keyword | Changes | Paper | Default |
 |---|---|---|---|
-| `model` | `"interpolation"` (Eqs. 21–22), `"modes"` (Eqs. 26–28), `"optimal"` (Eqs. 29–38) | all three | `"interpolation"` |
+| `model` | `"interpolation"` (Eqs. 21–22), `"modes"` (Eqs. 26–28, with the departure described above), `"optimal"` (Eqs. 29–38) | all three | `"interpolation"` |
 | `rank` | number of modes kept (`"modes"`) | 5 and 13 in the experiments | `None` (all modes) |
 | `psf_model` | callable giving the PSFs `(n, *K)` at positions `(n, d)`, for `"optimal"` | the PSF of every pixel | `None` |
 | `extent` | image shape the `"optimal"` fit covers | the whole image | `None` |
@@ -201,30 +211,41 @@ Choices that the paper does not specify:
 
 - outside the grid of nodes, the weights are constant (clamped to the nearest
   node);
-- with `"modes"`, the SVD is that of the sampled PSFs (one column per node), the
-  coefficients are interpolated bilinearly between nodes, and by default all modes
-  are kept;
+- with `"modes"`, the SVD is that of the sampled PSFs (one column per node), not
+  of the PSFs of every pixel as in Eqs. 26–28: the coefficients are interpolated
+  bilinearly between nodes (Flicker and Rigaut 2005), and by default all modes are
+  kept;
 - with `"optimal"`, positions are clamped to the image before `psf_model` is
   evaluated, and the least-squares problems are solved with the pseudo-inverse
-  (minimum-norm solution), so that identical neighbouring PSFs are allowed;
+  (minimum-norm solution), so that identical neighbouring PSFs are allowed, and
+  all $2^d$ nodes of the clamped cell of a pixel carry a weight (the paper's
+  "weights of a cell"), which loosens the support constraint of Eq. 31 where
+  $\varphi_s$ vanishes on a node of the cell: beyond the outermost centres, and
+  exactly on grid lines;
 - `normalize=False` keeps a PSF sum that varies over the field (vignetting,
   [§3.2.2](https://doi.org/10.1007/s11263-015-0817-x)).
 
-!!! note "Costs and limits of `\"optimal\"`"
-    The fit evaluates `psf_model` at every pixel of `extent`, `n_alt` times, and
-    applying the model evaluates it again at every pixel of every block, so it is
-    expensive on large images. An estimator that holds a model of this kind cannot be
-    saved, as the callable cannot be stored.
+!!! note "Costs of `\"optimal\"`"
+    As in [§2.5.2](https://doi.org/10.1007/s11263-015-0817-x), the kernels and the
+    weights $\boldsymbol{\omega}$ of every pixel are computed once, when the model is
+    built, and stored ($2^d$ values per pixel of `extent`); operators only slice
+    them, and `psf_model` is not called again. The fit evaluates `psf_model`
+    $(n_\text{alt} + 1)$ times at every pixel, in batches sized from the memory
+    budget, at a cost of about $(n_\text{alt} + 1)\, M L\, 2^d$ operations ($M$
+    pixels, $L$ pixels of the PSF support): fine in 2-D, heavy for a large volume
+    with large 3-D PSFs. The model can be saved without `psf_model`.
 
 The paper's restoration (a total-variation penalty minimised by L-BFGS) is not
 implemented; the model is given to the RL family instead. `RichardsonLucy` stays
 faithful with a shift-variant model: [Lucy (1974)](https://doi.org/10.1086/111605)
 states the iteration for any kernel $P(x \mid \xi)$, not only a convolution.
+`WienerButterworth` needs a single kernel for its back projector and rejects
+shift-variant models with a `TypeError`.
 
 ## Memory and streaming
 
 The model is evaluated block by block, with a halo, by the deconvolution method it is given to
-to (see [Richardson–Lucy](richardson-lucy.md#memory-and-streaming)). The weights
+(see [Richardson–Lucy](richardson-lucy.md#memory-and-streaming)). The weights
 are computed from the global pixel positions of a block, so the operator of a
 block is the whole-image operator restricted to it, whatever the blocking, and
 `BiggsAndrews`, with its acceleration parameter shared by the blocks, matches the
@@ -233,7 +254,7 @@ transfer functions of the $S_b$ terms that touch the block: $S_b$ is at most $2^
 block inside a grid cell, with `"interpolation"` and `"optimal"`, and $R$ for
 `"modes"` (the weights are not localised). The cost of an iteration is $S_b$ forward
 and $S_b$ adjoint FFT pairs. The fit of `"optimal"` visits every pixel of
-`extent` `n_alt` times, in batches.
+`extent` $n_\text{alt} + 1$ times, in batches sized from the memory budget.
 
 ## Usage
 
