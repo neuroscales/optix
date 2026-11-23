@@ -11,22 +11,25 @@ of its paper.
 
 | Kind | Style | Examples |
 |---|---|---|
-| scalar | italic, lowercase | $g$, $o$, $\sigma^2$, $\lambda$, $b_i$ |
-| vector: an image flattened over its pixels, or a set of per-frame values | bold lowercase | $\mathbf{y}_i$, $\mathbf{x}_i$, $\mathbf{f}$, $\mathbf{d}$, $\mathbf{b}$ |
+| scalar | italic, lowercase | $g$, $o$, $\sigma^2$, $\lambda$, $b_n$ |
+| vector: an image flattened over its pixels, or a set of per-frame values | bold lowercase | $\mathbf{y}_n$, $\mathbf{x}_n$, $\mathbf{f}$, $\mathbf{d}$, $\mathbf{b}$ |
 | matrix or linear operator | bold uppercase | $\mathbf{A}$, $\boldsymbol{\Phi}$, $\mathbf{W}$, $\mathbf{Y}$ |
-| count, size | plain uppercase | $N$, $K$, $P$, $H$, $W$ |
+| count, size | plain uppercase, or the size of a set | $N$, $K$, $H$, $W$, $\lvert\Omega\rvert$ |
 | Greek vector or matrix | bold Greek | $\boldsymbol{\alpha}$, $\boldsymbol{\pi}$, $\boldsymbol{\eta}$ |
 | set, distribution family | calligraphic or upright | $\mathcal{N}$, $\mathrm{Gamma}$, $\mathcal{D}$ |
 
-- Images are vectors. A picture of $H \times W$ pixels is a vector of
-  $P = HW$ values, and a stack of $N$ frames is the matrix
-  $\mathbf{Y} = [\mathbf{y}_1, \ldots, \mathbf{y}_N] \in \mathbb{R}^{P \times N}$,
-  one frame per column.
+- Images are vectors. The pixels of a picture form the grid $\Omega$, with
+  $\lvert\Omega\rvert = HW$ pixels in 2D ($DHW$ in 3D); pixel $i$ is
+  written $i \in \Omega$. A picture is a vector
+  $\mathbf{y}_n \in \mathbb{R}^{\lvert\Omega\rvert}$, and a stack of $N$ frames
+  is the matrix
+  $\mathbf{Y} = [\mathbf{y}_1, \ldots, \mathbf{y}_N] \in \mathbb{R}^{\lvert\Omega\rvert \times N}$,
+  one frame per column. Pixel $i$ of frame $n$ is $y_{ni}$.
 - Products of images are pixel-wise and written $\odot$; division of images
   is pixel-wise too. A scalar added to an image is broadcast:
-  $\mathbf{x}_i + b_i$ means $\mathbf{x}_i + b_i \mathbf{1}$.
+  $\mathbf{x}_n + b_n$ means $\mathbf{x}_n + b_n \mathbf{1}$.
 - The position of a pixel is rarely needed. When it is, it is written
-  $\mathbf{r}$, and a pixel of an image $\mathbf{f}(\mathbf{r})$ or $f_p$.
+  $\mathbf{r}$, and a pixel of an image $\mathbf{f}(\mathbf{r})$ or $f_i$.
 - Hats mark estimates ($\hat{\mathbf{f}}$), bars means ($\bar{x}$).
 - Probability distributions follow Bishop's [*Pattern Recognition and Machine
   Learning*](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/) (2006). Some letters therefore have a second meaning there (the rate $b$
@@ -37,14 +40,15 @@ of its paper.
 Docstrings write maths in UTF-8, not LaTeX, so that they read well in
 `help()`, in an editor and in the API reference alike (see the
 [style guide](../contributing/style.md)). Bold is not available there, so the
-case carries the meaning: `yᵢ = f ⊙ (xᵢ + bᵢ) + d`, `A x`, `Φ θ`. The
+case carries the meaning: `yₙ = f ⊙ (xₙ + bₙ) + d`, `A x`, `Φ θ`, and the
+number of pixels is `|Ω|`. The
 symbols are the same as on this page.
 
 Indices and exponents use Unicode subscripts and superscripts wherever they
-exist: `xᵢ`, `bᵢ`, `σ²`, `Φᵀ`, `τ⁻¹`, `x̂ᵢ`, `rₙₖ`, `α₀`, `10⁻⁶`. Superscripts
+exist: `xₙ`, `bₙ`, `fᵢ`, `σ²`, `Φᵀ`, `τ⁻¹`, `x̂ₙ`, `rₙₖ`, `α₀`, `10⁻⁶`. Superscripts
 cover the digits, `⁺ ⁻ ⁼ ⁽ ⁾`, almost every lowercase letter and `ᵀ`.
 Subscripts cover only the digits, `₊ ₋ ₌ ₍ ₎` and the letters
-`ₐ ₑ ₕ ᵢ ⱼ ₖ ₗ ₘ ₙ ₒ ₚ ᵣ ₛ ₜ ᵤ ᵥ ₓ`; for any other index (`y_{ig}`,
+`ₐ ₑ ₕ ᵢ ⱼ ₖ ₗ ₘ ₙ ₒ ₚ ᵣ ₛ ₜ ᵤ ᵥ ₓ`; for any other index (`y_{ng}`,
 `x_{max}`, `b_g`), fall back to `_` with braces when it spans several
 characters. Do not mix the two styles within one symbol: `r_{nk}` or `rₙₖ`,
 never `rₙ_k`.
@@ -53,13 +57,13 @@ never `rₙ_k`.
 
 | Symbol | Meaning | Unit | In code |
 |---|---|---|---|
-| $\mathbf{y}_i$, $\mathbf{Y}$ | recorded frame $i$; stack of frames | ADU | the data `Y` |
-| $\mathbf{x}_i$ | latent image: frame $i$ without shading | ADU | result of `apply` |
+| $\mathbf{y}_n$, $\mathbf{Y}$ | recorded frame $n$; stack of frames | ADU | the data `Y` |
+| $\mathbf{x}_n$ | latent image: frame $n$ without shading | ADU | result of `apply` |
 | $\mathbf{f}$ | flat field (multiplicative) | dimensionless | `ShadingEstimate.flat` |
 | $\mathbf{d}$ | dark field (additive, camera offset included) | ADU | `ShadingEstimate.dark` |
-| $b_i$, $\mathbf{b}$ | baseline of frame $i$; all baselines | ADU | `ShadingEstimate.baseline` |
+| $b_n$, $\mathbf{b}$ | baseline of frame $n$; all baselines | ADU | `ShadingEstimate.baseline` |
 | $\lambda$ | expected number of photoelectrons | e⁻ | `signal` of `simulate_sensor` |
-| $n$ | actual number of photoelectrons (Poisson) | e⁻ | |
+| $e$ | actual number of photoelectrons (Poisson) | e⁻ | |
 | $g$ | gain | ADU / e⁻ | `SensorEstimate.gain` |
 | $o$ | camera offset | ADU | `SensorEstimate.offset` |
 | $\sigma^2$ | read-noise variance | ADU² | `SensorEstimate.variance` |
@@ -72,15 +76,15 @@ camera parameters vectors: $\mathbf{g}$, $\mathbf{o}$, $\boldsymbol{\sigma}^2$.
 The two models are
 
 $$
-y = g\,n + o + \varepsilon, \quad n \sim \mathrm{Poisson}(\lambda)
+y = g\,e + o + \varepsilon, \quad e \sim \mathrm{Poisson}(\lambda)
 \qquad\text{and}\qquad
-\mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d},
+\mathbf{y}_n = \mathbf{f} \odot (\mathbf{x}_n + b_n) + \mathbf{d},
 $$
 
 and correcting a frame means
 
 $$
-\hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}} - b_i .
+\hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \mathbf{d}}{\mathbf{f}} - b_n .
 $$
 
 The baseline sits *inside* the flat field: it is a uniform background of the
@@ -92,29 +96,30 @@ uneven illumination as the signal.
 The flat field, the dark field and the baseline are defined statistically:
 the flat field is whatever multiplies every frame alike, the dark field
 whatever is added to every frame alike, the baseline whatever is constant over
-one frame. Written out, the expected recorded value of a pixel $p$ is
+one frame. Written out, the expected recorded value of pixel $i$ of frame $n$
+is
 
 $$
-\mathbb{E}[y_{ip}] =
-g_p \Bigl(
-\underbrace{e_p\, c_p\, \eta_p}_{\text{multiplicative}}\,(u_{ip} + a_{ip})
-+ \underbrace{\ell_p + j_p\, t}_{\text{additive}}
-\Bigr) + o_p ,
+\mathbb{E}[y_{ni}] =
+g_i \Bigl(
+\underbrace{s_i\, c_i\, \eta_i}_{\text{multiplicative}}\,(u_{ni} + a_{ni})
++ \underbrace{\ell_i + j_i\, t_{\text{exp}}}_{\text{additive}}
+\Bigr) + o_i ,
 $$
 
 and each physical quantity lands in one of the estimated terms:
 
 | Physical quantity | Symbol | Lands in |
 |---|---|---|
-| illumination profile | $e_p$ | flat $\mathbf{f}$ |
-| collection efficiency, vignetting | $c_p$ | flat $\mathbf{f}$ |
-| quantum efficiency and gain of each pixel (photo-response non-uniformity) | $\eta_p$, $g_p$ | flat $\mathbf{f}$ |
-| specimen signal | $u_{ip}$ | latent $\mathbf{x}_i$ |
-| autofluorescence, medium, out-of-focus haze | $a_{ip}$ | baseline $b_i$ where uniform, latent $\mathbf{x}_i$ otherwise |
-| stray or ambient light, outside the illumination path | $\ell_p$ | dark $\mathbf{d}$ |
-| dark current, over exposure time $t$ | $j_p\, t$ | dark $\mathbf{d}$ |
-| camera offset, including its fixed pattern | $o_p$ | dark $\mathbf{d}$ |
-| overall scale: lamp power, mean efficiency, mean gain | | shared by $\mathbf{f}$ and $\mathbf{x}_i$; fixed by `meta["flat_norm"]` |
+| illumination profile | $s_i$ | flat $\mathbf{f}$ |
+| collection efficiency, vignetting | $c_i$ | flat $\mathbf{f}$ |
+| quantum efficiency and gain of each pixel (photo-response non-uniformity) | $\eta_i$, $g_i$ | flat $\mathbf{f}$ |
+| specimen signal | $u_{ni}$ | latent $\mathbf{x}_n$ |
+| autofluorescence, medium, out-of-focus haze | $a_{ni}$ | baseline $b_n$ where uniform, latent $\mathbf{x}_n$ otherwise |
+| stray or ambient light, outside the illumination path | $\ell_i$ | dark $\mathbf{d}$ |
+| dark current, over exposure time $t_{\text{exp}}$ | $j_i\, t_{\text{exp}}$ | dark $\mathbf{d}$ |
+| camera offset, including its fixed pattern | $o_i$ | dark $\mathbf{d}$ |
+| overall scale: lamp power, mean efficiency, mean gain | | shared by $\mathbf{f}$ and $\mathbf{x}_n$; fixed by `meta["flat_norm"]` |
 
 So the flat field is not the illumination: it is illumination × collection ×
 pixel response, which is why it overlaps with the gain map of an sCMOS camera.
@@ -126,7 +131,7 @@ stray light. This is the reason why corrections never subtract both
 
 | Symbol | Meaning | In code |
 |---|---|---|
-| $P$ | number of samples along an axis | |
+| $L$ | number of samples along an axis | |
 | $\boldsymbol{\Phi}$ | DCT basis matrix, one function per column | `dct_basis` |
 | $\boldsymbol{\theta}$, $\boldsymbol{\Theta}$ | coefficients in the basis (1D, 2D) | `project`, `reconstruct` |
 | $\kappa_j$ | eigenvalue of the $j$-th basis function for the Laplacian | `dct_bending` |
@@ -168,9 +173,8 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 
 | Symbol | Ranges over |
 |---|---|
-| $i$ | frames (samples of a stack), $1 \ldots N$ |
-| $p$ | pixels, $1 \ldots P$ |
-| $n$ | observations fed to a distribution |
+| $i$ | pixels, $i \in \Omega$, $\lvert\Omega\rvert$ of them |
+| $n$ | frames (samples of a stack), $1 \ldots N$; more generally the observations fed to a distribution |
 | $k$ | classes, $1 \ldots K$ |
 | $j$ | basis functions |
 | $t$ | iterations; $L_t$ is the objective at iteration $t$ (`History.objective`) |
@@ -189,22 +193,22 @@ other. For BaSiC, for instance:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d}
+    \mathbf{y}_n = \mathbf{f} \odot (\mathbf{x}_n + b_n) + \mathbf{d}
     $$
 
 === "Peng et al. 2017"
 
     $$
-    I_i^{\text{meas}}(x) = S^F(x)\,\bigl(B_i + I_i^R(x)\bigr) + S^D(x)
+    I_n^{\text{meas}}(x) = S^F(x)\,\bigl(B_n + I_n^R(x)\bigr) + S^D(x)
     $$
 
 | optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | CIDRE ([Smith et al. 2015](https://doi.org/10.1038/nmeth.3323)) |
 |---|---|---|
-| $\mathbf{y}_i$ | $I_i^{\text{meas}}$ | $I_o$ |
-| $\mathbf{x}_i$ | $I_i^R$ | $I$ |
+| $\mathbf{y}_n$ | $I_n^{\text{meas}}$ | $I_o$ |
+| $\mathbf{x}_n$ | $I_n^R$ | $I$ |
 | $\mathbf{f}$ | $S^F$ | $v$ |
 | $\mathbf{d}$ | $S^D$ | $z$ |
-| $b_i$ | $B_i$ | — |
+| $b_n$ | $B_n$ | — |
 
 !!! references "References"
 
