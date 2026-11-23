@@ -1,6 +1,7 @@
 """Processing algorithms for microscopy."""
 
 from . import (
+    background,
     basis,
     deconv,
     destripe,
@@ -25,6 +26,7 @@ __all__ = [
     "History",
     "Tags",
     "__version__",
+    "background",
     "basis",
     "config",
     "deconv",
