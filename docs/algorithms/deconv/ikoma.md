@@ -341,8 +341,8 @@ as such in the docstrings:
 With the paper's $\rho$ rule, tolerance and iteration cap, the result is an
 early-stopped ADMM iterate, not the minimiser of the objective of Eq. (5). On
 simulated 2-D data ($\gamma = 2$, $\sigma = 3$, peaks of 10 to 1000 photoelectrons) it is
-26 to 34 % (relative $\ell_2$ distance) from the minimiser, and its SNR is 2 to
-4.5 dB higher. The stop regularises too: the result depends on `tol`, `max_iter` and
+about 25 to 34 % (relative $\ell_2$ distance) from the minimiser, and its SNR is about 1.9 to
+4.3 dB higher. The stop regularises too: the result depends on `tol`, `max_iter` and
 `rho`, not only on $\nu$, and tightening `tol` with the default $\nu$ lowers the SNR.
 The primal and dual residuals recorded in `history.extras` are large at the stop and
 vanish only at convergence, so a small relative change is not convergence.

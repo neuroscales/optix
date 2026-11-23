@@ -79,8 +79,8 @@ class Ikoma(_Variational):
     rule, tolerance and iteration cap, the result is an early-stopped
     ADMM iterate, not the minimiser of the objective above. On
     simulated 2-D data (γ = 2, σ = 3, peaks of 10 to 1000
-    photoelectrons) it is 26 to 34 % (relative ℓ2) away from the
-    minimiser, and its SNR is 2 to 4.5 dB higher; 13 to 26 % of its
+    photoelectrons) it is about 25 to 34 % (relative ℓ2) away from the
+    minimiser, and its SNR is about 1.9 to 4.3 dB higher; 13 to 26 % of its
     voxels are negative, by less than 0.4 % of the peak. The stop
     therefore regularises too: the result depends on `tol`, `max_iter`
     and `rho`, not only on ν, and tightening `tol` with the default ν
