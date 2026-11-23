@@ -724,17 +724,22 @@ class NormalStats(SuffStats):
     formed, so large offsets do not destroy the scatter in float32.
 
     !!! references "References"
-        1. Pebay P. Formulas for robust, one-pass parallel computation of
-           covariances and arbitrary-order statistical moments. 2008.
+        1. Pébay P. Formulas for robust, one-pass parallel computation of
+           covariances and arbitrary-order statistical moments. Sandia
+           National Laboratories report SAND2008-6212, 2008.
+           [doi:10.2172/1028931](https://doi.org/10.2172/1028931)
 
         ??? quote "BibTeX"
             ```bibtex
-            @misc{pebay2008,
-              author = {Pebay, P.},
+            @techreport{pebay2008,
+              author = {P{\'e}bay, P.},
               title = {Formulas for robust, one-pass parallel
                        computation of covariances and arbitrary-order
                        statistical moments},
-              year = {2008}
+              institution = {Sandia National Laboratories},
+              number = {SAND2008-6212},
+              year = {2008},
+              doi = {10.2172/1028931}
             }
             ```
     """
@@ -776,7 +781,7 @@ class NormalStats(SuffStats):
     def _combine(
         cls, a: tuple[Tensor, ...], b: tuple[Tensor, ...]
     ) -> tuple[Tensor, ...]:
-        # Pebay's pairwise update
+        # Pébay's pairwise update
         na, ma, sa = a
         nb, mb, sb = b
         n = na + nb  # exact; the weights below are in the fields' dtype

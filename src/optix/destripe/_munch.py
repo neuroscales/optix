@@ -1,4 +1,7 @@
-"""Combined wavelet–Fourier stripe filter of Münch et al. (2009)."""
+"""Combined wavelet–Fourier stripe filter of Münch et al. (2009).
+
+After [Münch et al. (2009)](https://doi.org/10.1364/OE.17.008567).
+"""
 
 import math
 from collections.abc import Callable, Sequence
@@ -23,6 +26,8 @@ def stripe_damping(
     device: torch.device | str | None = None,
 ) -> Tensor:
     """Gaussian band-stop of Münch et al. (2009), Eq. (9).
+
+    See [Münch et al. (2009), Eq. (9)](https://doi.org/10.1364/OE.17.008567):
 
         g(ŷ) = 1 − exp(−ŷ²/(2σ²)),
 
@@ -91,7 +96,8 @@ def wavelet_fft(
     """Remove stripes with the combined wavelet–FFT filter.
 
     Each frame f(x, y), with stripes along y (constant offsets over the
-    whole frame, Eq. (8)), is processed as in Münch et al. (2009), Fig. 5:
+    whole frame, Eq. (8)), is processed as in
+    [Münch et al. (2009), Fig. 5](https://doi.org/10.1364/OE.17.008567):
 
     1. multilevel 2-D DWT down to level L (Eq. (6)), giving the vertical
        detail bands c_{v,l} (low pass along y, high pass along x), l = 1, …, L;
@@ -203,12 +209,12 @@ def _damp(band: Tensor, sigma: float, axis: int) -> Tensor:
 class WaveletFFT(Estimator):
     """Stripe removal by combined wavelet–Fourier filtering.
 
-    The filter of Münch et al. (2009), applied to every frame
-    independently: see [`wavelet_fft`][optix.destripe.wavelet_fft] for
-    the method. It has no parameters to fit:
-    [`fit`][optix.destripe.WaveletFFT.fit] only records the layout, and
-    [`apply`][optix.Estimator.apply] streams the frames in batches, so
-    arrays larger than memory (zarr, memmap) can be processed.
+    The filter of [Münch et al. (2009)](https://doi.org/10.1364/OE.17.008567),
+    applied to every frame independently: see
+    [`wavelet_fft`][optix.destripe.wavelet_fft] for the method. It has no
+    parameters to fit: [`fit`][optix.destripe.WaveletFFT.fit] only records the
+    layout, and [`apply`][optix.Estimator.apply] streams the frames in batches,
+    so arrays larger than memory (zarr, memmap) can be processed.
 
     !!! note
         The paper leaves its three parameters (wavelet, highest level L,

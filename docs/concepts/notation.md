@@ -28,8 +28,8 @@ of its paper.
 - The position of a pixel is rarely needed. When it is, it is written
   $\mathbf{r}$, and a pixel of an image $\mathbf{f}(\mathbf{r})$ or $f_p$.
 - Hats mark estimates ($\hat{\mathbf{f}}$), bars means ($\bar{x}$).
-- Probability distributions follow Bishop's *Pattern Recognition and Machine
-  Learning*. Some letters therefore have a second meaning there (the rate $b$
+- Probability distributions follow Bishop's [*Pattern Recognition and Machine
+  Learning*](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/) (2006). Some letters therefore have a second meaning there (the rate $b$
   of a Gamma is not a baseline); the context always tells which is meant.
 
 ### In docstrings
@@ -136,7 +136,7 @@ stray light. This is the reason why corrections never subtract both
 
 ## Distributions
 
-These follow Bishop.
+These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).
 
 | Symbol | Meaning | In code |
 |---|---|---|
@@ -188,10 +188,56 @@ other. For BaSiC, for instance:
     I_i^{\text{meas}}(x) = S^F(x)\,\bigl(B_i + I_i^R(x)\bigr) + S^D(x)
     $$
 
-| optix | Peng et al. 2017 | CIDRE (Smith et al. 2015) |
+| optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | CIDRE ([Smith et al. 2015](https://doi.org/10.1038/nmeth.3323)) |
 |---|---|---|
 | $\mathbf{y}_i$ | $I_i^{\text{meas}}$ | $I_o$ |
 | $\mathbf{x}_i$ | $I_i^R$ | $I$ |
 | $\mathbf{f}$ | $S^F$ | $v$ |
 | $\mathbf{d}$ | $S^D$ | $z$ |
 | $b_i$ | $B_i$ | — |
+
+!!! references "References"
+
+    1. Bishop CM. *Pattern Recognition and Machine Learning.* Springer, 2006.
+       [Microsoft Research](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/)
+    2. Peng T, Thorn K, Schroeder T, Wang L, Theis FJ, Marr C, Navab N.
+       *A BaSiC tool for background and shading correction of optical
+       microscopy images.* Nat Commun **8**:14836, 2017.
+       [doi:10.1038/ncomms14836](https://doi.org/10.1038/ncomms14836)
+    3. Smith K, Li Y, Piccinini F, Csucs G, Balazs C, Bevilacqua A, Horvath P.
+       *CIDRE: an illumination-correction method for optical microscopy.*
+       Nat Methods **12**(5):404-406, 2015.
+       [doi:10.1038/nmeth.3323](https://doi.org/10.1038/nmeth.3323)
+
+    ??? quote "BibTeX"
+
+        ```bibtex
+        @book{bishop2006pattern,
+          author    = {Bishop, Christopher M.},
+          title     = {Pattern Recognition and Machine Learning},
+          publisher = {Springer},
+          address   = {New York},
+          year      = {2006},
+          isbn      = {978-0-387-31073-2},
+          url       = {https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/},
+        }
+        @article{peng2017basic,
+          author  = {Peng, Tingying and Thorn, Kurt and Schroeder, Timm and Wang, Lichao and Theis, Fabian J. and Marr, Carsten and Navab, Nassir},
+          title   = {A {BaSiC} tool for background and shading correction of optical microscopy images},
+          journal = {Nature Communications},
+          volume  = {8},
+          pages   = {14836},
+          year    = {2017},
+          doi     = {10.1038/ncomms14836},
+        }
+        @article{smith2015cidre,
+          author  = {Smith, Kevin and Li, Yunpeng and Piccinini, Filippo and Csucs, Gabor and Balazs, Csaba and Bevilacqua, Alessandro and Horvath, Peter},
+          title   = {{CIDRE}: an illumination-correction method for optical microscopy},
+          journal = {Nature Methods},
+          volume  = {12},
+          number  = {5},
+          pages   = {404--406},
+          year    = {2015},
+          doi     = {10.1038/nmeth.3323},
+        }
+        ```

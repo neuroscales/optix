@@ -1,4 +1,6 @@
-"""Clipped-observation functions of Foi et al. (2008), Section IV-VI.
+"""Clipped-observation functions of the noise fit, Section IV-VI.
+
+After [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399).
 
 ν ~ 𝒩(μ, 1) and ν̃ = max(0, ν) (Eq. 31):
 

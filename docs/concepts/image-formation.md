@@ -42,7 +42,7 @@ $$
 !!! note "Gain is ADU per electron"
     Datasheets of scientific cameras often quote the *conversion gain* in
     electrons per ADU, which is the inverse. optix always stores $g$ in ADU
-    per electron, as in the EMVA 1288 standard (where it is called $K$), so
+    per electron, as in the [EMVA 1288 standard](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) (where it is called $K$), so
     that $y$ grows with $g$. Invert the datasheet value before using it.
 
 Each parameter can differ from pixel to pixel; modern sCMOS sensors in
@@ -71,7 +71,7 @@ $$
 
 This is a straight line. Its slope is the gain, and where the signal is zero
 (a mean of $o$) it reaches the read-noise variance. Writing it as $a\,\mathbb{E}[y] + b$ gives the
-Poisson-Gaussian parametrisation of Foi et al., with $a = g$ and
+Poisson-Gaussian parametrisation of [Foi et al.](https://doi.org/10.1109/TIP.2008.2001399), with $a = g$ and
 $b = \sigma^2 - g\,o$ (the symbols $a$ and $b$ are local to this paragraph).
 optix stores $(o, \sigma^2, g)$, and $(a, b)$ follow from these as above.
 `SensorEstimate.noise_variance(mean)` evaluates the line:
@@ -122,7 +122,7 @@ variance of each pixel over the frames, and fit a line. This is called a
 The slope recovers the gain of $0.5$ ADU per electron and the intercept the
 read-noise variance of $1.5^2 = 2.25$ ADU$^2$. (This fit uses the true
 offset to place the intercept; a real calibration estimates it from frames
-recorded in the dark. The EMVA 1288 standard prescribes the procedure
+recorded in the dark. The [EMVA 1288 standard](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) prescribes the procedure
 in full.)
 
 ### Quantisation
@@ -385,5 +385,20 @@ exponentiates the result, and normalises it to a mean of 1.
           pages   = {1737--1754},
           year    = {2008},
           doi     = {10.1109/TIP.2008.2001399},
+        }
+        ```
+
+    2. European Machine Vision Association. *EMVA Standard 1288: Standard for
+       Characterization of Image Sensors and Cameras, Release 4.0 Linear.*
+       16 June 2021. [emva.org](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf)
+
+    ??? quote "BibTeX"
+
+        ```bibtex
+        @techreport{emva1288linear40,
+          author      = {{European Machine Vision Association}},
+          title       = {{EMVA} Standard 1288: Standard for Characterization of Image Sensors and Cameras, Release 4.0 Linear},
+          institution = {EMVA}, year = {2021}, month = jun,
+          url = {https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf}
         }
         ```

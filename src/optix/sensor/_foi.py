@@ -1,7 +1,8 @@
-"""Plumbing for the Poisson-Gaussian fit of Foi et al. (2008).
+"""Plumbing for the Poisson-Gaussian noise fit.
 
-Paper-independent parts of the fit (the method itself is in
-`_foi_local`, `_foi_clip`, `_foi_fit` and
+Paper-independent parts of the fit of
+[Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399)
+(the method itself is in `_foi_local`, `_foi_clip`, `_foi_fit` and
 [`PoissonGaussian`][optix.sensor.PoissonGaussian]):
 
 - per-segment sufficient statistics that merge exactly across frames
@@ -55,10 +56,11 @@ class SegmentStats:
     -----
     Each update computes the segment sums in float64 (temporaries the
     size of the selected entries only) and centres the noise on its
-    segment mean before squaring. It then merges them with Pebay's
-    pairwise formulas ([`Moments`][optix.stats.Moments]). The result
-    does not depend on chunking, up to round-off, and is the same for
-    float32 and float64 inputs, up to their precision.
+    segment mean before squaring. It then merges them with
+    [Pébay's pairwise formulas](https://doi.org/10.2172/1028931)
+    ([`Moments`][optix.stats.Moments]). The result does not depend on
+    chunking, up to round-off, and is the same for float32 and float64
+    inputs, up to their precision.
 
     Only sufficient statistics of the sample standard deviation are kept.
     Median-based estimators (such as the MAD) are not mergeable.

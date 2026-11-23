@@ -1,4 +1,7 @@
-"""CIDRE illumination correction (Smith et al., 2015)."""
+"""CIDRE illumination correction (Smith et al., 2015).
+
+After [Smith et al. 2015](https://doi.org/10.1038/nmeth.3323).
+"""
 
 import itertools
 import math
@@ -206,8 +209,9 @@ class CIDRE(Estimator):
 
         q(r) = f(r) Q + c(r),   c(r) = d(r) − f(r) Z_Q       (7, 8)
 
-    with Z_Q the zero-light point. (Smith et al. 2015: I_o = y, I = x,
-    v = f, z = d, b = c, location x = r.)
+    with Z_Q the zero-light point. ([Smith et al.
+    2015](https://doi.org/10.1038/nmeth.3323): I_o = y, I = x, v = f, z = d, b
+    = c, location x = r.)
 
     **Target distribution** (Eqs. 5-6). Q is the robust mean of the
     q(r) whose mean q̄(r) lies in the central band

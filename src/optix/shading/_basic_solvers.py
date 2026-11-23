@@ -4,14 +4,15 @@ Everything here works on a working stack already in memory, shaped
 `(n, h, w)` (`n` frames at the working size). Frame selection, sorting,
 resizing and batching live in `optix.shading._basic`.
 
-The solver follows Supplementary Note 3 of Peng et al. (2017): Table 1
-(flat field), Table 2 (dark field) and Eq. (9) (weights), with the
-automatic λ of Supplementary Note 4. The `variant="basicpy"` code paths
-reproduce BaSiCPy 2.0.0 (MIT licence, Copyright 2022 BaSiCPy developing
-collaboration group; `basicpy/_torch_routines.py`, `ApproximateFit`), and
-`baseline_basicpy` its `fit_only_baseline`.
+The solver follows Supplementary Note 3 of [Peng et al.
+(2017)](https://doi.org/10.1038/ncomms14836): Table 1 (flat field), Table 2
+(dark field) and Eq. (9) (weights), with the automatic λ of Supplementary Note
+4. The `variant="basicpy"` code paths reproduce
+[BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0 (MIT licence, Copyright
+2022 BaSiCPy developing collaboration group; `basicpy/_torch_routines.py`,
+`ApproximateFit`), and `baseline_basicpy` its `fit_only_baseline`.
 
-Notation (BaSiCPy names in brackets):
+Notation ([BaSiCPy](https://github.com/peng-lab/BaSiCPy) names in brackets):
 
 * `D` (n, h, w): working stack, the matrix I of the paper [Im].
 * `S` (h, w): unnormalised flat field, with orthonormal 2-D DCT
@@ -357,9 +358,10 @@ def _weights(
 ) -> Tensor:
     """Reweighting of the sparse term.
 
-    Eq. (9): W = 1 / (|I_R / I_B| + ε), elementwise, then scaled to mean 1
-    over the stack when `normalize`. The BaSiCPy variant divides by the
-    mean of I_B over each frame instead, and always normalises.
+    Eq. (9): W = 1 / (|I_R / I_B| + ε), elementwise, then scaled to mean 1 over
+    the stack when `normalize`. The
+    [BaSiCPy](https://github.com/peng-lab/BaSiCPy) variant divides by the mean
+    of I_B over each frame instead, and always normalises.
     """
     if variant == "basicpy":
         W = 1 / ((E / (I_B.mean((1, 2), keepdim=True) + 1e-6)).abs() + epsilon)
@@ -421,8 +423,9 @@ def basic_ladm(
     mu_coef, rho, max_mu_coef : float
         Penalty schedule: μ₀ = mu_coef / ‖I‖₂, μ ← min(ρ μ, max_mu_coef μ₀).
     variant : {"paper", "basicpy"}
-        "paper": Supplementary Note 3 as written. "basicpy": BaSiCPy
-        2.0.0's `ApproximateFit` (S starts at one, B clipped at 0, weights
+        "paper": Supplementary Note 3 as written. "basicpy":
+        [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0's
+        `ApproximateFit` (S starts at one, B clipped at 0, weights
         divided by the frame mean of I_B and normalised, dark field from
         the frames with Bᵢ < 1 shrunk with λ_D / (10 μ), and a
         reweighting score on S only).
@@ -555,7 +558,8 @@ def baseline_basicpy(
     rho: float = 1.5,
     max_mu_coef: float = 1e7,
 ) -> Tensor:
-    """Per-frame baseline as BaSiCPy 2.0.0's `fit_only_baseline`.
+    """Per-frame baseline as [BaSiCPy](https://github.com/peng-lab/BaSiCPy)
+    2.0.0's `fit_only_baseline`.
 
     Fits Iᵢ = bᵢ S + D + I_{R,i} with a reweighted-L1 sparse I_R by
     inexact ALM, with bᵢ = mean(Iᵢ − I_{R,i}) − mean(D) clipped at 0. Only

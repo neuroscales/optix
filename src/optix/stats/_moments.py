@@ -1,4 +1,7 @@
-"""Streaming central moments (Pebay's pairwise formulas)."""
+"""Streaming central moments (Pébay's pairwise formulas).
+
+After [Pébay (2008)](https://doi.org/10.2172/1028931).
+"""
 
 import math
 from collections.abc import Sequence
@@ -15,7 +18,10 @@ __all__ = ["Moments"]
 def _combine(
     a: tuple[Tensor, ...], b: tuple[Tensor, ...], order: int
 ) -> tuple[Tensor, ...]:
-    """Pairwise merge of `(n, mean, M2, ..., Mp)` (Pebay, 2008)."""
+    """Pairwise merge of `(n, mean, M2, ..., Mp)`.
+
+    After [Pébay (2008)](https://doi.org/10.2172/1028931).
+    """
     na, ma, *mma = a
     nb, mb, *mmb = b
     n = na + nb
@@ -73,17 +79,22 @@ class Moments(Reducer):
     state, and their accessors return NaN.
 
     !!! references "References"
-        1. Pebay P. Formulas for robust, one-pass parallel computation of
-           covariances and arbitrary-order statistical moments. 2008.
+        1. Pébay P. Formulas for robust, one-pass parallel computation of
+           covariances and arbitrary-order statistical moments. Sandia
+           National Laboratories report SAND2008-6212, 2008.
+           [doi:10.2172/1028931](https://doi.org/10.2172/1028931)
 
         ??? quote "BibTeX"
             ```bibtex
-            @misc{pebay2008,
-              author = {Pebay, P.},
+            @techreport{pebay2008,
+              author = {P{\'e}bay, P.},
               title = {Formulas for robust, one-pass parallel
                        computation of covariances and arbitrary-order
                        statistical moments},
-              year = {2008}
+              institution = {Sandia National Laboratories},
+              number = {SAND2008-6212},
+              year = {2008},
+              doi = {10.2172/1028931}
             }
             ```
     """

@@ -1,6 +1,9 @@
 """Generalised Anscombe transform and its exact unbiased inverse.
 
-Implemented from the papers of Mäkitalo & Foi (2011, 2011 letter, 2013);
+Implemented from the papers of Mäkitalo & Foi
+([2011](https://doi.org/10.1109/TIP.2010.2056693),
+[2011 letter](https://doi.org/10.1109/TIP.2011.2121085),
+[2013](https://doi.org/10.1109/TIP.2012.2202675));
 the authors' Matlab code, under a non-commercial licence, was not used.
 """
 
@@ -33,7 +36,8 @@ def anscombe(
 ) -> Tensor:
     """Generalised Anscombe transform (pointwise).
 
-    For z = α·Poisson(y/α) + 𝒩(μ, σ²) (Mäkitalo & Foi 2013, Eq. (3)):
+    For z = α·Poisson(y/α) + 𝒩(μ, σ²)
+    ([Mäkitalo & Foi 2013, Eq. (3)](https://doi.org/10.1109/TIP.2012.2202675)):
 
         f(z) = (2/α)·√max(0, α·z + 3/8·α² + σ² − α·μ),
 
@@ -58,8 +62,10 @@ def anscombe(
 def closed_form_inverse(d: Tensor, s2: Tensor | float = 0.0) -> Tensor:
     """Closed-form approximation of the exact unbiased inverse.
 
-    Mäkitalo & Foi 2011 letter, Eq. (6), generalised in Mäkitalo & Foi
-    2013, Eq. (21) (normalised units, σ = σ̂/α):
+    [Mäkitalo & Foi 2011 letter, Eq.
+    (6)](https://doi.org/10.1109/TIP.2011.2121085), generalised in [Mäkitalo &
+    Foi 2013, Eq. (21)](https://doi.org/10.1109/TIP.2012.2202675) (normalised
+    units, σ = σ̂/α):
 
         Ĩ_σ(D) = Ĩ_0(D) − σ²,
         Ĩ_0(D) = D²/4 + (1/4)·√(3/2)·D⁻¹ − (11/8)·D⁻² + (5/8)·√(3/2)·D⁻³ − 1/8,
@@ -106,7 +112,8 @@ def exact_inverse_table(
     """Lookup table of the exact unbiased inverse, normalised units.
 
     For z = Poisson(y) + 𝒩(0, σ²) and f_σ(z) = 2·√max(0, z + 3/8 + σ²),
-    computes (Mäkitalo & Foi 2013, Eq. (10))
+    computes
+    ([Mäkitalo & Foi 2013, Eq. (10)](https://doi.org/10.1109/TIP.2012.2202675))
 
         E{f_σ(z) | y, σ} = ∑ₖ yᵏ·e⁻ʸ/k! · ∫ f_σ(k + σ·n)·φ(n) dn
 
@@ -211,8 +218,9 @@ def inverse_anscombe(
 ) -> Tensor:
     """Inverse of the generalised Anscombe transform.
 
-    Works in normalised units σ = σ̂/α (Mäkitalo & Foi 2013, Eq. (4)) and
-    returns α·ŷ + μ, an estimate of E[z].
+    Works in normalised units σ = σ̂/α ([Mäkitalo & Foi 2013, Eq.
+    (4)](https://doi.org/10.1109/TIP.2012.2202675)) and returns α·ŷ + μ, an
+    estimate of E[z].
 
     Parameters
     ----------
@@ -221,7 +229,8 @@ def inverse_anscombe(
     alpha, sigma, mu : Tensor or float
         As in [`anscombe`][optix.sensor.anscombe].
     method : {"exact", "closed-form", "asymptotic", "algebraic"}
-        The inverses of Mäkitalo & Foi 2013:
+        The inverses of
+        [Mäkitalo & Foi 2013](https://doi.org/10.1109/TIP.2012.2202675):
 
         - `"exact"`: exact unbiased inverse I_σ (Eqs. (9)-(10)),
           interpolated in a table of E{f_σ(z) | y, σ} and 0 below
@@ -284,13 +293,13 @@ def build_table(s2: Tensor, n: int = 33) -> tuple[Tensor, Tensor, Tensor]:
 class GeneralizedAnscombe(CalibrationEstimator):
     """Variance-stabilising transform for Poisson-Gaussian data.
 
-    Model (Mäkitalo & Foi 2013, Eq. (1)): z = α·Poisson(y/α) + 𝒩(μ, σ²),
-    i.e. a camera with gain α (ADU per electron), offset μ and read
+    Model ([Mäkitalo & Foi 2013, Eq.
+    (1)](https://doi.org/10.1109/TIP.2012.2202675)): z = α·Poisson(y/α) + 𝒩(μ,
+    σ²), i.e. a camera with gain α (ADU per electron), offset μ and read
     variance σ² (a [`SensorEstimate`][optix.estimates.SensorEstimate]).
     [`apply`][optix.Estimator.apply] computes
     [`anscombe`][optix.sensor.anscombe],
-    [`inverse`][optix.sensor.GeneralizedAnscombe.inverse]
-    its inverse.
+    [`inverse`][optix.sensor.GeneralizedAnscombe.inverse] its inverse.
 
     !!! note
         `fit(None, init=sensor)` only reads the parameters (no data
@@ -378,8 +387,9 @@ class GeneralizedAnscombe(CalibrationEstimator):
             Noise parameters; alternatively `fit(init=sensor)`.
         inverse : {"exact", "closed-form", "asymptotic", "algebraic"}
             Inverse used by `inverse` (see
-            [`inverse_anscombe`][optix.sensor.inverse_anscombe]); all
-            four are defined in Mäkitalo & Foi 2013. Paper: `"exact"`.
+            [`inverse_anscombe`][optix.sensor.inverse_anscombe]); all four are
+            defined in [Mäkitalo & Foi
+            2013](https://doi.org/10.1109/TIP.2012.2202675). Paper: `"exact"`.
         per_pixel : bool
             Extension: use the per-pixel maps of the sensor estimate.
             Paper: False (scalar parameters: the means of the maps).

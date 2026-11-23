@@ -13,7 +13,8 @@ Conventions
   `SensorEstimate.offset` is the camera offset alone. A model with a
   single additive term returns it in both; corrections never subtract
   both.
-- Gains are in ADU per electron (EMVA 1288 `K`).
+- Gains are in ADU per electron ([EMVA 1288](
+  https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) `K`).
 - Flat fields are stored as produced by the algorithm;
   `meta["flat_norm"]` records the normalisation (`"mean"` or
   `"geomean"`) and
@@ -206,9 +207,33 @@ def _need(estimate: Estimate, *names: str) -> None:
 class SensorEstimate(Estimate):
     """Camera model `y = offset + gain * n + e`.
 
-    `n ~ Poisson(electrons)` and `e ~ N(0, variance)`. The Foi
+    `n ~ Poisson(electrons)` and `e ~ N(0, variance)`. The
+    [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399)
     parametrisation is derived, not stored: `a = gain`,
     `b = variance - gain * offset`.
+
+    !!! references "References"
+        1. Foi A, Trimeche M, Katkovnik V, Egiazarian K. *Practical
+           Poissonian-Gaussian noise modeling and fitting for
+           single-image raw-data.* IEEE Trans Image Process
+           **17**(10):1737–1754, 2008.
+           [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @article{foi2008practical,
+              author  = {Foi, Alessandro and Trimeche, Mejdi and
+                         Katkovnik, Vladimir and Egiazarian, Karen},
+              title   = {Practical {Poissonian-Gaussian} noise modeling
+                         and fitting for single-image raw-data},
+              journal = {IEEE Transactions on Image Processing},
+              volume  = {17},
+              number  = {10},
+              pages   = {1737--1754},
+              year    = {2008},
+              doi     = {10.1109/TIP.2008.2001399}
+            }
+            ```
 
     Attributes
     ----------

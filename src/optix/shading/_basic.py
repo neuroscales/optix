@@ -1,4 +1,7 @@
-"""BaSiC background and shading correction (Peng et al., 2017)."""
+"""BaSiC background and shading correction (Peng et al., 2017).
+
+After [Peng et al. 2017](https://doi.org/10.1038/ncomms14836).
+"""
 
 import itertools
 import math
@@ -77,9 +80,9 @@ class BaSiC(Estimator):
         x̂ᵢ = (yᵢ − d) / f − bᵢ + b_{norm}
 
     where b_{norm} is an arbitrary background: 0 removes the background
-    (fluorescence), meanᵢ bᵢ keeps the raw intensity range (bright
-    field). (Peng et al. 2017: I = y, S = f, D = d, Bᵢ = bᵢ, F = x,
-    I_B = L, I_R = E.)
+    (fluorescence), meanᵢ bᵢ keeps the raw intensity range (bright field).
+    ([Peng et al. 2017](https://doi.org/10.1038/ncomms14836): I = y, S = f, D =
+    d, Bᵢ = bᵢ, F = x, I_B = L, I_R = E.)
 
     **Flat and dark field.** The fitting frames, sorted at each pixel
     over the frames and resized to the working size (128 × 128), form the
@@ -156,15 +159,17 @@ class BaSiC(Estimator):
 
     - `sort_intensity=False`: fit the unsorted frames; `fit_baseline_`
       then holds the fitted baselines.
-    - `variant="basicpy"`: the solver of BaSiCPy 2.0.0
+    - `variant="basicpy"`: the solver of
+      [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0
       (`fitting_mode="approximate"`): weights divided by the frame mean
       of L and normalised to mean 1, bᵢ clipped at 0, f started at 1,
       the dark field fitted on the frames with bᵢ < 1 with a 10× smaller
       threshold, and λ_d = λ_f / 10 by default. With
       `sort_intensity=False` and `reweight_tol=1e-2` it reproduces
-      BaSiCPy.
-    - `baseline_method="basicpy"`: BaSiCPy's `fit_only_baseline`, a
-      reweighted-L1 ALM trusting only the pixels below each frame's 10 %
+      [BaSiCPy](https://github.com/peng-lab/BaSiCPy).
+    - `baseline_method="basicpy"`:
+      [BaSiCPy](https://github.com/peng-lab/BaSiCPy)'s `fit_only_baseline`,
+      a reweighted-L1 ALM trusting only the pixels below each frame's 10 %
       quantile, run per batch. It is biased low where the flat field
       varies (about −11 % with a flat of ±25 %).
     - `sampling="reservoir"`: random fitting frames.
@@ -279,7 +284,8 @@ class BaSiC(Estimator):
         seed : int
             Seed of the reservoir.
         variant : {"paper", "basicpy"}
-            Solver details: the paper's, or BaSiCPy 2.0.0's.
+            Solver details: the paper's, or
+            [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0's.
         normalize_weights : bool
             Scale the reweighting weights to mean 1 (default True; the
             "basicpy" variant always does).
