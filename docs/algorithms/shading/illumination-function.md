@@ -1,11 +1,11 @@
 # Illumination function
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`; `dark` when one is given) \
-    **Noise model:** none \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** Singh S, Bray M-A, Jones TR, Carpenter AE, J Microsc, 2014, [doi:10.1111/jmi.12178](https://doi.org/10.1111/jmi.12178)
+    - **Estimates:** `ShadingEstimate` (`flat`; `dark` when one is given)
+    - **Noise model:** none
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** Singh S, Bray M-A, Jones TR, Carpenter AE, J Microsc, 2014, [doi:10.1111/jmi.12178](https://doi.org/10.1111/jmi.12178)
 
 ## Overview
 

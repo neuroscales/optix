@@ -1,11 +1,11 @@
 # Bead PSF
 
 !!! info "At a glance"
-    **Estimates:** `PSFEstimate` (`psf`, `fwhm`, `count`, `centers`) \
-    **Noise model:** Poisson-Gaussian (only through robust thresholds; no likelihood) \
-    **Streaming:** halo \
-    **Needs many frames:** no (many beads, in one or several images) \
-    **Reference:** none; a standard procedure without a single reference publication
+    - **Estimates:** `PSFEstimate` (`psf`, `fwhm`, `count`, `centers`)
+    - **Noise model:** Poisson-Gaussian (only through robust thresholds; no likelihood)
+    - **Streaming:** halo
+    - **Needs many frames:** no (many beads, in one or several images)
+    - **Reference:** none; a standard procedure without a single reference publication
 
 ## Overview
 

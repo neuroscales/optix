@@ -1,11 +1,11 @@
 # Richardson–Lucy
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Poisson (Poisson-Gaussian as an extension) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Richardson, J Opt Soc Am, 1972, [doi:10.1364/JOSA.62.000055](https://doi.org/10.1364/JOSA.62.000055); Lucy, Astron J, 1974, [doi:10.1086/111605](https://doi.org/10.1086/111605)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Poisson (Poisson-Gaussian as an extension)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Richardson, J Opt Soc Am, 1972, [doi:10.1364/JOSA.62.000055](https://doi.org/10.1364/JOSA.62.000055); Lucy, Astron J, 1974, [doi:10.1086/111605](https://doi.org/10.1086/111605)
 
 ## Overview
 

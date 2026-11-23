@@ -1,11 +1,11 @@
 # Photon-transfer curve
 
 !!! info "At a glance"
-    **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`; DSNU, PRNU, linearity in `meta`) \
-    **Noise model:** Poisson-Gaussian \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** no (two images per level, a dark stack) \
-    **Reference:** European Machine Vision Association, EMVA Standard 1288 Release 4.0 Linear, 2021, [emva.org](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf)
+    - **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`; DSNU, PRNU, linearity in `meta`)
+    - **Noise model:** Poisson-Gaussian
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** no (two images per level, a dark stack)
+    - **Reference:** European Machine Vision Association, EMVA Standard 1288 Release 4.0 Linear, 2021, [emva.org](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf)
 
 ## Overview
 

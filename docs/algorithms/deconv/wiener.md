@@ -1,11 +1,11 @@
 # Wiener
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Gaussian (additive, stationary) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Gonzalez and Woods, *Digital Image Processing*; Bertero and Boccacci, *Introduction to Inverse Problems in Imaging*, 1998 (textbooks, no DOI)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Gaussian (additive, stationary)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Gonzalez and Woods, *Digital Image Processing*; Bertero and Boccacci, *Introduction to Inverse Problems in Imaging*, 1998 (textbooks, no DOI)
 
 ## Overview
 

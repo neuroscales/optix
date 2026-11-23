@@ -1,11 +1,11 @@
 # Wavelet-FFT
 
 !!! info "At a glance"
-    **Estimates:** stripe-free image \
-    **Noise model:** none \
-    **Streaming:** per-frame \
-    **Needs many frames:** no \
-    **Reference:** Münch et al., Opt Express, 2009, [doi:10.1364/OE.17.008567](https://doi.org/10.1364/OE.17.008567)
+    - **Estimates:** stripe-free image
+    - **Noise model:** none
+    - **Streaming:** per-frame
+    - **Needs many frames:** no
+    - **Reference:** Münch et al., Opt Express, 2009, [doi:10.1364/OE.17.008567](https://doi.org/10.1364/OE.17.008567)
 
 ## Overview
 

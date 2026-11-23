@@ -1,11 +1,11 @@
 # BaSiC
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark` with `darkfield=True`, `baseline` with `timelapse=True`) \
-    **Noise model:** none \
-    **Streaming:** per-frame \
-    **Needs many frames:** yes \
-    **Reference:** Peng et al., Nature Communications, 2017, [doi:10.1038/ncomms14836](https://doi.org/10.1038/ncomms14836)
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark` with `darkfield=True`, `baseline` with `timelapse=True`)
+    - **Noise model:** none
+    - **Streaming:** per-frame
+    - **Needs many frames:** yes
+    - **Reference:** Peng et al., Nature Communications, 2017, [doi:10.1038/ncomms14836](https://doi.org/10.1038/ncomms14836)
 
 ## Overview
 

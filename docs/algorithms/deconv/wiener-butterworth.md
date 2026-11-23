@@ -1,11 +1,11 @@
 # Wiener–Butterworth
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Poisson \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Guo et al., Nat Biotechnol, 2020, [doi:10.1038/s41587-020-0560-x](https://doi.org/10.1038/s41587-020-0560-x)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Poisson
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Guo et al., Nat Biotechnol, 2020, [doi:10.1038/s41587-020-0560-x](https://doi.org/10.1038/s41587-020-0560-x)
 
 ## Overview
 

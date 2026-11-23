@@ -1,11 +1,11 @@
 # sCMOS calibration
 
 !!! info "At a glance"
-    **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`, and `defective` with `confidence=`) \
-    **Noise model:** Poisson-Gaussian, one set of parameters per pixel \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** Huang F et al., Nat Methods, 2013, [doi:10.1038/nmeth.2488](https://doi.org/10.1038/nmeth.2488)
+    - **Estimates:** `SensorEstimate` (`offset`, `variance`, `gain`, and `defective` with `confidence=`)
+    - **Noise model:** Poisson-Gaussian, one set of parameters per pixel
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** Huang F et al., Nat Methods, 2013, [doi:10.1038/nmeth.2488](https://doi.org/10.1038/nmeth.2488)
 
 ## Overview
 

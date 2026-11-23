@@ -1,11 +1,11 @@
 # Defective pixels
 
 !!! info "At a glance"
-    **Estimates:** `SensorEstimate` (`defective`, `offset`, `variance`) \
-    **Noise model:** Gaussian \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** none: optix convention
+    - **Estimates:** `SensorEstimate` (`defective`, `offset`, `variance`)
+    - **Noise model:** Gaussian
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** none: optix convention
 
 ## Overview
 

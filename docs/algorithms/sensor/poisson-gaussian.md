@@ -1,11 +1,11 @@
 # Poisson-Gaussian noise fit
 
 !!! info "At a glance"
-    **Estimates:** `SensorEstimate` (`gain`, `variance`; `offset = None`) \
-    **Noise model:** Poisson-Gaussian, optionally clipped \
-    **Streaming:** per-frame \
-    **Needs many frames:** no (one image; pooling over frames is an extension) \
-    **Reference:** Foi, Trimeche, Katkovnik, Egiazarian, IEEE Trans Image Process, 2008, [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
+    - **Estimates:** `SensorEstimate` (`gain`, `variance`; `offset = None`)
+    - **Noise model:** Poisson-Gaussian, optionally clipped
+    - **Streaming:** per-frame
+    - **Needs many frames:** no (one image; pooling over frames is an extension)
+    - **Reference:** Foi, Trimeche, Katkovnik, Egiazarian, IEEE Trans Image Process, 2008, [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
 
 ## Overview
 

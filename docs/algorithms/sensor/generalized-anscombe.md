@@ -1,11 +1,11 @@
 # Generalised Anscombe transform
 
 !!! info "At a glance"
-    **Estimates:** none: a transform; reads a `SensorEstimate` (`offset`, `variance`, `gain`) \
-    **Noise model:** Poisson-Gaussian \
-    **Streaming:** pointwise \
-    **Needs many frames:** no \
-    **Reference:** Mäkitalo, Foi, IEEE Trans Image Process, 2013, [doi:10.1109/TIP.2012.2202675](https://doi.org/10.1109/TIP.2012.2202675)
+    - **Estimates:** none: a transform; reads a `SensorEstimate` (`offset`, `variance`, `gain`)
+    - **Noise model:** Poisson-Gaussian
+    - **Streaming:** pointwise
+    - **Needs many frames:** no
+    - **Reference:** Mäkitalo, Foi, IEEE Trans Image Process, 2013, [doi:10.1109/TIP.2012.2202675](https://doi.org/10.1109/TIP.2012.2202675)
 
 ## Overview
 

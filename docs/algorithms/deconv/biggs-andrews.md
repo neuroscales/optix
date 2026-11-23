@@ -1,11 +1,11 @@
 # Biggs–Andrews
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Poisson (Poisson-Gaussian as an extension) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Biggs and Andrews, Appl Opt, 1997, [doi:10.1364/AO.36.001766](https://doi.org/10.1364/AO.36.001766)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Poisson (Poisson-Gaussian as an extension)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Biggs and Andrews, Appl Opt, 1997, [doi:10.1364/AO.36.001766](https://doi.org/10.1364/AO.36.001766)
 
 ## Overview
 

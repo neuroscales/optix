@@ -8,11 +8,11 @@ what each section holds.
 -->
 
 !!! info "At a glance"
-    **Estimates:** the result type, for instance `ShadingEstimate` (fields it fills) \
-    **Noise model:** none, Gaussian, Poisson or Poisson-Gaussian \
-    **Streaming:** pointwise, per-frame, halo, per-pixel-stats or whole-stack \
-    **Needs many frames:** yes or no \
-    **Reference:** Author, Journal, Year, DOI
+    - **Estimates:** the result type, for instance `ShadingEstimate` (fields it fills)
+    - **Noise model:** none, Gaussian, Poisson or Poisson-Gaussian
+    - **Streaming:** pointwise, per-frame, halo, per-pixel-stats or whole-stack
+    - **Needs many frames:** yes or no
+    - **Reference:** Author, Journal, Year, DOI
 
 ## Overview
 

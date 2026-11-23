@@ -1,11 +1,11 @@
 # Gamma mixture
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark`), `SensorEstimate` (`offset`, `variance`, nominal `gain`), `Classification` (`concentration`, `weights`, `parameters`) \
-    **Noise model:** Poisson-Gaussian (Gaussian limit) \
-    **Streaming:** per-frame \
-    **Needs many frames:** yes \
-    **Reference:** none: an original optix model, not published (the Dirichlet update follows [Minka 2000](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/))
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark`), `SensorEstimate` (`offset`, `variance`, nominal `gain`), `Classification` (`concentration`, `weights`, `parameters`)
+    - **Noise model:** Poisson-Gaussian (Gaussian limit)
+    - **Streaming:** per-frame
+    - **Needs many frames:** yes
+    - **Reference:** none: an original optix model, not published (the Dirichlet update follows [Minka 2000](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/))
 
 ## Overview
 

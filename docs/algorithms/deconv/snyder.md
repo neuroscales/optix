@@ -1,11 +1,11 @@
 # Snyder
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Poisson-Gaussian (Poisson counts plus Gaussian read noise) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Snyder, Hammoud and White, J Opt Soc Am A, 1993, [doi:10.1364/JOSAA.10.001014](https://doi.org/10.1364/JOSAA.10.001014)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Poisson-Gaussian (Poisson counts plus Gaussian read noise)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Snyder, Hammoud and White, J Opt Soc Am A, 1993, [doi:10.1364/JOSAA.10.001014](https://doi.org/10.1364/JOSAA.10.001014)
 
 ## Overview
 

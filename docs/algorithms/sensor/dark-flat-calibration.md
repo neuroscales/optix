@@ -1,11 +1,11 @@
 # Dark/flat calibration
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark`) and, with a dark stack, `SensorEstimate` (`offset`, `variance`) \
-    **Noise model:** none \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** none: standard practice, optix convention
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark`) and, with a dark stack, `SensorEstimate` (`offset`, `variance`)
+    - **Noise model:** none
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** none: standard practice, optix convention
 
 ## Overview
 

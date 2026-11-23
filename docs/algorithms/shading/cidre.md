@@ -1,11 +1,11 @@
 # CIDRE
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark`) \
-    **Noise model:** none \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** Smith et al., Nature Methods, 2015, [doi:10.1038/nmeth.3323](https://doi.org/10.1038/nmeth.3323)
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark`)
+    - **Noise model:** none
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** Smith et al., Nature Methods, 2015, [doi:10.1038/nmeth.3323](https://doi.org/10.1038/nmeth.3323)
 
 ## Overview
 
