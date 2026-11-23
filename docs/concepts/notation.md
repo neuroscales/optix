@@ -57,6 +57,9 @@ never `rₙ_k`.
 | $\mathbf{x}_i$ | latent image: frame $i$ without shading | ADU | result of `apply` |
 | $\mathbf{f}$ | flat field (multiplicative) | dimensionless | `ShadingEstimate.flat` |
 | $\mathbf{d}$ | dark field (additive, camera offset included) | ADU | `ShadingEstimate.dark` |
+| $\mathbf{s}_b$ | background profile, mean 1, when the background has its own profile | dimensionless | `ShadingEstimate.dark` ÷ its mean |
+| $\beta_i$, $\bar\beta$ | mean background intensity of frame $i$; its mean over frames | ADU | `KaskFlatField.background_level_` |
+| $\kappa_{\text{n}}$ | noise constant of a channel: local variance over local mean on the background; it equals the gain $g$ only when the offset $o$ is 0, and is $g\,(\bar y - o)/\bar y$ otherwise (written $\kappa$ in docstrings) | ADU | `meta["noise_constant"]` |
 | $b_i$, $\mathbf{b}$ | baseline of frame $i$; all baselines | ADU | `ShadingEstimate.baseline` |
 | $\lambda$ | expected number of photoelectrons | e⁻ | `signal` of `simulate_sensor` |
 | $n$ | actual number of photoelectrons (Poisson) | e⁻ | |
@@ -172,6 +175,25 @@ write `λ₀`, `k₀`.
 | $h$, $\ell$ | grid spacing; order of the energy $\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$ | `dct_bending(order=)` |
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
+| $\lambda$ | weight of a regulariser (a subscript tells several apart: $\lambda_f$, $\lambda_d$); distinct from the photoelectron count by context | `regularization` |
+| $\mathbf{L}_x$, $\mathbf{L}_y$ | second-difference operators along $x$ and $y$ | |
+
+## Shift-variant blur
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $S$, $s$ | number of terms of the blur, term index | |
+| $\mathbf{h}_s$, $\mathbf{H}_s$ | kernel of term $s$; convolution with it | `ShiftVariantPSF.kernels` |
+| $\mathbf{w}_s$, $\mathbf{W}_s$ | pixel weights of term $s$; $\operatorname{diag}(\mathbf{w}_s)$ | `ShiftVariantConvolution.weights` |
+| $\mathbf{r}_s$ | position of the grid node of term $s$ | `centres` |
+| $\mathbf{K}$ | matrix of the un-shifted PSFs, one column per source pixel | |
+| $\boldsymbol{\varphi}_s$ | (multi)linear interpolation weights of node $s$ | `interpolation_weights` |
+| $\mathbf{C}$ | matrix of the kernels $\mathbf{h}_s$ of the optimal local approximation, one per column | `DenisPSF.kernels` |
+| $\tau$, $\mathbf{C}_\tau$ | truncation level; block-circulant preconditioner of Nagy and O'Leary, not to be confused with $\mathbf{C}$ | `tau`, `RegionPreconditioner` |
+| $\mathbf{e}_k$ | residual of the conjugate-gradient iteration $k$ | |
+
+The letter $\tau$ has a second meaning in the distributions below, the
+precision of a Normal; the context tells which is meant.
 
 ## Morphology
 
@@ -182,6 +204,15 @@ write `λ₀`, `k₀`.
 | $B(\mathbf{u})$ | structuring element: its grey level at offset $\mathbf{u}$, $-\infty$ outside its support | `ball`, `footprint` |
 | $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
 | $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
+
+## Intensity histograms
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $G$ | number of grey levels | `levels` |
+| $h(n)$, $p(n)$ | histogram of the grey levels $n = 1 \ldots G$, and its normalisation; $h$ is local to this section (it is the grid spacing elsewhere) | |
+| $H(\cdot)$ | Shannon entropy of a histogram, in nats; an operator name in upright type, not a set | `meta["entropy"]` |
+| $\mathbf{a}$, $\mathbf{m}$ | coefficients of the polynomial dark and flat fields: the paper's notation, not to be confused with the mean $m$ of a Normal | `meta["coefficients"]` |
 
 ## Distributions
 
@@ -222,6 +253,18 @@ shared with the other destriping pages.
 | $\phi_i$, $\alpha_i$ | prior of $\boldsymbol{\lambda}_i$ and its weight | `prior`, `alpha` |
 | $\epsilon$, $h_\epsilon$ | Huber parameter and function; $\lVert \cdot \rVert_{2,1}^{\epsilon}$ is the total variation with $h_\epsilon$ in place of the norm (unrelated to the read noise $\varepsilon$) | `eps` |
 | $\vartheta$ | over-relaxation of a primal-dual scheme (unrelated to $\theta$) | |
+## Views
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $v$, $V$ | view index; number of views | `MultiviewRL(psfs)` |
+| $\mathbf{y}_v$ | recorded image of view $v$ | the views `data` |
+| $\mathbf{h}_v$, $\mathbf{A}_v$ | PSF of view $v$; its blur | `psfs` |
+| $\check{\mathbf{h}}_v$ | mirrored PSF, $\check{h}(\mathbf{r}) = h(-\mathbf{r})$ (kernel of $\mathbf{A}_v^\top$) | |
+| $\mathbf{h}_{b,v}$, $\mathbf{B}_v$ | back-projection kernel of view $v$ and its convolution | `MultiviewRL.kernels` |
+| $\mathbf{c}_v$ | multiplicative correction of view $v$ | |
+| $\mathbf{w}_v$, $k$ | weight image of view $v$; sum of the weights over the views | `weights`, `weight_sum` |
+| $\rho_v$ | reach of view $v$ on the margin of the object domain | |
 
 ## Indices and layouts
 
