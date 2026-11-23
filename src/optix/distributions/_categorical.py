@@ -21,32 +21,31 @@ class CategoricalExpectations(NamedTuple):
 class Categorical(Distribution):
     """Categorical distribution over `K` categories (event shape `()`).
 
-    Notes
-    -----
-    Give exactly one of `probs` or `logits`; it is stored as given
-    (unnormalised, categories in the last dim) and the normalised forms
-    are derived on access. `Categorical(logits=elog_pi + elog_lik)` is
-    the variational update of responsibilities.
+    !!! note
+        Give exactly one of `probs` or `logits`; it is stored as given
+        (unnormalised, categories in the last dim) and the normalised forms
+        are derived on access. `Categorical(logits=elog_pi + elog_lik)` is
+        the variational update of responsibilities.
 
-    **Values.** The representation of a value is read from its dtype:
+        **Values.** The representation of a value is read from its dtype:
 
-    - integer dtype: labels in `[0, K)`, shape `(*batch,)`;
-    - floating or boolean dtype: one-hot or soft assignments `r`, shape
-      `(*batch, K)`; `log_prob(r)` = ∑ₖ rₖ log pₖ is the expected
-      log-likelihood used by variational Bayes.
+        - integer dtype: labels in `[0, K)`, shape `(*batch,)`;
+        - floating or boolean dtype: one-hot or soft assignments `r`, shape
+          `(*batch, K)`; `log_prob(r)` = ∑ₖ rₖ log pₖ is the expected
+          log-likelihood used by variational Bayes.
 
-    Integers always mean labels, including the int64 output of
-    `torch.nn.functional.one_hot`: cast it with `.float()` or
-    `.bool()` first.
-    [`sample`][optix.distributions.Categorical.sample] returns int64
-    labels, or float one-hot vectors with `one_hot=True`. Expectations
-    ([`mean`][optix.distributions.Categorical.mean] = `probs`), entropy
-    and KL do not depend on the representation. There is no
-    reparameterised sampling (as in torch,
-    [`rsample`][optix.distributions.Distribution.rsample] raises).
+        Integers always mean labels, including the int64 output of
+        `torch.nn.functional.one_hot`: cast it with `.float()` or
+        `.bool()` first.
+        [`sample`][optix.distributions.Categorical.sample] returns int64
+        labels, or float one-hot vectors with `one_hot=True`. Expectations
+        ([`mean`][optix.distributions.Categorical.mean] = `probs`), entropy
+        and KL do not depend on the representation. There is no
+        reparameterised sampling (as in torch,
+        [`rsample`][optix.distributions.Distribution.rsample] raises).
 
-    Exponential family: T(z) = onehot(z), η = log p (up to an additive
-    constant), A = logsumexp(η), E[T] = p.
+        Exponential family: T(z) = onehot(z), η = log p (up to an additive
+        constant), A = logsumexp(η), E[T] = p.
     """
 
     _forms = {("logits",): (1,), ("probs",): (1,)}
@@ -159,6 +158,12 @@ class Categorical(Distribution):
     def log_prob(self, value: Tensor) -> Tensor:
         """Log-probability of labels, or expected log-likelihood.
 
+        !!! note
+            Without `validate=True`, labels are not range-checked: an
+            out-of-range label raises a `RuntimeError` on the CPU and a
+            device-side assert on CUDA (which leaves the CUDA context
+            unusable), so validate labels when their source is not trusted.
+
         Parameters
         ----------
         value : Tensor
@@ -179,13 +184,6 @@ class Categorical(Distribution):
             is out of range and the object was built with
             `validate=True` (that check synchronises and is skipped
             while compiling).
-
-        Notes
-        -----
-        Without `validate=True`, labels are not range-checked: an
-        out-of-range label raises a `RuntimeError` on the CPU and a
-        device-side assert on CUDA (which leaves the CUDA context
-        unusable), so validate labels when their source is not trusted.
         """
         value = torch.as_tensor(value, device=self.device)
         name = type(self).__name__
