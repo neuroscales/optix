@@ -14,6 +14,8 @@ Deconvolution with a known point spread function.
         - Snyder
         - WienerButterworth
         - BiggsAndrews
+        - Wiener
+        - Tikhonov
 
 ## Transforms
 
@@ -26,6 +28,8 @@ Deconvolution with a known point spread function.
         - richardson_lucy
         - wiener_butterworth
         - biggs_andrews
+        - wiener
+        - tikhonov
 
 ## Utilities
 
@@ -40,6 +44,11 @@ Deconvolution with a known point spread function.
       members:
         - PaddedConvolution
         - next_fast_len
+        - transfer_function
+        - smooth_periodic_extension
+        - frequencies
+        - laplacian_power
+        - linear_filter
         - rl_step
         - rl_block
         - biggs_andrews_alpha
