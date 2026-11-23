@@ -42,7 +42,7 @@ $$
 !!! note "Gain is ADU per electron"
     Datasheets of scientific cameras often quote the *conversion gain* in
     electrons per ADU, which is the inverse. optix always stores $g$ in ADU
-    per electron, as in the EMVA 1288 standard (where it is called $K$), so
+    per electron, as in the [EMVA 1288 standard](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) (where it is called $K$), so
     that $y$ grows with $g$. Invert the datasheet value before using it.
 
 Each parameter can differ from pixel to pixel; modern sCMOS sensors in
@@ -71,7 +71,7 @@ $$
 
 This is a straight line. Its slope is the gain, and where the signal is zero
 (a mean of $o$) it reaches the read-noise variance. Writing it as $a\,\mathbb{E}[y] + b$ gives the
-Poisson-Gaussian parametrisation of Foi et al., with $a = g$ and
+Poisson-Gaussian parametrisation of [Foi et al.](https://doi.org/10.1109/TIP.2008.2001399), with $a = g$ and
 $b = \sigma^2 - g\,o$ (the symbols $a$ and $b$ are local to this paragraph).
 optix stores $(o, \sigma^2, g)$, and $(a, b)$ follow from these as above.
 `SensorEstimate.noise_variance(mean)` evaluates the line:
@@ -122,7 +122,7 @@ variance of each pixel over the frames, and fit a line. This is called a
 The slope recovers the gain of $0.5$ ADU per electron and the intercept the
 read-noise variance of $1.5^2 = 2.25$ ADU$^2$. (This fit uses the true
 offset to place the intercept; a real calibration estimates it from frames
-recorded in the dark. The EMVA 1288 standard prescribes the procedure
+recorded in the dark. The [EMVA 1288 standard](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) prescribes the procedure
 in full.)
 
 ### Quantisation
@@ -170,20 +170,27 @@ background that does not depend on the specimen: the camera offset, dark
 current, stray light. Together they give the **shading model**
 
 $$
-I = S\,I^0 + D,
+\mathbf{y} = \mathbf{f} \odot \mathbf{x} + \mathbf{d},
 $$
 
-where $I^0$ is the signal we would record under uniform illumination, without the
-additive background $D$, $S$ the **flat field** (multiplicative, dimensionless) and $D$ the
-**dark image** (additive, in ADU). All three are maps over the picture. When
-frames are recorded in a sequence and the overall level drifts, for example
-because of a fluctuating light source or a background that changes
-from frame to frame, each frame $i$ may carry an additional offset $\beta_i$,
+where $\mathbf{y}$ is the recorded image, $\mathbf{x}$ the **latent image** we
+would record under uniform illumination and without additive background,
+$\mathbf{f}$ the **flat field** (multiplicative, dimensionless) and
+$\mathbf{d}$ the **dark field** (additive, in ADU). All four are images, and
+$\odot$ is the pixel-wise product (see [Notation](notation.md)). When frames
+are recorded in a sequence and the overall level drifts, for example because
+of a fluctuating light source or a background in the specimen that changes
+from frame to frame, each frame $i$ may carry an additional constant $b_i$,
 the **baseline**:
 
 $$
-I_i = S\,I^0_i + D + \beta_i .
+\mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d} .
 $$
+
+The baseline sits inside the flat field: it is light from the specimen
+(autofluorescence, fluorescence of the medium, out-of-focus haze), lit by the
+same uneven illumination as the signal. [Notation](notation.md#what-the-fields-mean-physically)
+lists which physical quantity ends up in which term.
 
 In code the three terms are the fields `flat`, `dark` and `baseline` of a
 `ShadingEstimate`; `baseline` has shape `(*batch, frames)`.
@@ -191,26 +198,32 @@ In code the three terms are the fields `flat`, `dark` and `baseline` of a
 Correcting an image means inverting the model:
 
 $$
-\hat{I}^0_i = \frac{I_i - D - \beta_i}{S}.
+\hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}} - b_i .
 $$
+
+An estimate may instead declare `meta["baseline_units"] = "raw"`, for a
+baseline that is added after the flat field,
+$\mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d} + b_i$: a drifting
+camera offset, say. The default is `"signal"`, the model above.
 
 ### How the two models fit together
 
 The flat field acts on the light, before it reaches the camera. If the
 specimen would produce $\lambda^0$ electrons under uniform illumination, the
-pixel receives $S\lambda^0$, and the whole chain is
+pixel receives $f\lambda^0$, and the whole chain is
 
 $$
-y = g\,\mathrm{Poisson}(S\,\lambda^0) + o + \varepsilon,
+y = g\,\mathrm{Poisson}(f\,\lambda^0) + o + \varepsilon,
 \qquad
-\mathbb{E}[y] = S\,(g\lambda^0) + o .
+\mathbb{E}[y] = f\,(g\lambda^0) + o .
 $$
 
-This is a shading model with $I^0 = g\lambda^0$ and $D = o$: the dark image
-here is the offset of the camera. Note also what the flat field does to the
-noise. The variance of $y$ is $g^2 S\lambda^0 + \sigma^2$, so a dim corner is not
-only darker but also *relatively* noisier, and after dividing by $S$ the
-variance of the corrected image is that of the recorded one divided by $S^2$. A
+(one pixel, so all scalars). This is a shading model with $x = g\lambda^0$
+and $d = o$: the dark field here is the offset of the camera. Note also what
+the flat field does to the noise. The variance of $y$ is
+$g^2 f\lambda^0 + \sigma^2$, so a dim corner is not only darker but also
+*relatively* noisier, and after dividing by $f$ the variance of the corrected
+image is that of the recorded one divided by $f^2$. A
 correction removes the bias of shading and amplifies the noise of the
 pixels it brightens. This is why the noise model matters for flat-field
 estimation as well.
@@ -234,22 +247,26 @@ compared, chained and applied by the same code. The result types in
 ones that most often cause silent mistakes, so it is worth knowing them.
 
 - **Flat fields are stored as produced.** The model has a scale ambiguity:
-  $(S, I^0)$ and $(cS, I^0/c)$ describe the same image for any $c > 0$. Each
+  $(\mathbf{f}, \mathbf{x}_i, b_i)$ and $(c\mathbf{f}, \mathbf{x}_i/c, b_i/c)$
+  describe the same images for any $c > 0$. Each
   algorithm resolves it its own way, and optix does not rescale behind your
   back. The convention used is recorded in `meta["flat_norm"]`, which is
   `"mean"` (the mean of the flat is 1) or `"geomean"` (the mean of its
   logarithm is 0). `ShadingEstimate.normalize(mode)` returns a copy
-  rescaled to the convention you want, with `meta` updated; the scale moves into the
-  signal, so `dark` and `baseline` are untouched. A similar
-  ambiguity exists between $D$ and $\beta_i$: a constant can move from one to the
-  other.
+  rescaled to the convention you want, with `meta` updated. The scale moves
+  into the latent image, so `dark` is untouched and a baseline inside the flat
+  field is rescaled with the signal (one added after it is untouched). A
+  similar ambiguity exists between $\mathbf{d}$ and the $b_i$: replacing
+  $\mathbf{d}$ by $\mathbf{d} + c\,\mathbf{f}$ and every $b_i$ by $b_i - c$
+  changes nothing, so a constant can move from one to the other.
 
 - **`dark` includes the camera offset.** `ShadingEstimate.dark` is the
-  whole additive image of the correction $(I_i - D - \beta_i)/S$, in ADU.
+  whole additive image of the correction
+  $(\mathbf{y}_i - \mathbf{d})/\mathbf{f} - b_i$, in ADU.
   `SensorEstimate.offset` is the camera offset alone. A model that has only
   one additive term returns it in both fields. Because of that overlap,
   *corrections never subtract both*: pick the `dark` of a `ShadingEstimate`, or
-  the `offset` of a `SensorEstimate` when there is no dark image.
+  the `offset` of a `SensorEstimate` when there is no dark field.
 
 - **Gain is in ADU per electron**, as above.
 
@@ -283,19 +300,22 @@ functions rather than with one value per pixel makes it cheaper to estimate and
 much less sensitive to noise.
 
 optix uses the orthonormal discrete cosine transform (DCT-II). For $P$ samples, the
-$j$-th basis function evaluated at sample $i$ is
+$j$-th basis function evaluated at sample $p$ is
 
 $$
-B_{ij} = c_j \cos\!\Bigl(\frac{\pi}{P}\,\bigl(i + \tfrac12\bigr)\,j\Bigr),
+\Phi_{pj} = c_j \cos\!\Bigl(\frac{\pi}{P}\,\bigl(p + \tfrac12\bigr)\,j\Bigr),
 \qquad c_0 = \sqrt{\tfrac1P},\quad c_{j>0} = \sqrt{\tfrac2P},
 $$
 
-for $i = 0, \ldots, P-1$. The columns are orthonormal, $B^\top B = I$, and
+for $p = 0, \ldots, P-1$. The columns of $\boldsymbol{\Phi}$ are orthonormal,
+$\boldsymbol{\Phi}^\top \boldsymbol{\Phi} = \mathbf{I}$, and
 function $j$ completes $j/2$ oscillations over the axis. Keeping only the $k$
 lowest-frequency columns gives a smooth subspace; with $k = 1$ the picture is
-constant. In 2D the basis is separable: for an $H \times W$ picture $F$, the
-coefficients are $\Theta = B_1^\top F B_2$ and the reconstruction is
-$F = B_1 \Theta B_2^\top$. `project` and `reconstruct` do this for the
+constant. In 2D the basis is separable: for an $H \times W$ picture held as
+a matrix $\mathbf{F}$, the coefficients are
+$\boldsymbol{\Theta} = \boldsymbol{\Phi}_1^\top \mathbf{F} \boldsymbol{\Phi}_2$
+and the reconstruction is
+$\mathbf{F} = \boldsymbol{\Phi}_1 \boldsymbol{\Theta} \boldsymbol{\Phi}_2^\top$. `project` and `reconstruct` do this for the
 trailing dimensions of a tensor.
 
 ```pycon
@@ -319,7 +339,7 @@ torch.Size([4, 4])
 
 The DCT has a second virtue: it diagonalises the *negative* discrete Laplacian
 with reflecting (Neumann) boundaries, which are the natural boundary conditions of an
-image, $-\Delta_h B_{:,j} = \kappa_j B_{:,j}$. The eigenvalue of function $j$ on an axis of $P$ samples spaced $h$ apart
+image, $-\boldsymbol{\Delta}_h \boldsymbol{\phi}_j = \kappa_j \boldsymbol{\phi}_j$ for the $j$-th column $\boldsymbol{\phi}_j$ of $\boldsymbol{\Phi}$. The eigenvalue of function $j$ on an axis of $P$ samples spaced $h$ apart
 is
 
 $$
@@ -328,8 +348,8 @@ $$
 
 and for the separable function with indices $(j_1, \ldots, j_d)$ the weight
 $\bigl(\kappa_{j_1} + \cdots + \kappa_{j_d}\bigr)^\ell$ is the discrete energy
-$f^\top(-\Delta_h)^\ell f$: the gradient (membrane) energy for $\ell = 1$ and
-$\lVert\Delta_h f\rVert^2$ for $\ell = 2$, which approximates the bending energy.
+$\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$: the gradient (membrane) energy for $\ell = 1$ and
+$\lVert\boldsymbol{\Delta}_h \mathbf{f}\rVert^2$ for $\ell = 2$, which approximates the bending energy.
 Either can serve as a penalty on the coefficients that grows with frequency and vanishes for the
 constant function, which leaves the overall level free. `dct_bending(shape, k, order=...)` returns these
 weights, one per coefficient:
@@ -365,5 +385,20 @@ exponentiates the result, and normalises it to a mean of 1.
           pages   = {1737--1754},
           year    = {2008},
           doi     = {10.1109/TIP.2008.2001399},
+        }
+        ```
+
+    2. European Machine Vision Association. *EMVA Standard 1288: Standard for
+       Characterization of Image Sensors and Cameras, Release 4.0 Linear.*
+       16 June 2021. [emva.org](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf)
+
+    ??? quote "BibTeX"
+
+        ```bibtex
+        @techreport{emva1288linear40,
+          author      = {{European Machine Vision Association}},
+          title       = {{EMVA} Standard 1288: Standard for Characterization of Image Sensors and Cameras, Release 4.0 Linear},
+          institution = {EMVA}, year = {2021}, month = jun,
+          url = {https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf}
         }
         ```
