@@ -44,6 +44,7 @@ def rl_step(
     damping: float = 1.0,
     mu: Tensor | None = None,
     flat: Tensor | None = None,
+    back: Callable[[Tensor], Tensor] | None = None,
 ) -> Tensor:
     """One Richardson–Lucy update on a block.
 
@@ -73,18 +74,25 @@ def rl_step(
         test).
     flat : Tensor, optional
         Flat field β ≥ 0 on the block (detection efficiency per pixel).
+    back : callable, optional
+        Back projector B, block `(..., *L)` to object `(..., *N)`, used in
+        place of Hᵀ (an unmatched back projector); `inv_norm` is then
+        1 / B1. Not combined with `flat`. Default: Hᵀ.
 
     Returns
     -------
     Tensor
-        Updated estimate, non-negative.
+        Updated estimate, non-negative (negative values of an unmatched
+        update are set to 0).
     """
     if mu is None:
         mu = _expected(f, op, background, flat)
     ratio = data / mu
     if flat is not None:
+        if back is not None:
+            raise ValueError("back and flat cannot be combined")
         ratio = ratio * flat
-    c = op.adjoint(ratio) * inv_norm
+    c = (op.adjoint if back is None else back)(ratio) * inv_norm
     if damping != 1.0:
         c = 1.0 - damping + damping * c
     return (f * c).clamp_(min=0)
@@ -173,6 +181,7 @@ def rl_block(
     flat: Tensor | None = None,
     expect: Callable[[Tensor], Tensor] | None = None,
     variance: Tensor | float = 0.0,
+    back: Callable[[Tensor], Tensor] | None = None,
     accelerate: bool = False,
     trace: dict | None = None,
 ) -> tuple[Tensor, int]:
@@ -210,6 +219,10 @@ def rl_block(
     variance : Tensor or float
         Variance of additive Gaussian noise on `data`, used by the χ²
         test: χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / (μᵢ + σᵢ²).
+    back : callable, optional
+        Unmatched back projector B used in place of Hᵀ, normalised by B1
+        (see [`rl_step`][optix.deconv.utils.rl_step]). Not combined with
+        `flat`. Default: Hᵀ.
     accelerate : bool
         Biggs–Andrews vector extrapolation (see
         [`BiggsAndrews`][optix.deconv.BiggsAndrews]): the iteration is
@@ -233,9 +246,13 @@ def rl_block(
     n : int
         Number of updates applied.
     """
+    if back is not None and flat is not None:
+        raise ValueError("back and flat cannot be combined")
     norm = op.norm if flat is None else op.adjoint(flat)
     valid = norm > norm.max() * torch.finfo(norm.dtype).eps * 16
     tiny = torch.finfo(norm.dtype).tiny
+    if back is not None:
+        norm = back(norm.new_ones(op.shape))
     inv_norm = torch.where(valid, 1 / norm.clamp(min=tiny), 0)
     f = torch.zeros_like(norm)
     f = torch.where(valid, f + start, f)
@@ -281,6 +298,7 @@ def rl_block(
             damping=damping,
             mu=mu,
             flat=flat,
+            back=back,
         )
         if accelerate:
             if n > 0:  # the first update only sets the starting image
