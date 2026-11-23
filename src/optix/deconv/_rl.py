@@ -119,7 +119,8 @@ def chi2_probability(data: Tensor, mu: Tensor) -> float:
 
         χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / μᵢ,   ν = n − 1 degrees of freedom,
 
-    with n the number of pixels (Lucy 1974, §IV).
+    with n the number of pixels
+    ([Lucy 1974, §IV](https://doi.org/10.1086/111605)).
 
     Parameters
     ----------
@@ -140,6 +141,9 @@ def chi2_probability(data: Tensor, mu: Tensor) -> float:
 
 def biggs_andrews_alpha(g: Tensor, g_prev: Tensor) -> float:
     """Acceleration parameter of Biggs and Andrews (1997, Eq. 10).
+
+    See
+    [Biggs and Andrews (1997, Eq. 10)](https://doi.org/10.1364/AO.36.001766).
 
         αₖ = ∑ gₖ₋₁ · gₖ₋₂ / ∑ gₖ₋₂ · gₖ₋₂,   clipped to [0, 1],
 
@@ -236,7 +240,8 @@ def rl_block(
         Filled with per-update diagnostics: `"alpha"` (list of αₖ, 0 for
         plain updates), `"clipped"` (number of predictions with negative
         pixels set to 0) and `"effective"` (estimated number of
-        unaccelerated iterations, ∑ₖ ηₖ, Biggs and Andrews 1997, Eq. 12).
+        unaccelerated iterations, ∑ₖ ηₖ, [Biggs and Andrews 1997,
+        Eq. 12](https://doi.org/10.1364/AO.36.001766)).
 
     Returns
     -------
@@ -334,25 +339,27 @@ class RichardsonLucy(Estimator):
 
         y ~ Poisson(H f),   (H f)ᵢ = ∑ⱼ S(i − j) fⱼ,
 
-    with S the point spread function (normalised to unit sum). The
-    iteration of Richardson (1972) and Lucy (1974) is
+    with S the point spread function (normalised to unit sum). The iteration of
+    [Richardson (1972)](https://doi.org/10.1364/JOSA.62.000055) and [Lucy
+    (1974)](https://doi.org/10.1086/111605) is
 
         f⁽ʳ⁺¹⁾ = f⁽ʳ⁾ · Hᵀ[y / (H f⁽ʳ⁾)] / Hᵀ1.
 
     It keeps f ≥ 0, increases the Poisson likelihood of y at every
     step, and conserves the flux: ∑ᵢ (H f⁽ʳ⁾)ᵢ = ∑ᵢ yᵢ for r ≥ 1.
 
-    **Starting estimate.** The uniform image of the same integrated
-    intensity as the data (Richardson's f⁽⁰⁾ = W/I; Lucy: a smooth,
-    non-negative image with the data's integrated intensity), one level
-    per image.
+    **Starting estimate.** The uniform image of the same integrated intensity
+    as the data ([Richardson's](https://doi.org/10.1364/JOSA.62.000055) f⁽⁰⁾ =
+    W/I; [Lucy](https://doi.org/10.1086/111605): a smooth, non-negative image
+    with the data's integrated intensity), one level per image.
 
-    **Stopping rule.** Lucy (1974, §IV): stop as soon as the χ² test of
-    the fit, P(χ² > χ²_obs) with χ²_obs = ∑ᵢ (yᵢ − μᵢ)²/μᵢ, μ = H f⁽ʳ⁾,
-    and ν = n − 1 degrees of freedom, is not small (≥ `alpha` = 0.05).
-    The test assumes y in counts (photons or electrons). A fixed number
-    of iterations (Richardson shows 10, 20 and 30) is selected with
-    `n_iter`.
+    **Stopping rule.** [Lucy (1974, §IV)](https://doi.org/10.1086/111605): stop
+    as soon as the χ² test of the fit, P(χ² > χ²_obs) with χ²_obs = ∑ᵢ (yᵢ −
+    μᵢ)²/μᵢ, μ = H f⁽ʳ⁾, and ν = n − 1 degrees of freedom, is not small (≥
+    `alpha` = 0.05). The test assumes y in counts (photons or electrons). A
+    fixed number of iterations
+    ([Richardson](https://doi.org/10.1364/JOSA.62.000055) shows 10, 20 and 30)
+    is selected with `n_iter`.
 
     **Boundaries and blocks.** The object is estimated on a domain that
     extends past the observed region by the PSF support, so light from
@@ -379,8 +386,9 @@ class RichardsonLucy(Estimator):
           data to electrons, (y − offset)/gain, before deconvolution; the
           result is then in electrons.
         - **Damping:** `damping=ε` applies a fraction ε ∈ (0, 1] of the
-          correction, f ← f + ε(f·c − f), as in Lucy (1974, §III), where
-          it is used to prove that the likelihood increases; Lucy
+          correction, f ← f + ε(f·c − f), as in [Lucy (1974,
+          §III)](https://doi.org/10.1086/111605), where it is used to prove
+          that the likelihood increases; [Lucy](https://doi.org/10.1086/111605)
           recommends ε = 1.
 
     !!! references "References"
@@ -471,17 +479,17 @@ class RichardsonLucy(Estimator):
             of the spatial axes of the layout, centred at index `K // 2`.
             Normalised to unit sum.
         n_iter : int, optional
-            Fixed number of iterations. Default (Lucy 1974): None, the χ²
-            stopping rule.
+            Fixed number of iterations. Default ([Lucy
+            1974](https://doi.org/10.1086/111605)): None, the χ² stopping rule.
         alpha : float
-            Level of the χ² stopping test: stop once P(χ² > χ²_obs) ≥
-            `alpha`. Default (Lucy 1974): 0.05.
+            Level of the χ² stopping test: stop once P(χ² > χ²_obs) ≥ `alpha`.
+            Default ([Lucy 1974](https://doi.org/10.1086/111605)): 0.05.
         max_iter : int
             Iteration cap of the χ² stopping rule. Default: 100 (not
             specified in the papers).
         damping : float
             Extension. Fraction ε ∈ (0, 1] of the correction applied.
-            Default (Lucy 1974): 1.
+            Default ([Lucy 1974](https://doi.org/10.1086/111605)): 1.
         halo : int or sequence of int, optional
             Halo width per spatial axis, at least the PSF size along that
             axis. Default: twice the PSF size (not specified in the papers).

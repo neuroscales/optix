@@ -57,7 +57,7 @@ def gauss_hermite(
     off = torch.arange(1, n, dtype=torch.float64).div(2).sqrt()
     jacobi = torch.diag(off, 1) + torch.diag(off, -1)
     nodes = torch.linalg.eigvalsh(jacobi)
-    # Christoffel weights w_i = 1 / (n p_{n-1}(x_i)^2), with p_k the
+    # Christoffel weights wᵢ = 1 / (n pₙ₋₁(xᵢ)²), with pₖ the
     # orthonormal Hermite polynomials, evaluated with a rescaled three-term
     # recurrence (log-scale tracked separately so nothing over/underflows).
     prev = torch.zeros_like(nodes)

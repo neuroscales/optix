@@ -6,14 +6,15 @@ Conventions
   shape. `None` means "not estimated": consumers fall back to their own
   default, never silently to zero.
 - `ShadingEstimate.dark` is the whole additive image of
-  `x = (y - dark - baseline) / flat`: it **includes** the camera offset.
-- `ShadingEstimate.baseline` is in raw units (`y = flat * x + dark +
-  baseline`) unless `meta["baseline_units"] == "signal"`
-  (`y = flat * (x + baseline) + dark`).
+  `x = (y - dark) / flat - baseline`: it **includes** the camera offset.
+- `ShadingEstimate.baseline` is in signal units, inside the flat
+  (y = f ⊙ (x + bᵢ) + d), unless `meta["baseline_units"] == "raw"`
+  (y = f · x + d + bᵢ, outside the flat).
   `SensorEstimate.offset` is the camera offset alone. A model with a
   single additive term returns it in both; corrections never subtract
   both.
-- Gains are in ADU per electron (EMVA 1288 `K`).
+- Gains are in ADU per electron ([EMVA 1288](
+  https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) `K`).
 - Flat fields are stored as produced by the algorithm;
   `meta["flat_norm"]` records the normalisation (`"mean"` or
   `"geomean"`) and
@@ -210,9 +211,33 @@ def _need(estimate: Estimate, *names: str) -> None:
 class SensorEstimate(Estimate):
     """Camera model `y = offset + gain * n + e`.
 
-    `n ~ Poisson(electrons)` and `e ~ N(0, variance)`. The Foi
+    `n ~ Poisson(electrons)` and `e ~ N(0, variance)`. The
+    [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399)
     parametrisation is derived, not stored: `a = gain`,
     `b = variance - gain * offset`.
+
+    !!! references "References"
+        1. Foi A, Trimeche M, Katkovnik V, Egiazarian K. *Practical
+           Poissonian-Gaussian noise modeling and fitting for
+           single-image raw-data.* IEEE Trans Image Process
+           **17**(10):1737–1754, 2008.
+           [doi:10.1109/TIP.2008.2001399](https://doi.org/10.1109/TIP.2008.2001399)
+
+        ??? quote "BibTeX"
+            ```bibtex
+            @article{foi2008practical,
+              author  = {Foi, Alessandro and Trimeche, Mejdi and
+                         Katkovnik, Vladimir and Egiazarian, Karen},
+              title   = {Practical {Poissonian-Gaussian} noise modeling
+                         and fitting for single-image raw-data},
+              journal = {IEEE Transactions on Image Processing},
+              volume  = {17},
+              number  = {10},
+              pages   = {1737--1754},
+              year    = {2008},
+              doi     = {10.1109/TIP.2008.2001399}
+            }
+            ```
 
     Attributes
     ----------
@@ -255,16 +280,16 @@ _BASELINE_UNITS = ("raw", "signal")
 class ShadingEstimate(Estimate):
     """Shading model with a per-frame baseline.
 
-    The baseline b_i is a scalar per frame, in one of two units, recorded
+    The baseline bᵢ is a scalar per frame, in one of two units, recorded
     in `meta["baseline_units"]`:
 
-    - `"raw"` (default, also when the key is absent): an offset of the
-      measured frame, y = flat · x + dark + b.
-    - `"signal"`: an offset of the signal before shading, so that it is
-      shaded too, y = flat · (x + b) + dark (as in BaSiC).
+    - `"signal"` (default, also when the key is absent): an offset of
+      the signal before shading, so that it is shaded too,
+      y = f ⊙ (x + bᵢ) + d (as in BaSiC).
+    - `"raw"`: an offset of the measured frame, y = f · x + d + bᵢ.
 
-    The two agree only for a uniform flat field: a signal baseline b is
-    the raw offset flat · b, which is not a scalar.
+    The two agree only for a uniform flat field: a signal baseline bᵢ is
+    the raw offset f · bᵢ, which is not a scalar.
 
     Attributes
     ----------
@@ -284,8 +309,8 @@ class ShadingEstimate(Estimate):
 
     @property
     def baseline_units(self) -> str:
-        """`meta["baseline_units"]`: `"raw"` (the default) or `"signal"`."""
-        return _check_units(self.meta.get("baseline_units", "raw"))
+        """`meta["baseline_units"]`: `"signal"` (the default) or `"raw"`."""
+        return _check_units(self.meta.get("baseline_units", "signal"))
 
     def shade(
         self,
@@ -302,15 +327,15 @@ class ShadingEstimate(Estimate):
             Unshaded signal.
         baseline : Tensor, optional
             `(*batch, frames)` baseline to use instead of `self.baseline`.
-        units : {"raw", "signal"}, optional
+        units : {"signal", "raw"}, optional
             Units of the baseline (default: `baseline_units`).
 
         Returns
         -------
         Tensor
-            flat · x + dark + b (raw) or flat · (x + b) + dark (signal).
-            Fields that are None are absent terms (flat = 1, dark = 0,
-            b = 0).
+            f ⊙ (x + bᵢ) + d (signal) or f · x + d + bᵢ (raw).
+            Fields that are None are absent terms (f = 1, d = 0,
+            bᵢ = 0).
         """
         units = self.baseline_units if units is None else _check_units(units)
         b = self.baseline if baseline is None else baseline
@@ -341,7 +366,7 @@ class ShadingEstimate(Estimate):
             Measured frames.
         baseline : Tensor, optional
             `(*batch, frames)` baseline to use instead of `self.baseline`.
-        units : {"raw", "signal"}, optional
+        units : {"signal", "raw"}, optional
             Units of the baseline (default: `baseline_units`).
         norm : Tensor or float
             Background added back, in the units of the baseline
@@ -350,8 +375,8 @@ class ShadingEstimate(Estimate):
         Returns
         -------
         Tensor
-            (y − dark − (b − norm)) / flat (raw) or
-            (y − dark) / flat − (b − norm) (signal).
+            (y − d) / f − (bᵢ − norm) (signal) or
+            (y − d − (bᵢ − norm)) / f (raw).
         """
         units = self.baseline_units if units is None else _check_units(units)
         b = self.baseline if baseline is None else baseline
@@ -371,6 +396,16 @@ class ShadingEstimate(Estimate):
     def normalize(self, mode: str = "mean") -> Self:
         """Rescale the flat field so that its mean (or geometric mean) is 1.
 
+        With c the mean (or geometric mean) of the flat, the flat becomes
+        f / c and the scale c moves into the signal: x̂ = c · x.  The
+        dark is unchanged.  The baseline bᵢ becomes c · bᵢ when
+        `baseline_units == "signal"` (y = f ⊙ (x + bᵢ) + d), and is
+        unchanged when it is `"raw"` (y = f · x + d + bᵢ), so that
+        `shade` and `correct` stay consistent with x̂.  A baseline norm
+        derived from the baseline (BaSiC's `baseline_norm="mean"`)
+        follows automatically; a numeric `norm` passed to `correct` is
+        in the units of the (rescaled) baseline.
+
         Parameters
         ----------
         mode : {"mean", "geomean"}
@@ -378,9 +413,8 @@ class ShadingEstimate(Estimate):
         Returns
         -------
         ShadingEstimate
-            Copy with the rescaled flat and `meta["flat_norm"] = mode`.
-            `dark` and `baseline` are unchanged (the scale moves into
-            the signal `x`).
+            Copy with the rescaled flat (and signal-units baseline) and
+            `meta["flat_norm"] = mode`.
         """
         _need(self, "flat")
         if mode == "mean":
@@ -389,8 +423,14 @@ class ShadingEstimate(Estimate):
             scale = self.flat.log().mean().exp()
         else:
             raise ValueError(f"mode must be 'mean' or 'geomean', got {mode}")
+        baseline = self.baseline
+        if baseline is not None and self.baseline_units == "signal":
+            baseline = baseline * scale.to(baseline)
         return dataclasses.replace(
-            self, flat=self.flat / scale, meta={**self.meta, "flat_norm": mode}
+            self,
+            flat=self.flat / scale,
+            baseline=baseline,
+            meta={**self.meta, "flat_norm": mode},
         )
 
 
