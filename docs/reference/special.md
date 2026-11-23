@@ -10,6 +10,7 @@ cancellation. See [Probability distributions](../concepts/distributions.md#numer
       show_root_toc_entry: false
       members:
         - gauss_hermite
+        - gauss_legendre
         - log_minus_digamma
         - stirling_residual
         - ratio_minus_log
@@ -23,4 +24,6 @@ cancellation. See [Probability distributions](../concepts/distributions.md#numer
         - clipped_normal_moments
         - poisson_normal_mean
         - poisson_normal_logpdf
+        - bessel_j0
+        - bessel_j1
         - bessel_j012

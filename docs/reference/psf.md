@@ -22,6 +22,7 @@
         - lightsheet_psf
         - gaussian_sheet
         - richards_wolf
+        - gibson_lanni
 
 ## Utilities
 
@@ -47,3 +48,5 @@
         - sheet_intensity
         - richards_wolf_field
         - richards_wolf_integrals
+        - gibson_lanni_opd
+        - gibson_lanni_profile

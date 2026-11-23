@@ -1,11 +1,11 @@
 # CIDRE
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark`) \
-    **Noise model:** none \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** yes \
-    **Reference:** Smith et al., Nature Methods, 2015, [doi:10.1038/nmeth.3323](https://doi.org/10.1038/nmeth.3323)
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark`)
+    - **Noise model:** none
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** yes
+    - **Reference:** Smith et al., Nature Methods, 2015, [doi:10.1038/nmeth.3323](https://doi.org/10.1038/nmeth.3323)
 
 ## Overview
 
@@ -49,20 +49,27 @@ distribution (below) and is stored as produced (`meta["flat_norm"] == "none"`).
 rescales by the mean gain $\bar{f}$ ("dynamic range corrected"):
 
 $$
-\hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}}\,\bar{f}
-\quad (\texttt{mode="dynamic\_range"}), \qquad
-+\,\bar{d} \;(\texttt{"zero\_light"}), \qquad
-\text{or } \frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}} \;(\texttt{"direct"}).
+\hat{\mathbf{x}}_i
+= \underbrace{\frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}}}_{\text{direct}}
+\,\underbrace{\bar{f}}_{\text{dynamic range}}
+\;\underbrace{+\;\bar{d}}_{\text{zero light}} .
 $$
 
-| optix | [Smith et al. 2015](https://doi.org/10.1038/nmeth.3323) | Meaning |
-|---|---|---|
-| $\mathbf{y}_i$ | $I_o$ | recorded image |
-| $\mathbf{x}_i$ | $I$ | latent image |
-| $\mathbf{f}$ | $v$ | illumination gain (flat field) |
-| $\mathbf{d}$ | $z$ | zero-light term (dark field) |
-| $\mathbf{c}$ | $b$ | intercept of the per-pixel line |
-| $\mathbf{r}$ | $x$ | pixel position |
+`mode="direct"` keeps only the first factor, `"dynamic_range"` (the default)
+multiplies it by $\bar{f}$, and `"zero_light"` also adds $\bar{d}$, the mean
+dark field.
+
+Frames have $P$ pixels, flattened into vectors; products and divisions of
+vectors are pixel-wise.
+
+| optix | [Smith et al. 2015](https://doi.org/10.1038/nmeth.3323) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_i$ | $I_o$ | recorded image $i$ | $\mathbb{R}^P$, one per frame |
+| $\mathbf{x}_i$ | $I$ | latent (shading-free) image $i$ | $\mathbb{R}^P$, one per frame |
+| $\mathbf{f}$ | $v$ | illumination gain (flat field) | $\mathbb{R}^P$, shared by all frames of a group |
+| $\mathbf{d}$ | $z$ | zero-light term (dark field) | $\mathbb{R}^P$, shared by all frames of a group |
+| $\bar{f}$, $\bar{d}$ | | spatial means of $\mathbf{f}$ and $\mathbf{d}$ | scalars, per group |
+| $\mathbf{r}$ | $x$ | pixel position | 2-D coordinate |
 
 ## Probabilistic model
 
@@ -87,7 +94,9 @@ transform of one distribution $\mathbf{Q}$ common to all pixels:
     b(x) = z(x) - v(x)\,Z_Q \tag{8}
     $$
 
-with $n = 1 \ldots K$ the quantile levels and $(Z_Q, Z_q)$ the zero-light point,
+with $n = 1 \ldots K$ the quantile levels ($K = 100$ by default),
+$\mathbf{q}(\mathbf{r}) \in \mathbb{R}^K$ and $\mathbf{Q} \in \mathbb{R}^K$, and
+$(Z_Q, Z_q)$ the zero-light point,
 through which every line passes. $\mathbf{Q}$ is the robust mean of the
 $\mathbf{q}(\mathbf{r})$ of the pixels whose mean lies in the central band
 $[\rho_{1/2-\omega}, \rho_{1/2+\omega}]$ of all pixel means (Eqs. 5–6).
@@ -104,7 +113,7 @@ The fields minimise an energy, not a likelihood:
     E_f = \sum_{\mathbf{r}} \sum_n \tfrac{w^2}{2}
     \log\Bigl(1 + \bigl(\tfrac{Q_n f(\mathbf{r}) + c(\mathbf{r}) - q_n(\mathbf{r})}{w}\bigr)^2\Bigr),
     \qquad
-    E_r = \sum_{t \in T} \Bigl\lVert \tfrac{1}{|T|}\, t^2\, \nabla^2 G_t * \mathbf{f} \Bigr\rVert^2 ,
+    E_r = \sum_{t \in T} \Bigl\lVert \tfrac{1}{\lvert T \rvert}\, t^2\, \nabla^2 G_t * \mathbf{f} \Bigr\rVert^2 ,
     $$
 
     $$
@@ -123,6 +132,10 @@ The fields minimise an energy, not a likelihood:
     regulariser $E_r$ (Eq. 11), the zero-light term $E_z$ (Eq. 12) and the
     barrier $E_b$ (Eqs. 13–14).
 
+Here $\mathbf{r}$ runs over the $P_w \le 128^2$ pixels of the working grid,
+on which $\mathbf{f}, \mathbf{c} \in \mathbb{R}^{P_w}$; $\lvert T \rvert$ is
+the number of scales.
+
 - $E_f$ is a robust (Cauchy, width $w$) fit of the $K$ quantiles at every pixel.
 - $E_r$ makes $\mathbf{f}$ smooth: scale-normalised Laplacian of Gaussian at
   scales $T$ (standard deviations).
@@ -131,13 +144,16 @@ The fields minimise an energy, not a likelihood:
   $[0, \min \mathbf{q}]$: $\beta$ is zero inside and $((x - \alpha)/w_b)^2$
   outside.
 
-| optix | [Smith et al. 2015](https://doi.org/10.1038/nmeth.3323) |
-|---|---|
-| $\mathbf{q}(\mathbf{r})$, $\mathbf{Q}$ | $q(x)$, $Q$ |
-| $\mathbf{c}$ | $b$ |
-| $(Z_Q, Z_q)$ | $(Z_Q, Z_q)$ |
-| $\omega$ | $\omega$ |
-| $\lambda_r, \lambda_z, \lambda_b$ | $\lambda_r, \lambda_z, \lambda_b$ |
+| optix | [Smith et al. 2015](https://doi.org/10.1038/nmeth.3323) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{q}(\mathbf{r})$ | $q(x)$ | sorted intensities (quantiles) at pixel $\mathbf{r}$ | $\mathbb{R}^K$, per pixel |
+| $\mathbf{Q}$ | $Q$ | target distribution common to all pixels | $\mathbb{R}^K$, per group |
+| $\mathbf{c}$ | $b$ | intercept of the per-pixel line | $\mathbb{R}^{P_w}$, per group |
+| $(Z_Q, Z_q)$ | $(Z_Q, Z_q)$ | zero-light point shared by all lines | two scalars, per group |
+| $\omega$ | $\omega$ | half-width of the central band of pixel means | scalar |
+| $w$, $w_b$ | | widths of the Cauchy fit and of the barrier | scalars |
+| $T$ | | scales (standard deviations) of the regulariser | set of scalars |
+| $\lambda_r, \lambda_z, \lambda_b$ | $\lambda_r, \lambda_z, \lambda_b$ | weights of $E_r$, $E_z$, $E_b$ | scalars, per group |
 
 ## Inference / derivation
 
@@ -154,6 +170,13 @@ gain and one intercept per pixel:
 4. **Recover.** $\mathbf{d} = \mathbf{c} + \mathbf{f}\,Z_Q$ (Eq. 7), and both
    maps are resampled back to the image size.
 
+**Statistical counterpart.** $E_f$ is, up to constants, the negative
+log-likelihood of Cauchy (Student-t with one degree of freedom) residuals, so
+the fit is a robust M-estimation of each per-pixel line; $E_r$ and $E_z$ act
+as Gaussian priors, which makes $\hat{\mathbf{f}}, \hat{\mathbf{c}}$ a MAP
+estimate. Matching quantiles to $\mathbf{Q}$ is a quantile-based method of
+moments for the affine transform at each pixel.
+
 The ambiguities are resolved by the model itself: the scale of $\mathbf{f}$ is
 that of $\mathbf{Q}$ (a gain of 1 means "like the typical pixel"), and the
 split of the intercept into dark field and $\mathbf{f}\,Z_Q$ is fixed by the
@@ -161,19 +184,24 @@ zero-light point, constrained by $E_z$ and $E_b$.
 
 ## Algorithm
 
-```text
-Input: stack Y
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$,
+optionally in groups. \
+**Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$ and $\hat{\mathbf{d}}$.
+
 For each group:
-    Resample each frame to the working grid (long side 128)
-    K = 100 quantiles per pixel (exact, or from per-pixel histograms)
-    Divide by the maximum intensity
-    Q = robust mean over the central band (ω = 0.25)
-    λ_r: 9.5 for one image → 6 at 200 images (6 beyond); λ_z = 0.5, λ_b = 1
-    Start: f = 1, lines through the pivot, Z_Q = Z_q = (α₁ + α₂) / 2
-    Minimise E by L-BFGS (≤ 500 iterations, history 20, tol 10⁻⁹)
-    d = c + f Z_Q; resample f and d to the image size
-Return ShadingEstimate(flat=f, dark=d)
-```
+
+1. **Resample** each frame to the working grid (long side 128, $P_w$ pixels).
+2. **Summarise** each pixel by $K = 100$ quantiles $\mathbf{q}(\mathbf{r})$
+   (exact, or from per-pixel histograms) and divide by the maximum intensity.
+3. **Target** $\mathbf{Q}$: robust mean over the central band, $\omega = 0.25$.
+4. **Weights:** $\lambda_r$ from 9.5 for one image to 6 at 200 images (6
+   beyond), $\lambda_z = 0.5$, $\lambda_b = 1$.
+5. **Initialise** $\mathbf{f} = \mathbf{1}$, lines through the pivot,
+   $Z_Q = Z_q = (\alpha_1 + \alpha_2)/2$.
+6. **Minimise** $E$ by L-BFGS (at most 500 iterations, history 20,
+   tolerance $10^{-9}$).
+7. **Recover** $\mathbf{d} = \mathbf{c} + \mathbf{f}\,Z_Q$ and resample
+   $\mathbf{f}$, $\mathbf{d}$ to the image size.
 
 ## Faithful mode and extensions
 

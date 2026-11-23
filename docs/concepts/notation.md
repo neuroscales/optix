@@ -124,24 +124,43 @@ stray light. This is the reason why corrections never subtract both
 
 ## Optics
 
-Used by the models of the optics of the microscope, such as the
-[Richards–Wolf](../algorithms/psf/richards-wolf.md) PSF.
+The symbols of the models of the optics (`optix.psf`), such as the
+[Gibson–Lanni](../algorithms/psf/gibson-lanni.md) and Richards–Wolf PSFs.
+Lengths share one unit; the Gibson–Lanni defaults are in µm.
 
-| Symbol | Meaning | Unit | In code |
-|---|---|---|---|
-| $\lambda_0$ | vacuum wavelength of the light | length | `wavelength` |
-| $n$ | refractive index of the immersion medium (image space) | | `refractive_index` |
-| $\mathrm{NA}$ | numerical aperture, $n \sin\alpha$ | | `numerical_aperture` |
-| $\alpha$ | angular semi-aperture of the objective, $\arcsin(\mathrm{NA}/n)$ | rad | |
-| $k$ | wave number in the medium, $2\pi n / \lambda_0$ | 1 / length | |
-| $\theta$, $\varphi$ | polar angle of a ray, measured from the optical axis; azimuth around it | rad | |
-| $\rho$, $z$ | distance from the optical axis; position along it, from the focus | length | |
-| $\psi(\theta)$ | phase of the pupil function (aberration) | rad | `pupil_phase` |
+| Symbol | Meaning | Unit | In code | Used by |
+|---|---|---|---|---|
+| $\mathrm{NA}$ | numerical aperture of the objective, $n \sin\alpha$ | | `numerical_aperture` | both |
+| $\lambda_0$ | wavelength of the light in vacuum | length | `wavelength` | both |
+| $k_0$ | wave number in vacuum, $2\pi/\lambda_0$ | 1 / length | | Gibson–Lanni |
+| $k$ | wave number in a medium of index $n$, $n k_0$ | 1 / length | | Richards–Wolf |
+| $n$ | refractive index of the medium in which the focus is formed | | `refractive_index` | Richards–Wolf |
+| $n_s$, $n_g$, $n_i$ | refractive index of the specimen, the coverslip, the immersion medium | | `specimen_index`, `coverslip_index`, `immersion_index` | Gibson–Lanni |
+| $n_g^*$, $n_i^*$ | the same, under the design conditions of the objective | | `design_coverslip_index`, `design_immersion_index` | Gibson–Lanni |
+| $t_s$ | depth of the source below the coverslip | length | `depth` | Gibson–Lanni |
+| $t_g$, $t_i$ | thickness of the coverslip, of the immersion layer | length | `coverslip_thickness` | Gibson–Lanni |
+| $t_g^*$, $t_i^*$ | the same, under the design conditions | length | `design_coverslip_thickness`, `design_immersion_thickness` | Gibson–Lanni |
+| $\alpha$ | angular semi-aperture of the objective, $\arcsin(\mathrm{NA}/n)$ | rad | | Richards–Wolf |
+| $\theta$, $\varphi$ | angle of a ray to the optical axis; azimuth around the axis | rad | | both |
+| $\rho$ | radius in the pupil (back focal plane), normalised to 1 at the edge of the aperture: $\rho = n \sin\theta / \mathrm{NA}$ | | `rho` | Gibson–Lanni |
+| $r$ | lateral distance from the optical axis, in object space | length | `radius`; `radial` is $k r$ | both |
+| $z$ | position along the optical axis, from the Gaussian focus, positive away from the lens | length | `axial` is $k z$ | Richards–Wolf |
+| $\Delta z$ | defocus: displacement of the stage from the paraxial focus of the source, positive for a thicker immersion layer | length | `defocus` | Gibson–Lanni |
+| $\mathrm{OPD}$ | optical path difference between the actual and the design ray | length | `gibson_lanni_opd` | Gibson–Lanni |
+| $\psi$ | phase aberration of the pupil; $\psi = k_0\,\mathrm{OPD}$ | rad | `pupil_phase` | both |
+| $\mathbf{e}$ | electric field near the focus | | `richards_wolf_field` | Richards–Wolf |
+| $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
+| $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
+| $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
 
-In this table $n$ is the refractive index, not the number of photoelectrons of
-the camera model, and $\theta$, $\rho$ are not the basis coefficients and the
-Stirling residual used elsewhere; the context tells which is meant. A paper that
-writes the wavelength as $\lambda$ is mapped to $\lambda_0$ on its page.
+Some letters have another meaning elsewhere on this page: here $n$ is a
+refractive index, not a number of photoelectrons; $\lambda_0$ is a wavelength,
+where $\lambda$ alone is the expected number of photoelectrons; $\theta$,
+$\rho$, $\psi$, $\varphi$ and $\alpha$ are not the basis coefficients, the Stirling
+residual, the digamma function, the function $\varphi(u)$ and the Dirichlet
+concentration. A paper that writes the wavelength $\lambda$ and the vacuum
+wave number $k$ is mapped to $\lambda_0$ and $k_0$ on its page. Docstrings
+write `λ₀`, `k₀`.
 
 ## Bases and regularisation
 
@@ -154,6 +173,16 @@ writes the wavelength as $\lambda$ is mapped to $\lambda_0$ on its page.
 | $h$, $\ell$ | grid spacing; order of the energy $\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$ | `dct_bending(order=)` |
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
+
+## Morphology
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\boldsymbol{\beta}$ | background of an image, the opening of $\mathbf{y}$ | `output="background"` |
+| $\mathbf{u}$ | offset (integer displacement) within a structuring element | |
+| $B(\mathbf{u})$ | structuring element: its grey level at offset $\mathbf{u}$, $-\infty$ outside its support | `ball`, `footprint` |
+| $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
+| $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
 
 ## Distributions
 
@@ -174,6 +203,19 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\rho(a)$, $\delta(a)$, $\varphi(u)$ | Stirling residual, $\log a - \psi(a)$, $u - 1 - \log u$ | `stirling_residual`, `log_minus_digamma`, `ratio_minus_log` |
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
+
+## Views
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $v$, $V$ | view index; number of views | `MultiviewRL(psfs)` |
+| $\mathbf{y}_v$ | recorded image of view $v$ | the views `data` |
+| $\mathbf{h}_v$, $\mathbf{A}_v$ | PSF of view $v$; its blur | `psfs` |
+| $\check{\mathbf{h}}_v$ | mirrored PSF, $\check{h}(\mathbf{r}) = h(-\mathbf{r})$ (kernel of $\mathbf{A}_v^\top$) | |
+| $\mathbf{h}_{b,v}$, $\mathbf{B}_v$ | back-projection kernel of view $v$ and its convolution | `MultiviewRL.kernels` |
+| $\mathbf{c}_v$ | multiplicative correction of view $v$ | |
+| $\mathbf{w}_v$, $k$ | weight image of view $v$; sum of the weights over the views | `weights`, `weight_sum` |
+| $\rho_v$ | reach of view $v$ on the margin of the object domain | |
 
 ## Indices and layouts
 

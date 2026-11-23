@@ -22,7 +22,7 @@ along the direction of polarisation.
 
 Use it for a high-NA objective in a homogeneous medium, in the absence of aberrations.
 For the scalar PSF of an objective with an immersion-to-sample interface, see the
-sibling model Gibson–Lanni (`gibson_lanni`), and for a PSF measured on beads see
+sibling model [Gibson–Lanni](gibson-lanni.md) (`gibson_lanni`), and for a PSF measured on beads see
 [Bead PSF](bead-psf.md). The result is a real tensor, centred at index `n // 2` of
 every axis, that can be given directly to the [deconvolution](../../reference/deconv.md)
 estimators (with `normalize="sum"`).
@@ -42,22 +42,22 @@ aperture on the image side is the half-angle
 
 $$
 \alpha = \arcsin\frac{\mathrm{NA}}{n},
-\qquad k = \frac{2\pi n}{\lambda_0},
+\qquad k = n k_0, \quad k_0 = \frac{2\pi}{\lambda_0},
 $$
 
-and a point near the focus is given in cylindrical coordinates: the distance $\rho$
+and a point near the focus is given in cylindrical coordinates: the distance $r$
 from the optical axis, the azimuth $\varphi$ measured from the electric vector of the
 incident wave, and the distance $z$ from the Gaussian focus along the axis, positive
-away from the lens. The time dependence is $e^{-i\omega t}$. A recorded image
-is the convolution of this PSF with the specimen, as in
+away from the lens. The time dependence is $e^{-i\omega t}$. The PSF, sampled on the grid and centred at index `K // 2`, is the $\mathbf{h}$ of the other pages, and a recorded image
+is its convolution with the specimen, as in
 [Image formation and noise](../../concepts/image-formation.md).
 
 Light is focused through a spherical wavefront centred on the Gaussian focus. The
 sine condition maps a ray entering at height $h$ onto the focal sphere of radius $f$
 at the same height, $h = f \sin\theta$. Conservation of energy through the area
-element then gives an amplitude that grows as $\sqrt{\cos\theta}$ towards the edge of
-the pupil (the *apodisation* of an aplanatic system), and the polarisation vector
-of every ray stays in its meridional plane. Integrating the plane waves of the
+element then gives an amplitude that falls as $\sqrt{\cos\theta}$ from 1 on the axis towards 0 at
+the edge of a $90°$ pupil (Eq. 2.12, the *apodisation* of an aplanatic system), and
+the electric vector of every ray keeps its angle with the meridional plane of the ray. Integrating the plane waves of the
 aperture over the solid angle gives the field in terms of three integrals
 $I_0$, $I_1$, $I_2$.
 
@@ -66,11 +66,11 @@ $I_0$, $I_1$, $I_2$.
     $$
     \begin{aligned}
     I_0 &= \int_0^\alpha \sqrt{\cos\theta}\,\sin\theta\,(1+\cos\theta)\,
-           J_0(k\rho\sin\theta)\,e^{ikz\cos\theta}\,\mathrm{d}\theta,\\
+           J_0(kr\sin\theta)\,e^{ikz\cos\theta}\,\mathrm{d}\theta,\\
     I_1 &= \int_0^\alpha \sqrt{\cos\theta}\,\sin^2\theta\,
-           J_1(k\rho\sin\theta)\,e^{ikz\cos\theta}\,\mathrm{d}\theta,\\
+           J_1(kr\sin\theta)\,e^{ikz\cos\theta}\,\mathrm{d}\theta,\\
     I_2 &= \int_0^\alpha \sqrt{\cos\theta}\,\sin\theta\,(1-\cos\theta)\,
-           J_2(k\rho\sin\theta)\,e^{ikz\cos\theta}\,\mathrm{d}\theta,
+           J_2(kr\sin\theta)\,e^{ikz\cos\theta}\,\mathrm{d}\theta,
     \end{aligned}
     $$
 
@@ -78,7 +78,7 @@ $I_0$, $I_1$, $I_2$.
     $A = 1$), is
 
     $$
-    \mathbf{e}(\rho, \varphi, z) =
+    \mathbf{e}(r, \varphi, z) =
     \begin{pmatrix}
     -i\,(I_0 + I_2 \cos 2\varphi)\\
     -i\,I_2 \sin 2\varphi\\
@@ -114,15 +114,15 @@ $I_0$, $I_1$, $I_2$.
 | $\lambda_0$ (`wavelength`) | $\lambda$ (the refractive index of the image space is 1) |
 | $n$ (`refractive_index`) | 1 (assumed) |
 | $\alpha$ (from `numerical_aperture`) | $\alpha$ |
-| $k = 2\pi n/\lambda_0$ | $k = 2\pi/\lambda$ (2.5) |
-| $\rho$, $z$ | $r_P \sin\theta_P$, $r_P \cos\theta_P$ |
+| $k = n k_0 = 2\pi n/\lambda_0$ | $k = 2\pi/\lambda$ (2.5) |
+| $r$, $z$ | $r_P \sin\theta_P$, $r_P \cos\theta_P$ (cylindrical) |
 | $\varphi$ | $\phi_P$ |
-| $k\rho$ (`radial`), $kz$ (`axial`) | $k r_P \sin\theta_P$, $k r_P \cos\theta_P$ |
+| $kr$ (`radial`), $kz$ (`axial`) | $k r_P \sin\theta_P$, $k r_P \cos\theta_P$ |
 | $\mathbf{e}$ | $\mathbf{e}$, with $A = 1$ |
 | $\theta$ (integration variable) | $\theta$ |
 
 The paper also writes the integrals in the optical coordinates
-$u = kz\sin^2\alpha$ and $v = k\rho\sin\alpha$ (3.1a). optix works with $k\rho$ and
+$u = kz\sin^2\alpha$ and $v = kr\sin\alpha$ (3.1a). optix works with $kr$ and
 $kz$ directly, so that the refractive index does not enter anywhere else.
 
 ## Probabilistic model
@@ -135,7 +135,7 @@ density, which for a time-harmonic field is $\langle w_e\rangle = |\mathbf{e}|^2
 === "optix"
 
     $$
-    \mathrm{PSF}(\rho, \varphi, z) = \frac{1}{16\pi}
+    h(r, \varphi, z) = \frac{1}{16\pi}
     \Bigl\{ |I_0|^2 + 4\,|I_1|^2 \cos^2\varphi + |I_2|^2
     + 2\cos 2\varphi\;\mathrm{Re}\bigl(I_0 I_2^*\bigr) \Bigr\}
     $$
@@ -155,14 +155,14 @@ unpolarised light the energy density is averaged over $\varphi_0$ (Eq. 5.2), whi
 makes the spot radially symmetric:
 
 $$
-\overline{\mathrm{PSF}} = \frac{1}{16\pi}\bigl\{ |I_0|^2 + 2\,|I_1|^2 + |I_2|^2 \bigr\}.
+\overline{h} = \frac{1}{16\pi}\bigl\{ |I_0|^2 + 2\,|I_1|^2 + |I_2|^2 \bigr\}.
 $$
 
 Properties that follow from the equations, and that the paper states:
 
 - $I_n(-z) = I_n(z)^*$ (Eq. 3.3), so that the PSF is symmetric about the focal plane
   (Eq. 3.15), but, for $\alpha > 0$, not about the axis.
-- On the axis, $I_1 = I_2 = 0$ and $\mathrm{PSF} = |I_0|^2/16\pi$ (Eq. 3.17). At the
+- On the axis, $I_1 = I_2 = 0$ and $h = |I_0|^2/16\pi$ (Eq. 3.17). At the
   focus
   $I_0 = \tfrac{16}{15}\bigl\{1 - \tfrac58\cos^{3/2}\alpha\,(1 + \tfrac35\cos\alpha)\bigr\}$
   (Eq. 3.18).
@@ -178,9 +178,9 @@ the integrals become
 
 $$
 \begin{aligned}
-I_0 &= \int_{\sqrt{\cos\alpha}}^{1} 2s^2(1+s^2)\,J_0(k\rho\sin\theta)\,e^{ikz s^2}\,\mathrm{d}s,\\
-I_1 &= \int_{\sqrt{\cos\alpha}}^{1} 2s^2\sin\theta\,J_1(k\rho\sin\theta)\,e^{ikz s^2}\,\mathrm{d}s,\\
-I_2 &= \int_{\sqrt{\cos\alpha}}^{1} 2s^2(1-s^2)\,J_2(k\rho\sin\theta)\,e^{ikz s^2}\,\mathrm{d}s,
+I_0 &= \int_{\sqrt{\cos\alpha}}^{1} 2s^2(1+s^2)\,J_0(kr\sin\theta)\,e^{ikz s^2}\,\mathrm{d}s,\\
+I_1 &= \int_{\sqrt{\cos\alpha}}^{1} 2s^2\sin\theta\,J_1(kr\sin\theta)\,e^{ikz s^2}\,\mathrm{d}s,\\
+I_2 &= \int_{\sqrt{\cos\alpha}}^{1} 2s^2(1-s^2)\,J_2(kr\sin\theta)\,e^{ikz s^2}\,\mathrm{d}s,
 \end{aligned}
 \qquad \sin\theta = \sqrt{1 - s^4}.
 $$
@@ -191,8 +191,18 @@ $\sin^2\theta = 1 - s^4$. All three integrands are therefore analytic on the who
 interval, up to $\alpha = 90°$ where the factor $\sqrt{\cos\theta}$ of the original
 form is singular. This is why Gauss–Legendre quadrature in $s$ converges
 exponentially: the error drops to the level of floating-point precision as soon as
-the nodes resolve the oscillations of the integrand, which are set by the largest
-$k\rho\sin\alpha$ and $|kz|(1 - \cos\alpha)$ of the request.
+the nodes resolve the oscillations of the integrand. The automatic number of nodes is
+
+$$
+N = 24 + \Bigl\lceil \tfrac12 \Phi + 4\,(k r \sin\alpha)^{1/3} \Bigr\rceil,
+$$
+
+with $\Phi = \max kr\,\sin\alpha + \max|kz|\,(1 - \cos\alpha) + \mathrm{TV}(\psi)$ the
+largest phase excursion of the integrand over the aperture, where $\mathrm{TV}(\psi)$ is
+the total variation of the pupil phase (zero by default). The cube-root term covers the
+edge of the interval at $\alpha = 90°$, where the Bessel argument varies as
+$2kr\sqrt{1-s}$. The error is about $10^{-12}$ of $I_0(0, 0)$ in float64, up to
+$\alpha = 90°$.
 
 The Bessel functions are evaluated by [`bessel_j012`][optix.special.bessel_j012],
 accurate to about $10^{-15}$: below an argument of 25 by a trapezoidal rule on
@@ -205,12 +215,14 @@ $\cos\varphi$.
 ```text
 Input: shape (Z, Y, X) or (Y, X), wavelength λ₀, NA, n = 1, spacing,
        polarization = "x", emitter = None, pupil_phase = None, normalize = None
-α = arcsin(NA / n);   k = 2π n / λ₀
-Grid: z, y, x = (index − size // 2) · spacing;   ρ = √(x² + y²),  φ = atan2(y, x)
-nodes N = 24 + ⌈½ (max kρ · sin α + max |kz| · (1 − cos α))⌉     (unless given)
+α = arcsin(NA / n);   k = n k₀,  k₀ = 2π / λ₀
+Grid: z, y, x = (index − size // 2) · spacing;   r = √(x² + y²),  φ = atan2(y, x)
+nodes N = 24 + ⌈½ Φ + 4 (max k r · sin α)^⅓⌉                       (unless given)
+    # Φ: largest phase excursion over the aperture: max k r · sin α + max |kz| · (1 − cos α)
+    #    plus the total variation of ψ
 Gauss–Legendre nodes s_q and weights w_q on [√cos α, 1];   cos θ_q = s_q²
-For every z and every distinct ρ of the grid:
-    Iₙ = Σ_q  gₙ(θ_q) · Jₙ(kρ sin θ_q) · exp(i (kz cos θ_q + ψ(θ_q)))     (n = 0, 1, 2)
+For every z and every distinct r of the grid:
+    Iₙ = Σ_q  gₙ(θ_q) · Jₙ(k r sin θ_q) · exp(i (kz cos θ_q + ψ(θ_q)))     (n = 0, 1, 2)
     # gₙ: the weights 2 s² w_q (1 + s²), 2 s² w_q sin θ, 2 s² w_q (1 − s²);  ψ = 0 by default
 Gather Iₙ back onto the voxels
 PSF = (1 / 16π) · energy density of the chosen case (see below)
@@ -247,7 +259,7 @@ rescale the result.
   length and on the amplitude of the incident wave. The output uses $A = 1$.
 - *Refractive index.* The paper takes the image space as vacuum ($n = 1$). For
   $n \neq 1$ the same formulas are used in a homogeneous medium, with
-  $\alpha = \arcsin(\mathrm{NA}/n)$ and $k = 2\pi n/\lambda_0$.
+  $\alpha = \arcsin(\mathrm{NA}/n)$ and $k = n k_0$.
 - *Grid.* The Gaussian focus is the voxel at index `n // 2` of each axis, the first
   spatial axis of a 3D shape is $z$ (positive away from the lens), and the $x$ axis
   is the last one. A 2D shape is the focal plane.
@@ -282,7 +294,7 @@ $$
 and for a unit dipole $\mathbf{p}$ (normalised from `emitter`) the PSF is
 
 $$
-\mathrm{PSF}_{\mathbf{p}} = \frac{1}{16\pi}\Bigl\{
+h_{\mathbf{p}} = \frac{1}{16\pi}\Bigl\{
 |\mathbf{p}\cdot\mathbf{e}^{(x)}|^2 + |\mathbf{p}\cdot\mathbf{e}^{(y)}|^2\Bigr\}.
 $$
 
@@ -291,7 +303,7 @@ $\langle|\mathbf{p}\cdot\mathbf{e}|^2\rangle = |\mathbf{e}|^2/3$, gives for
 `emitter="isotropic"`
 
 $$
-\mathrm{PSF}_\mathrm{iso} = \frac{1}{16\pi}\cdot\frac23
+h_\mathrm{iso} = \frac{1}{16\pi}\cdot\frac23
 \bigl\{ |I_0|^2 + 2\,|I_1|^2 + |I_2|^2 \bigr\},
 $$
 
@@ -307,28 +319,48 @@ medium without interface (no refractive-index mismatch).
 the paper sets to zero for an aplanatic system (Eq. 2.7), restricted to a function of
 $\theta$ alone, as $\psi(\theta) = k\Phi(\theta)$. It must not depend on the
 azimuth, so that the azimuthal integration of Eq. 2.29 still holds. It is the hook
-that couples the model with, for instance, the defocus and index-mismatch phase of
-Gibson–Lanni.
+that couples the model with the phase of [Gibson–Lanni](gibson-lanni.md), whose
+optical path difference gives $\psi = k_0\,\mathrm{OPD}$. Its limits are:
+
+- *Phase only.* A real $\psi$ carries an optical path difference, not an amplitude.
+  The polarisation-dependent Fresnel transmission coefficients of an interface enter
+  $I_0$, $I_1$ and $I_2$ with different weights and cannot be folded into $\psi$; the
+  hook is not a vectorial model of an index mismatch.
+- *Smoothness.* The exponential convergence needs $\psi$ to be a smooth function of
+  $\sin^2\theta$, that is, even in $\theta$. A term odd in $\theta$ (an axicon phase
+  $\propto\sin\theta$, say) makes the integrand singular at $s = 1$ and the
+  convergence algebraic; `nodes` must then be raised by hand. For a smooth $\psi$ the
+  automatic count already accounts for its total variation.
+- *Return value.* The callable receives a tensor of polar angles and must return a
+  real tensor that broadcasts to it (a scalar is allowed). A complex or non-finite
+  result, or one of the wrong shape, raises an error.
 
 ## Memory and streaming
 
 The function is not streamed: it returns the whole PSF, of the requested `shape`, and
 is meant for kernels of a few hundred voxels per axis. Two measures keep the cost low.
 
-- The integrals depend on a voxel only through $z$ and $\rho$. They are computed for
+- The integrals depend on a voxel only through $z$ and $r$. They are computed for
   each axial position and each *distinct* radius of the grid (the quadrant symmetry
   of the grid, and the diagonal symmetry for square pixels, make most radii repeat)
   and gathered back onto the voxels.
 - For each axial position the sum over nodes is a matrix product, $(Z, N)$ by
   $(N, R)$, with $R$ the number of distinct radii. The $R$ axis is processed in
   chunks sized from the memory budget of [`optix.config`][optix.config], so that the
-  Bessel work arrays stay within it.
+  Bessel work arrays stay within it. [`richards_wolf_integrals`][optix.psf.utils.richards_wolf_integrals]
+  chunks its points in the same way.
+
+The budget bounds the work arrays only. $I_0$, $I_1$ and $I_2$ are gathered onto every
+voxel as three complex tensors, so the peak memory is about ten times the size of the
+output.
 
 The cost grows as $Z \cdot R \cdot N$, with $N$ growing with the optical size of the
 grid. A $64 \times 256^2$ PSF takes about a second on one CPU thread. The
 function runs on any torch device; `dtype` and `device` default to the
-configuration. In float32 the result agrees with float64 to about $4 \cdot 10^{-7}$
-of the peak; in float64 the quadrature error is about $10^{-13}$ of the peak.
+configuration. In float32 the result agrees with float64 to below $10^{-6}$ of the
+peak. This is relative to the peak: in the far rings, where the PSF is orders of
+magnitude lower, the relative error of float32 can reach 1 % and more. In float64 the
+quadrature error is about $10^{-12}$ of $I_0(0, 0)$.
 
 ## Usage
 
@@ -369,7 +401,7 @@ True
 ```
 
 The building blocks are in `optix.psf.utils`: the complex field of Eq. 2.30 on a
-grid, and the integrals at given optical distances $k\rho$ and $kz$. The value of
+grid, and the integrals at given optical distances $kr$ and $kz$. The value of
 $I_0$ at the focus can be compared with the closed form of Eq. 3.18:
 
 ```pycon
@@ -411,18 +443,32 @@ torch.Size([33, 33, 33])
 
 **Validation.** The implementation is checked against closed forms and limits of the
 paper: the value at the focus (Eq. 3.18), conjugate symmetry (Eq. 3.3), the Airy
-pattern in the focal plane (Eq. 4.12) and the $\mathrm{sinc}^2(u/4)$ profile on the axis
-at low NA, symmetry about the focal plane (Eq. 3.15), the transposition between the
-two linear polarisations and the radial symmetry of unpolarised light. Table 1 of the
-paper is reproduced to within 0.03 on its normalised scale of 100 at the focus, except
-for two entries: the second minimum at $\alpha = 30°$ (7.03 in the paper, 7.25 here,
-where the $S_z$ row of the same table reads 7.02) and the first minimum of the $S_z$
-row at $\alpha = 30°$ (3.80 in the paper, 3.83 here). The paper's $\alpha \to 0$
-column also differs from the exact Airy values by up to 0.01. The axial energy flow through the focal plane equals the power entering the
-pupil, $\int_0^\infty (|I_0|^2 - |I_2|^2)\,v\,\mathrm{d}v = 2\sin^4\alpha$ with
-$v = k\rho\sin\alpha$ (from Eq. 3.21 and Parseval's theorem on Eq. 2.2; the identity is
-not stated in the paper), and the implementation satisfies it. The emitter extension is validated only through its limits, not against another
-implementation.
+pattern in the focal plane (Eq. 4.12) and the $\mathrm{sinc}^2(u/4)$ profile on the
+axis at low NA, symmetry about the focal plane (Eq. 3.15), the transposition between
+the two linear polarisations, and the radial symmetry of unpolarised light. Table 1 of
+the paper is reproduced to within 0.03 on its normalised scale of 100 at the focus.
+Two entries differ in the abscissa: the second minimum of $\langle w_e\rangle$ at
+$\alpha = 30°$ (7.03 in the paper, 7.25 here) and the first minimum of
+$\langle S_z\rangle$ at $\alpha = 30°$ (3.80 in the paper, 3.83 here). These minima
+are too shallow for the table: between the paper's abscissa and this one the curve
+changes by only 0.024 and 0.004 on the scale of 100, below the precision of the
+tabulated ordinates, and the ordinates are tested instead. The paper's
+$\alpha \to 0$ column also differs from the exact Airy values by up to 0.01.
+
+The net axial energy flow through a plane equals the power entering the pupil,
+$\int_0^\infty (|I_0|^2 - |I_2|^2)\,v\,\mathrm{d}v = 2\sin^4\alpha$ with
+$v = kr\sin\alpha$ (from Eq. 3.21 and Parseval's theorem on Eq. 2.2). The flow is
+negative in some rings (Eq. 3.28), hence *net*. The identity is not stated in the
+paper; it holds in every plane $z = \text{const}$ and for any $\psi(\theta)$.
+
+The emitter extension is tested on oblique dipoles, against
+$|\mathbf{p}\cdot\mathbf{e}^{(x)}|^2 + |\mathbf{p}\cdot\mathbf{e}^{(y)}|^2$ built from
+the field, and on the orientation average of fixed dipoles, which equals the isotropic
+case. Its assumptions are a low-aperture image side, a camera that sums both
+polarisations, a homogeneous medium without interface, an emitter excited independently
+of its orientation, and the detection PSF only: a confocal or light-sheet system
+multiplies it by an illumination PSF. The factor $1/16\pi$ is kept from Eq. 3.14 and has
+no physical meaning for an emitter, so the $2/3$ is not a collection efficiency.
 
 ## References
 

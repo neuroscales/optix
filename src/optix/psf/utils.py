@@ -4,6 +4,7 @@ Semi-public: these may change without notice.
 """
 
 from ._fit import fit_gaussian, threshold_centroid
+from ._gibson_lanni import gibson_lanni_opd, gibson_lanni_profile
 from ._lightsheet import beam_radius, rayleigh_range, sheet_intensity
 from ._ops import (
     fourier_shift,
@@ -23,6 +24,8 @@ __all__ = [
     "fit_gaussian",
     "fourier_shift",
     "fwhm",
+    "gibson_lanni_opd",
+    "gibson_lanni_profile",
     "gaussian_filter",
     "linear_shift",
     "local_maxima",
