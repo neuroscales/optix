@@ -122,6 +122,28 @@ And the dark field is not the camera offset: it is offset + dark current +
 stray light. This is the reason why corrections never subtract both
 `ShadingEstimate.dark` and `SensorEstimate.offset`.
 
+## Optics
+
+The symbols of the point-spread function models (`optix.psf`). Lengths are in
+µm. The wavelength is written $\lambda_{\mathrm{em}}$ in docs pages, since
+$\lambda$ is the expected photoelectron count above; docstrings write λ.
+
+| Symbol | Meaning | Unit | In code |
+|---|---|---|---|
+| $\mathrm{NA}$ | numerical aperture of the objective | | `numerical_aperture` |
+| $\lambda_{\mathrm{em}}$ | emission wavelength, in vacuum | µm | `wavelength` |
+| $k$ | wave number, $2\pi/\lambda_{\mathrm{em}}$ | µm⁻¹ | |
+| $n_s$, $n_g$, $n_i$ | refractive index of the specimen, the coverslip, the immersion medium | | `specimen_index`, `coverslip_index`, `immersion_index` |
+| $n_g^*$, $n_i^*$ | the same, under the design conditions of the objective | | `design_coverslip_index`, `design_immersion_index` |
+| $t_s$ | depth of the source below the coverslip | µm | `depth` |
+| $t_g$, $t_i$ | thickness of the coverslip, of the immersion layer | µm | `coverslip_thickness` |
+| $t_g^*$, $t_i^*$ | the same, under the design conditions | µm | `design_coverslip_thickness`, `design_immersion_thickness` |
+| $\Delta z$ | defocus: stage displacement from the paraxial focus of the source | µm | `defocus` |
+| $\rho$ | radius in the back focal plane (pupil), normalised to 1 at the edge of the aperture | | |
+| $r$ | lateral distance from the source, in object space | µm | |
+| $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | µm | `spacing` |
+| $\mathbf{h}$ | the PSF sampled on the grid, unit sum, centred at index `K // 2` | | the returned PSF |
+
 ## Bases and regularisation
 
 | Symbol | Meaning | In code |
