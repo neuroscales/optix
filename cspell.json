@@ -522,6 +522,7 @@
     "pymdownx",
     "pyproject",
     "pytest",
+    "pytestmark",
     "pythonpath",
     "pytorch",
     "pytree",

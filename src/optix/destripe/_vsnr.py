@@ -1,6 +1,7 @@
 """Variational stationary noise remover (VSNR) of Fehrenbach et al. (2012)."""
 
 import math
+import warnings
 from collections.abc import Callable, Sequence
 from typing import NamedTuple, Self
 
@@ -65,10 +66,35 @@ def dirac(
     return out
 
 
+def _frame_axis(axis: object, layout: Layout | None) -> int:
+    """Frame axis (0 or 1) of `axis`: a frame position or a layout label."""
+    if isinstance(axis, str):
+        if layout is None or layout.axes is None:
+            raise ValueError(
+                f"axis {axis!r} is a label: pass a labelled `layout`"
+            )
+        if axis not in layout.axes:
+            raise ValueError(
+                f"axis {axis!r} is not a label of the layout {layout!r}"
+            )
+        _, _, spatial = layout.positions(len(layout.axes))
+        pos = layout.axes.index(axis)
+        if len(spatial) != 2 or pos not in spatial:
+            raise ValueError(
+                f"axis {axis!r} is not one of the two spatial axes of "
+                f"{layout!r}"
+            )
+        return spatial.index(pos)
+    if isinstance(axis, bool) or axis not in (0, 1, -2, -1):
+        raise ValueError(f"axis must be 0, 1, -2, -1 or a label, got {axis!r}")
+    return int(axis) % 2
+
+
 def line(
     shape: Sequence[int],
-    axis: int = 0,
+    axis: int | str = -2,
     *,
+    layout: Layout | None = None,
     dtype: torch.dtype | None = None,
     device: torch.device | str | None = None,
 ) -> Tensor:
@@ -84,8 +110,13 @@ def line(
     shape : (int, int)
         Kernel shape; use the frame shape for stripes over the whole
         frame.
-    axis : {0, 1, -2, -1}
-        Frame axis along which the line runs.
+    axis : int or str, default -2
+        Frame axis along which the line runs: a position among the two
+        spatial axes (0 or -2: the first, 1 or -1: the second), or an
+        axis label of `layout` (e.g. `"y"`).
+    layout : Layout, optional
+        Labelled layout in which a label `axis` is looked up; the
+        filter is over its two spatial axes, in layout order.
     dtype, device : optional
 
     Returns
@@ -93,10 +124,9 @@ def line(
     Tensor
         `shape`.
     """
-    if axis not in (0, 1, -2, -1):
-        raise ValueError(f"axis must be 0, 1, -2 or -1, got {axis!r}")
+    frame = _frame_axis(axis, layout)
     x, y = _centred_grid(shape, dtype, device)
-    on = y == 0 if axis % 2 == 0 else x == 0
+    on = y == 0 if frame == 0 else x == 0
     return on.to(x.dtype)
 
 
@@ -125,7 +155,7 @@ def gaussian_stripe(
     sigma : (float, float)
         Widths (σₓ, σᵧ) > 0, in pixels.
     angle : float, default 0
-        Orientation θ, in radians.
+        Orientation θ, in degrees.
     dtype, device : optional
 
     Returns
@@ -137,7 +167,11 @@ def gaussian_stripe(
     if not (sx > 0 and sy > 0 and math.isfinite(sx) and math.isfinite(sy)):
         raise ValueError(f"sigma must be finite and > 0, got {sigma!r}")
     x, y = _centred_grid(shape, dtype, device)
-    c, s = math.cos(angle), math.sin(angle)
+    angle = float(angle)
+    if not math.isfinite(angle):
+        raise ValueError(f"angle must be finite, got {angle!r}")
+    rad = math.radians(angle)
+    c, s = math.cos(rad), math.sin(rad)
     xr = x * c + y * s
     yr = -x * s + y * c
     return torch.exp(-((xr / sx).square() + (yr / sy).square()))
@@ -308,11 +342,17 @@ class _Prior:
         return torch.maximum(torch.minimum(lam, d), -d)
 
     def conjugate(self, eta: Tensor, c: Tensor) -> Tensor:
-        """(φ + χ_[−C, C])*(η) summed over the frame, Appendix A."""
+        """(φ + χ_[−C, C])*(η) summed over the frame, Appendix A.
+
+        For ℓ¹, the conjugate of φ alone (the indicator of |η| ≤ α) is
+        used instead: the dual variable is first rescaled to satisfy it
+        (see `vsnr_solve`), so this term is zero and the gap does not
+        depend on C.
+        """
         a = eta.abs()
         if self.kind == "l1":
-            out = c * (a - self.alpha).clamp_min(0)
-        elif self.kind == "l2":
+            return eta.new_zeros(eta.shape[:-2])
+        if self.kind == "l2":
             t = torch.minimum(a / self.alpha, c)
             out = t * a - 0.5 * self.alpha * t.square()
         else:
@@ -352,7 +392,9 @@ class VSNRSolution(NamedTuple):
         P(λₖ) per iteration, `(K + 1, ...)` (empty unless `history`).
     gap : Tensor
         Duality gap Δ(λₖ, qₖ) per iteration, `(K + 1, ...)` (empty
-        unless `history`). Converged frames keep their last value.
+        unless `history`), with qₖ rescaled to be dual feasible for ℓ¹
+        components (see `vsnr_solve`). Converged frames keep their last
+        value.
     iterations : Tensor
         Iterations run per frame, `(...)`.
     bound : Tensor
@@ -467,10 +509,17 @@ def vsnr_solve(
           bound that follows from φᵢ(λᵢ*) ≤ P(λ*) ≤ P(0), i.e.
           the maximum over i of P(0)/αᵢ (ℓ¹), √(2P(0)/αᵢ) (ℓ²) or αᵢ (ℓ∞
           ball), per frame. The box is then inactive at the minimiser.
-          With ℓ¹ priors this bound is loose, and the term
-          C ∑ max(0, |ηᵢ| − αᵢ) of G* can keep the duality gap above
-          `tol` up to `max_iter`; a smaller `bound`, still above
-          ‖λ*‖∞, stops earlier.
+          With ℓ¹ priors this bound is loose; it does not enter the
+          stopping rule (see the next item).
+        - For ℓ¹ components, D is evaluated at the dual-feasible point
+          q/κ, κ = max(1, maxᵢ ‖(A*q)ᵢ‖∞/αᵢ) over those components, with
+          the conjugate of φᵢ alone (the indicator of |ηᵢ| ≤ αᵢ), which
+          is then zero. The gap is still an upper bound on P(λₖ) − P*,
+          and it does not depend on C.
+        - A `RuntimeWarning` is emitted when frames reach `max_iter`
+          before `tol` (with `tol` > 0 and `max_iter` > 0). With ℓ¹
+          priors and ε = 0 the rate is only O(1/k) (Proposition 5.3),
+          so this is common.
         - Appendix A writes F*(q) = ε/2 ‖q‖² − ⟨∇u₀, q⟩, which goes with
           u = u₀ + ∑ᵢ λᵢ ∗ ψᵢ. The sign used here,
           F*(q) = ε/2 ‖q‖² + ⟨∇u₀, q⟩ (for ‖q‖∞ ≤ 1), goes with model (6),
@@ -555,12 +604,23 @@ def vsnr_solve(
             r = r + p.value(lam[:, i])
         return r
 
+    l1 = [i for i, p in enumerate(priors) if p.kind == "l1"]
+
     def dual(q: Tensor, ast: Tensor) -> Tensor:
-        f = (g0 * q).sum((-3, -2, -1))
+        # D at the dual-feasible q/κ, κ = max(1, maxᵢ ‖(A*q)ᵢ‖∞/αᵢ) over
+        # the ℓ¹ components, so that their conjugate (the indicator of
+        # |η| ≤ αᵢ) is zero and the gap bounds P(λ) − P* without C.
+        kappa = torch.ones_like(p0)
+        for i in l1:
+            peak = ast[:, i].abs().amax((-2, -1)) / priors[i].alpha
+            kappa = torch.maximum(kappa, peak)
+        f = (g0 * q).sum((-3, -2, -1)) / kappa
         if eps:
-            f = f + 0.5 * eps * q.square().sum((-3, -2, -1))
+            f = f + 0.5 * eps * q.square().sum((-3, -2, -1)) / kappa**2
+        k4 = expand(kappa)[:, 0]
         for i, p in enumerate(priors):
-            f = f + p.conjugate(ast[:, i], c4[:, 0])
+            if p.kind != "l1":
+                f = f + p.conjugate(ast[:, i] / k4, c4[:, 0])
         return -f
 
     # step sizes (Algorithm 2)
@@ -644,6 +704,14 @@ def vsnr_solve(
         lam = torch.where(a4, lam_new, lam)
         b = torch.where(a4[:, 0], b_new, b)
         count += active
+    if max_iter > 0 and tol > 0 and bool(active.any()):
+        warnings.warn(
+            f"vsnr: {int(active.sum())} of {n} frame(s) reached max_iter "
+            f"= {int(max_iter)} before the relative duality gap fell to "
+            f"tol = {tol:g}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     image = u0 - b
     empty = u0.new_zeros(0, *batch)
     return VSNRSolution(
@@ -730,9 +798,11 @@ def vsnr(
         reduce the duality gap by 10³ with well-tuned steps
         (Section VI-C). αᵢ sets the strength of each noise component and
         depends on the amplitude of ψᵢ: the paper leaves it to the user.
-        With ℓ¹ priors the solution is equivariant to a rescaling of the
-        intensities (u₀ → s u₀ gives λ → s λ), so αᵢ does not depend on
-        the intensity unit.
+        With ℓ¹ priors and ε = 0, the solution is equivariant to a
+        rescaling of the intensities (u₀ → s u₀ gives λ → s λ), so αᵢ
+        does not depend on the intensity unit. This does not hold for
+        ε > 0 (the Huber function is not 1-homogeneous), nor for
+        `"linf"` priors, whose bound αᵢ is in intensity units.
 
     Parameters
     ----------
@@ -823,6 +893,7 @@ class VSNR(Estimator):
     tags = Tags(
         targets=("stripes", "stationary-noise"),
         streaming="per-frame",
+        modality=("light-sheet", "sem", "fib-sem", "afm"),
         reference="doi:10.1109/TIP.2012.2206037",
     )
     paper = {
@@ -952,5 +1023,5 @@ class VSNR(Estimator):
 
         m = len(filters)
         return self._apply_frames(
-            data, out, fn, overhead=12.0 + 6.0 * m, contiguous=True
+            data, out, fn, overhead=16.0 + 9.0 * m, contiguous=True
         )

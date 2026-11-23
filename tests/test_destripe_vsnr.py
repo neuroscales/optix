@@ -1,6 +1,7 @@
 """VSNR (Fehrenbach, Weiss & Lorenzo 2012)."""
 
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -10,6 +11,9 @@ import optix
 from optix.destripe import VSNR, utils, vsnr, wavelet_fft
 from optix.destripe._vsnr import _embed, _grad, _grad_adjoint
 from optix.io import Layout, labeled
+
+# runs capped on purpose; the warning itself is tested below
+pytestmark = pytest.mark.filterwarnings("ignore:vsnr.*max_iter:RuntimeWarning")
 
 F64 = torch.float64
 SHAPE = (48, 48)
@@ -73,15 +77,36 @@ def test_filters():
     x = torch.arange(7, dtype=F64)[:, None] - 3
     y = torch.arange(9, dtype=F64)[None, :] - 4
     torch.testing.assert_close(g, torch.exp(-((x / 1.5) ** 2) - (y / 3) ** 2))
-    # θ = π/2 swaps the roles of the axes
-    rot = utils.gaussian_stripe((9, 9), (1.5, 3.0), math.pi / 2, dtype=F64)
+    # θ = 90° swaps the roles of the axes
+    rot = utils.gaussian_stripe((9, 9), (1.5, 3.0), 90.0, dtype=F64)
     torch.testing.assert_close(
         rot, utils.gaussian_stripe((9, 9), (3.0, 1.5), dtype=F64)
     )
     with pytest.raises(ValueError, match="sigma"):
         utils.gaussian_stripe((5, 5), (0.0, 1.0))
+    with pytest.raises(ValueError, match="angle"):
+        utils.gaussian_stripe((5, 5), (1.0, 1.0), math.inf)
     with pytest.raises(ValueError, match="axis"):
         utils.line((5, 5), 2)
+    # default: along the first frame axis (-2), as GeneralStripeRemover
+    torch.testing.assert_close(utils.line((5, 4)), utils.line((5, 4), 0))
+
+
+def test_line_axis_label():
+    layout = Layout("tyx", spatial="xy")
+    # filters are over the spatial axes in layout order: (x, y)
+    torch.testing.assert_close(
+        utils.line((5, 4), "x", layout=layout), utils.line((5, 4), 0)
+    )
+    torch.testing.assert_close(
+        utils.line((5, 4), "y", layout=layout), utils.line((5, 4), 1)
+    )
+    with pytest.raises(ValueError, match="layout"):
+        utils.line((5, 4), "y")
+    with pytest.raises(ValueError, match="spatial"):
+        utils.line((5, 4), "t", layout=layout)
+    with pytest.raises(ValueError, match="label"):
+        utils.line((5, 4), "z", layout=layout)
 
 
 def test_embedding_puts_the_centre_at_the_origin():
@@ -312,6 +337,37 @@ def test_orientation_is_transposition():
     torch.testing.assert_close(horizontal.transpose(-1, -2), vertical)
 
 
+def test_l1_gap_does_not_depend_on_the_bound():
+    """D is evaluated at a dual-feasible q/κ: the box C drops out."""
+    u, u0, psi = sparse_case()
+    kw = dict(alpha=3.0, max_iter=200, tol=0.0, history=True)
+    loose = utils.vsnr_solve(u0, [psi], **kw)
+    tight = utils.vsnr_solve(u0, [psi], bound=50.0, **kw)
+    assert float(loose.bound) > 50.0
+    torch.testing.assert_close(loose.gap, tight.gap)
+    best = float(
+        utils.vsnr_solve(
+            u0, [psi], alpha=3.0, max_iter=5000, tol=1e-6, history=True
+        ).primal.min()
+    )
+    gap = loose.gap
+    assert bool((gap >= -1e-9 * gap[0]).all())
+    assert bool((loose.primal - best <= gap + 1e-9 * gap[0]).all())
+    assert float(gap[-1]) < 0.1 * float(gap[0])
+
+
+def test_warns_when_max_iter_is_reached():
+    u, u0, psi = sparse_case()
+    with pytest.warns(RuntimeWarning, match="max_iter"):
+        utils.vsnr_solve(u0, [psi], alpha=3.0, max_iter=3)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        utils.vsnr_solve(u0, [psi], alpha=3.0, max_iter=3, tol=0.0)
+        utils.vsnr_solve(u0, [psi], alpha=3.0, max_iter=0)
+        _, u1, line = line_case()
+        utils.vsnr_solve(u1, [line], alpha=100.0, prior="l2")
+
+
 def test_box_bound():
     u, u0, psi = sparse_case()
     sol = utils.vsnr_solve(u0, [psi], alpha=3.0, bound=0.5, max_iter=100)
@@ -393,6 +449,7 @@ def test_estimator_is_stateless(tmp_path):
     assert est.fit(u0) is est
     assert "VSNR" in optix.estimators()
     assert est.tags.streaming == "per-frame"
+    assert "light-sheet" in est.tags.modality
     expected = vsnr(u0, psi, **kw)
     torch.testing.assert_close(est.apply(u0), expected)
     est = VSNR(psi, **kw)
