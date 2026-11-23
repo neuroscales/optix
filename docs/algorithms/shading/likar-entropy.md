@@ -106,8 +106,11 @@ $\mathbf{r} = (x, y)$ measured from the image centre:
     $\iint \hat{S}_A = 0$ (14) and $\tfrac{1}{WH}\iint \hat{S}_M = 1$ (15).
 
 The coefficients $\mathbf{a}$ and $\mathbf{m}$ of the paper are the same symbols
-in optix: $(a_1, \ldots, a_5)$ for the dark field, in intensity units per
-pixel, and $(m_1, \ldots, m_5)$ for the flat field.
+in optix, with positions in pixels. For the dark field, $a_1$ and $a_2$ are in
+intensity units per pixel and $a_3$, $a_4$ and $a_5$ in intensity units per
+pixel$^2$. The flat field has no unit: $m_1$ and $m_2$ are per pixel, and
+$m_3$, $m_4$ and $m_5$ per pixel$^2$. (They are not the parameters that the
+optimiser works with, which are rescaled; see [Algorithm](#algorithm).)
 
 The objective is the entropy of the corrected image. With $h(n)$ the
 histogram of the grey levels $n = 1 \ldots G$ and $p(n)$ its normalisation:
@@ -157,11 +160,15 @@ direct search: Powell's direction-set method, which minimises along one
 direction at a time with Brent's one-dimensional method
 ([Press et al. 1992](https://numerical.recipes/)), as in the paper. No gradient is used.
 
-The two ambiguities of the model are resolved by the neutralisation conditions
-alone. Without them, a constant added to $\mathbf{d}$ or a constant factor in
-$\mathbf{f}$ would only translate or stretch the histogram; with them the mean
-level and the mean contrast of the image are those of the input. The result is
-therefore stored with `meta["flat_norm"] == "mean"`.
+The neutralisation conditions (Eqs. 14–15) are essential, and the two
+constants they fix are not alike. A constant added to $\mathbf{d}$ translates
+the histogram and leaves its entropy unchanged: it is a gauge freedom, fixed
+by $\sum_p d_p = 0$. A constant factor in $\mathbf{f}$ is different: scaling
+the image compresses the histogram and lowers its entropy, so with a free
+factor the minimiser would shrink every value into a few bins (entropy
+towards 0). Setting the constant term of $\mathbf{f}$ to 1 removes this
+trivial minimum, and the mean level and the mean contrast of the image remain
+those of the input. The result is stored with `meta["flat_norm"] == "mean"`.
 
 A global property is minimised, not a local one, so the method needs no
 selection of control points, but it also cannot tell shading from a structure
@@ -181,7 +188,12 @@ Repeat until the relative change of the entropy is below tol:
     # H(θ): corrected values u = (y − d) / f  (rejected if f ≤ 0 anywhere)
     #       histogram of u on [−G, 2G] with partial interpolation,
     #       blur by the triangular window, normalise, entropy in nats
-Return f = 1 + m·Φ,  d = (hi − lo) · a·Φ  (neutralised quadratics, Eqs. 16–17)
+Return f = 1 + θ̃_M · B,  d = (hi − lo) · θ̃_A · B
+    with x̃ = 2x/W, ỹ = 2y/H and B = (x̃, ỹ, x̃ỹ, x̃² − 1/3, ỹ² − 1/3),
+    the neutralised terms of Eqs. 16–17 in scaled coordinates
+    (the five parameters of each of θ̃_A, θ̃_M)
+meta["coefficients"] holds the paper's a and m, converted from θ̃ back to
+    pixel coordinates and data units
 ```
 
 ## Faithful mode and extensions
@@ -196,7 +208,7 @@ paper's method. The keywords are the same in both.
 | `tol`, `max_iterations` | stopping rule of Powell's method | `1e-6`, `200` | same |
 | `components` | `"both"` fits $\mathbf{f}$ and $\mathbf{d}$; extension: `"additive"` or `"multiplicative"` fits one | `"both"` | `"both"` |
 | `sampling` | extension: use every `sampling`-th pixel along each spatial axis in the fit | `1` | `1` |
-| `data_range` | data values $[lo, hi]$ of the grey levels 1 and $G$ | observed minimum and maximum | same |
+| `data_range` | data values $[lo, hi]$ of the grey levels 1 and $G$ | dtype range for `uint8` with `levels=256`, observed minimum and maximum otherwise | same |
 
 `data_range` describes the data, not the method, and does not affect
 `is_faithful`. Fitting a single component and sparse sampling are two of the
@@ -206,11 +218,13 @@ of the method as evaluated.
 Choices that the paper does not specify:
 
 - **Data range.** The paper uses 8-bit images, whose grey levels are the
-  integer values. For other data, the grey level of a value $v$ is
-  $\mathrm{round}((v - lo)/\delta) + 1$, with $[lo, hi]$ the observed minimum and
-  maximum of each group by default. With `data_range=(0, 255)` and
-  `levels=256`, 8-bit values map to their own grey levels exactly. The model
-  and the correction are in data units.
+  integer values. In general, the grey level of a value $v$ is
+  $\mathrm{round}((v - lo)/\delta) + 1$ with $\delta = (hi - lo)/(G - 1)$.
+  By default, integer data whose dtype has at most $G$ values (`uint8` with
+  `levels=256`) use the dtype range $[0, 255]$: the grey levels are the integer
+  values and the marginal levels ignored are the saturation values 0 and 255.
+  Wider integers and floats use the observed minimum and maximum of each group.
+  The model and the correction are in data units.
 - **Optimiser settings.** `tol`, `max_iterations`, the tolerance of Brent's
   method, the start at $\boldsymbol{\theta} = \mathbf{0}$, the initial
   directions of Powell's method (the unit vectors of parameters rescaled to
@@ -220,7 +234,8 @@ Choices that the paper does not specify:
 - **Out-of-range values.** Corrected values outside $[-G, 2G]$ are clamped to
   the end bins.
 - **Invalid parameters.** Parameters that make $\hat{\mathbf{f}} \le 0$ at any
-  pixel are rejected, their objective being larger than the maximum entropy.
+  pixel of the full image (also with `sampling > 1`) are rejected, their
+  objective being larger than the maximum entropy.
 
 ### Open choices
 
@@ -228,26 +243,35 @@ Two choices are not settled and may change.
 
 - **Several frames.** The paper corrects one image at a time. Given several
   frames in a group, `Likar` fits one shading per group by minimising the
-  entropy of the pooled histogram of all the corrected frames. Fitting each
-  frame separately is possible by calling `fit` on each frame. A per-frame
-  mode inside one call is not provided: `ShadingEstimate` has no per-frame
-  flat field.
-- **Default intensity range for integer data.** The default is the observed
-  minimum and maximum of each group. The alternative is the full range of the
-  data type (0 to 255 for `uint8`), which keeps the grey levels comparable
-  between groups and runs, and makes the correction independent of which
-  values happen to occur. Pass `data_range` to select it explicitly.
+  entropy of the pooled histogram of all the corrected frames. Pooling assumes
+  that the shading is the same in every frame. This holds for acquisition
+  shading (illumination, optics, camera) but not for the object-dependent
+  shading that the paper also targets (slice thickness, staining), which
+  varies from one image to the next and needs one fit per frame, by calling
+  `fit` on each frame. A per-frame mode inside one call is not provided:
+  `ShadingEstimate` has no per-frame flat field.
+- **Default intensity range.** `uint8` data use the dtype range, as in the
+  paper. For wider integers (`uint16`) the observed minimum and maximum are
+  used, since the full range would put typical data in a few wide bins; a
+  single hot pixel then widens the range and coarsens the grey levels. The
+  alternatives (the full dtype range for every integer type, or a percentile
+  range) are not implemented. `data_range` sets the range explicitly.
 
 ## Memory and streaming
 
 `Likar` is tagged `per-pixel-stats`. The statistic is the number of times each
-pixel takes each grey level, a sparse count that is exactly mergeable across
-chunks, with at most $\min(N, G)$ entries per pixel for $N$ frames. The fit
-reads the data once when `data_range` is given, and twice otherwise (first for
-the minimum and maximum). The entropy is then evaluated on these counts: the
-cost of one evaluation depends on the number of distinct (pixel, grey level)
-pairs and not directly on $N$, and it grows with the image size. Use `sampling`
-to fit on a subset of the pixels; the fields are always returned at full
+pixel takes each grey level, which merges exactly across chunks. The fit reads
+the data once when the range is known (`data_range`, or `uint8` data), and twice
+otherwise, the first pass finding the minimum and maximum.
+
+The counts are held in a dense table of $H \cdot W \cdot G$ 32-bit integers
+when it fits the memory budget (`optix.config(memory=...)`), and as sparse
+(pixel, grey level) pairs otherwise, with at most $\min(N, G)$ pairs per pixel
+for $N$ frames. In the sparse case the fit warns when the worst-case size
+exceeds the budget, and suggests `sampling`, which fits on every
+`sampling`-th pixel along each spatial axis. The entropy is evaluated on the
+counts, so the cost of one evaluation grows with their number and with the
+image size, not directly with $N$. The fields are always returned at full
 size. [`apply`](../../reference/shading.md) streams frame batches.
 
 ## Usage
@@ -270,9 +294,11 @@ size. [`apply`](../../reference/shading.md) streams frame batches.
 >>> truth = ShadingEstimate(
 ...     flat=1 + 0.2 * u + 0.15 * (v**2 - 1 / 3), dark=15 * u * v
 ... )
->>> data = simulate_shading(scene[None], truth).clamp(0, 255).round()
->>> # 2. Fit, with the 8-bit range, and correct.
->>> likar = Likar(data_range=(0, 255)).fit(data)
+>>> data = (
+...     simulate_shading(scene[None], truth).clamp(0, 255).round().to(torch.uint8)
+... )
+>>> # 2. Fit and correct. The data are uint8: the range is (0, 255).
+>>> likar = Likar().fit(data)
 >>> shading = likar.estimates["shading"]
 >>> corrected = likar.apply(data)
 >>> # 3. Compare the estimate to the truth.
@@ -286,6 +312,8 @@ True
 
 Common variations:
 
+- `Likar(data_range=(lo, hi))` sets the intensity range of the grey levels; the
+  default is the dtype range for `uint8` and the observed range otherwise.
 - `Likar(components="multiplicative")` fits the flat field only, for images
   without an additive shading (an extension).
 - `Likar(sampling=2)` fits on every second pixel in each direction, which is

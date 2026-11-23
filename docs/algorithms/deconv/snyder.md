@@ -1,11 +1,11 @@
 # Snyder
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data) \
-    **Noise model:** Poisson-Gaussian (Poisson counts plus Gaussian read noise) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Snyder, Hammoud and White, J Opt Soc Am A, 1993, [doi:10.1364/JOSAA.10.001014](https://doi.org/10.1364/JOSAA.10.001014)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, same shape as the data)
+    - **Noise model:** Poisson-Gaussian (Poisson counts plus Gaussian read noise)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Snyder, Hammoud and White, J Opt Soc Am A, 1993, [doi:10.1364/JOSAA.10.001014](https://doi.org/10.1364/JOSAA.10.001014)
 
 ## Overview
 
@@ -42,6 +42,12 @@ In electrons, after the offset has been subtracted and the gain divided out,
     \boldsymbol{\varepsilon} \sim \mathcal{N}(\mathbf{0}, \sigma^2 \mathbf{I}).
     $$
 
+    Here $\mathbf{y}, \mathbf{r}, \mathbf{n}, \mathbf{n}_0,
+    \boldsymbol{\varepsilon} \in \mathbb{R}^P$ for one image of $P$ pixels,
+    $\mathbf{x} \in \mathbb{R}^Q$ is the latent image on the domain extended
+    by the PSF support ($Q \ge P$ pixels) and
+    $\mathbf{A} \in \mathbb{R}^{P \times Q}$.
+
 === "Snyder et al. 1993"
 
     $$
@@ -57,18 +63,18 @@ In electrons, after the offset has been subtracted and the gain divided out,
     \quad \text{(Eqs. 5–11)}.
     $$
 
-| optix | [Snyder et al. 1993](https://doi.org/10.1364/JOSAA.10.001014) |
-|---|---|
-| $\mathbf{y}$ (recorded image, ADU) | — (the paper works in electrons) |
-| $\mathbf{r}$ (data in electrons) | $r(j)$ |
-| $\mathbf{x}$ (latent image) | $\lambda(i)$ |
-| $\mathbf{h}$, $\mathbf{A}$ (PSF, blur) | $p(j \mid i)$ |
-| $\mathbf{f}$ (flat field) | $\beta(j)$ |
-| $\mathbf{b}$ (background counts) | $\mu_0(j)$ |
-| $\mathbf{o}$ (offset) | $m$ (bias), in ADU |
-| $\boldsymbol{\varepsilon}$, $\sigma^2$ (read noise) | $g(j)$, $\sigma^2$ |
-| $g$ (gain) | — |
-| $\mathbf{n}$, $\mathbf{n}_0$ | $n_{\mathrm{obj}}(j)$, $n_0(j)$ |
+| optix | [Snyder et al. 1993](https://doi.org/10.1364/JOSAA.10.001014) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$ | none (the paper works in electrons) | recorded image, in ADU | $P$, one per image |
+| $\mathbf{r}$ | $r(j)$ | data in electrons | $P$, one per image |
+| $\mathbf{x}$ | $\lambda(i)$ | latent image | $Q$, one per image |
+| $\mathbf{h}$, $\mathbf{A}$ | $p(j \mid i)$ | PSF and blur operator | $K$ and $P \times Q$, one for the whole stack |
+| $\mathbf{f}$ | $\beta(j)$ | flat field (detection efficiency) | $P$, one per pixel, shared by all images |
+| $\mathbf{b}$ | $\mu_0(j)$ | mean background counts | $P$, one per pixel, shared by all images |
+| $\mathbf{o}$ | $m$ (bias) | camera offset, in ADU | $P$ or scalar, one per pixel, shared by all images |
+| $\boldsymbol{\varepsilon}$, $\sigma^2$ | $g(j)$, $\sigma^2$ | read noise and its variance | $P$ per image; $\sigma^2$ per pixel or scalar, shared |
+| $g$ | none | camera gain, ADU per electron | $P$ or scalar, shared by all images |
+| $\mathbf{n}$, $\mathbf{n}_0$ | $n_{\mathrm{obj}}(j)$, $n_0(j)$ | object and background photo-electron counts | $P$, one per image |
 
 The paper's $g(j)$ is the read noise, not the gain. Since the offset is
 subtracted in optix, its bias is $m = 0$ in electrons.
@@ -132,12 +138,12 @@ field in the forward and back projections:
     \quad \text{(Eqs. 18, 20)}.
     $$
 
-| optix | [Snyder et al. 1993](https://doi.org/10.1364/JOSAA.10.001014) |
-|---|---|
-| $\mathbf{x}_k$ | $\lambda_k(i)$ |
-| $\boldsymbol{\mu}_k$ | $\mu_k(j)$ |
-| $\mathbf{A}^\top \mathbf{f}$ | $\bar\beta(i)$ |
-| $F(\mathbf{r}, \boldsymbol{\mu}_k, \sigma)$ | $F[r(j), \mu_k(j), \sigma]$ |
+| optix | [Snyder et al. 1993](https://doi.org/10.1364/JOSAA.10.001014) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{x}_k$ | $\lambda_k(i)$ | iterate after $k$ updates | $Q$, one per image |
+| $\boldsymbol{\mu}_k$ | $\mu_k(j)$ | predicted mean counts | $P$, one per image |
+| $\mathbf{A}^\top \mathbf{f}$ | $\bar\beta(i)$ | back-projected flat, the normaliser | $Q$, shared by all images |
+| $F(\mathbf{r}, \boldsymbol{\mu}_k, \sigma)$ | $F[r(j), \mu_k(j), \sigma]$ | conditional mean of the counts given the data | $P$, one per image |
 
 As for any EM scheme, every iterate is non-negative and the likelihood never
 decreases. Without read noise ($\sigma \to 0$), $F = r$ and the update is
@@ -150,27 +156,42 @@ approximation** (Section 3.C, `noise="shifted-poisson"`) avoids evaluating
 $F$: for large $\sigma^2$, Gaussian read noise is close to a Poisson variable
 of mean $\sigma^2$, so $\mathbf{r} + \sigma^2$ is treated as Poisson with mean
 $\boldsymbol{\mu} + \sigma^2$ and Eq. 15 is used (the shifted data are clipped
-at 0, which the paper does not specify). The **method of sieves**
+at 0, which the paper does not specify). This is EM for the approximate model
+$\mathbf{r} + \sigma^2 \sim \mathrm{Poisson}(\boldsymbol{\mu} + \sigma^2)$,
+in which the read noise becomes one more Poisson background of mean
+$\sigma^2$: the E step needs no sum over counts, and the update is
+Richardson–Lucy with background $\mathbf{b} + \sigma^2$. The **method of sieves**
 (Section 4, Eq. 30, `sieve=s`) blurs the final iterate with a kernel
 $\mathbf{s}$, which estimates the smoothed object $\mathbf{s} * \mathbf{x}$.
 
 ## Algorithm
 
-```text
-Input: data Y (ADU), PSF h, sensor (o, g, σ²), optional flat f and background b,
-       noise = "exact", alpha = 0.05, max_iter = 100
-r = (y − o) / g;   σ² ← variance / g²
-f: given, else the shading flat rescaled to unit mean, else 1
-b: (dark − o)/g clipped at 0, plus background / g
-Initialise x(0): uniform, Σ(r − b) / Σ f per image
-Repeat:
-    μ_k = f ⊙ A x_k + b
-    if n_iter is None and the χ² test Σ (r − μ_k)² / (μ_k + σ²) is not significant: stop
-    c = F(r, μ_k, σ)            (exact)   or   Eq. 15 on r + σ²  (shifted-poisson)
-    x_{k+1} = x_k / (Aᵀ f) ⊙ Aᵀ(f ⊙ c / μ_k)
-If sieve s is given: x ← s * x
-Return x, cropped to the observed region
-```
+**Input:** an image $\mathbf{y} \in \mathbb{R}^P$ in ADU, the PSF
+$\mathbf{h}$, the sensor (offset $\mathbf{o}$, gain $g$, read-noise variance),
+optional flat $\mathbf{f}$ and background; hyper-parameters `noise` $=$
+`"exact"`, `alpha` $= 0.05$, `max_iter` $= 100$, `n_iter` $=$ `None`. \
+**Output:** the deconvolved image $\hat{\mathbf{x}}$, cropped to the observed
+region.
+
+1. **Convert to electrons:** $\mathbf{r} = (\mathbf{y} - \mathbf{o}) / g$ and
+   $\sigma^2 = \text{variance} / g^2$.
+2. **Camera maps:** $\mathbf{f}$ as given, else the shading flat rescaled to
+   unit mean, else $\mathbf{1}$; $\mathbf{b}$ from the dark field $\mathbf{d}$ of the shading estimate,
+   $(\mathbf{d} - \mathbf{o})/g$ clipped at 0, plus the extra background
+   divided by $g$.
+3. **Initialise** $\mathbf{x}_0$ uniform, at
+   $\sum_p (r_p - b_p) / \sum_p f_p$ per image.
+4. **Repeat** for $k = 0, 1, \ldots$ until `n_iter` (if given) or `max_iter`
+   iterations:
+    1. **Predict** $\boldsymbol{\mu}_k = \mathbf{f} \odot \mathbf{A}\mathbf{x}_k + \mathbf{b}$;
+    2. **Test** (only when `n_iter` is `None`): stop if the χ² statistic
+       $\sum_p (r_p - \mu_{k,p})^2 / (\mu_{k,p} + \sigma^2)$ is no longer
+       significant at level `alpha`;
+    3. **E step:** $\mathbf{c} = F(\mathbf{r}, \boldsymbol{\mu}_k, \sigma)$
+       (exact), or use Eq. 15 on $\mathbf{r} + \sigma^2$ (shifted Poisson);
+    4. **M step:** $\mathbf{x}_{k+1} = \mathbf{x}_k / (\mathbf{A}^\top\mathbf{f}) \odot \mathbf{A}^\top(\mathbf{f} \odot \mathbf{c} / \boldsymbol{\mu}_k)$.
+5. **Sieve** (if `sieve` $= \mathbf{s}$ is given): $\mathbf{x} \leftarrow \mathbf{s} * \mathbf{x}$.
+6. **Crop** $\mathbf{x}$ to the observed region and return it.
 
 The start and the stopping rule are not in the paper (its example runs 600
 iterations); they are those of [Richardson–Lucy](richardson-lucy.md), with the

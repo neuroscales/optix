@@ -1,3 +1,7 @@
+---
+icon: fontawesome/solid/gears
+---
+
 # Algorithms
 
 One page for every estimator in optix. Each page states the model in the common
@@ -19,6 +23,7 @@ example. The sections follow the modules of the
 | | [Likar](shading/likar-entropy.md) (`Likar`) | flat field and dark field, from one image |
 | | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
+| [`optix.background`](../reference/background.md) | [Rolling ball](background/rolling-ball.md) (`RollingBall`, `TopHat`) | background, by grey-scale opening |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
 | | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
@@ -27,6 +32,7 @@ example. The sections follow the modules of the
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
+| | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |
 
 The rest of this page explains how the section is organised and what an
 algorithm page contains.

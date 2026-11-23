@@ -1,10 +1,11 @@
 """Special functions: quadrature, Newton solvers, KL divergences and
 censored-Gaussian moments."""
 
+from ._bessel import bessel_j0, bessel_j012, bessel_j1
 from ._clipped import clipped_normal_moments
 from ._kl import kl_dirichlet, kl_gamma, kl_normal
 from ._poisson_normal import poisson_normal_logpdf, poisson_normal_mean
-from ._quadrature import gauss_hermite
+from ._quadrature import gauss_hermite, gauss_legendre
 from ._solvers import (
     dirichlet_elog,
     fit_dirichlet,
@@ -15,11 +16,15 @@ from ._solvers import (
 from ._stable import ratio_minus_log, stirling_residual
 
 __all__ = [
+    "bessel_j0",
+    "bessel_j1",
+    "bessel_j012",
     "clipped_normal_moments",
     "dirichlet_elog",
     "fit_dirichlet",
     "fit_gamma_shape",
     "gauss_hermite",
+    "gauss_legendre",
     "inv_digamma",
     "kl_dirichlet",
     "kl_gamma",
