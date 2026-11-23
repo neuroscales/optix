@@ -1,3 +1,7 @@
+---
+icon: fontawesome/solid/code
+---
+
 # API reference
 
 The reference documents every public name, generated from the docstrings. The

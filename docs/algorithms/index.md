@@ -1,3 +1,7 @@
+---
+icon: fontawesome/solid/gears
+---
+
 # Algorithms
 
 One page for every estimator in optix. Each page states the model in the common

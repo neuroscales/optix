@@ -1,11 +1,11 @@
 # BaSiC
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark` with `darkfield=True`, `baseline` with `timelapse=True`) \
-    **Noise model:** none \
-    **Streaming:** per-frame \
-    **Needs many frames:** yes \
-    **Reference:** Peng et al., Nature Communications, 2017, [doi:10.1038/ncomms14836](https://doi.org/10.1038/ncomms14836)
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark` with `darkfield=True`, `baseline` with `timelapse=True`)
+    - **Noise model:** none
+    - **Streaming:** per-frame
+    - **Needs many frames:** yes
+    - **Reference:** Peng et al., Nature Communications, 2017, [doi:10.1038/ncomms14836](https://doi.org/10.1038/ncomms14836)
 
 ## Overview
 
@@ -52,21 +52,24 @@ arbitrary background added back after correction: 0 removes the background
 (fluorescence), $\bar{b}$ (`"mean"`) keeps the raw intensity range (bright
 field).
 
-| optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | Meaning |
-|---|---|---|
-| $\mathbf{y}_i$ | $I_i^{\text{meas}}$ ($I$) | recorded frame |
-| $\mathbf{x}_i$ | $I_i^R$ ($F$) | latent image |
-| $\mathbf{f}$ | $S^F$ ($S$) | flat field |
-| $\mathbf{d}$ | $S^D$ ($D$) | dark field |
-| $b_i$ | $B_i$ | baseline of frame $i$ |
-| $\mathbf{L}$ | $I_B$ | low-rank part |
-| $\mathbf{E}$ | $I_R$ | sparse residual |
+Frames have $P$ pixels, flattened into vectors, and the stack (or group) has
+$N$ frames; products and divisions of vectors are pixel-wise.
+
+| optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_i$ | $I_i^{\text{meas}}$ ($I$) | recorded frame $i$ | $\mathbb{R}^P$, one per frame |
+| $\mathbf{x}_i$ | $I_i^R$ ($F$) | latent (shading-free) image of frame $i$ | $\mathbb{R}^P$, one per frame |
+| $\mathbf{f}$ | $S^F$ ($S$) | flat field, multiplicative gain | $\mathbb{R}^P$, shared by all frames of a group |
+| $\mathbf{d}$ | $S^D$ ($D$) | dark field, additive offset | $\mathbb{R}^P$, shared by all frames of a group |
+| $b_i$ | $B_i$ | baseline (uniform background) of frame $i$ | scalar, one per frame |
+| $b_{\text{norm}}$ | | background added back after correction | scalar, one for the whole stack |
 
 ## Probabilistic model
 
 BaSiC has no explicit noise model: it is a regularised decomposition. The
-fitting frames, sorted at each pixel over the frames and resized to the working
-size (128 × 128), form the columns of the measurement matrix $\mathbf{Y}$.
+$K \le N$ fitting frames, sorted at each pixel over the frames and resized to
+the working size (128 × 128, so $P = 128^2$ here), form the columns of the
+measurement matrix $\mathbf{Y} \in \mathbb{R}^{P \times K}$.
 It is split into a low-rank part and a sparse residual,
 
 === "optix"
@@ -102,7 +105,9 @@ It is split into a low-rank part and a sparse residual,
     with the reweighting of Eq. (9) and the default $\lambda$ of
     Supplementary Note 4.
 
-with $\boldsymbol{\Phi}$ the orthonormal 2-D DCT basis, so that
+with $\mathbf{b} \in \mathbb{R}^K$ the baselines of the fitting frames,
+$\mathbf{1}$ a vector of ones, and
+$\boldsymbol{\Phi} \in \mathbb{R}^{P \times P}$ the orthonormal 2-D DCT basis, so that
 $\boldsymbol{\Phi}^\top \mathbf{f}$ are the DCT coefficients of $\mathbf{f}$;
 the L1 norms on them make the fields smooth. The dark field is
 $\mathbf{d} = d_Z + \mathbf{d}_R$. The weights are reweighted-L1,
@@ -116,13 +121,18 @@ $\lambda_f = \lVert \boldsymbol{\Phi}^\top \bar{\mathbf{y}} \rVert_1 / 800$ and
 $\lambda_d = \lVert \boldsymbol{\Phi}^\top \bar{\mathbf{y}} \rVert_1 / 2000$,
 with $\bar{\mathbf{y}}$ the per-pixel mean frame divided by its mean.
 
-| optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) |
-|---|---|
-| $\mathbf{Y}$ | $I$ (measurement matrix) |
-| $\boldsymbol{\Phi}^\top \cdot$ | $\mathcal{F}(\cdot)$ (described as a Fourier transform, a DCT in the authors' code) |
-| $\lambda_f$, $\lambda_d$ | $\lambda_s$, $\lambda_d$ |
-| $d_Z$, $\mathbf{d}_R$ | $D_Z$, $D_R$ |
-| $\mathbf{W}$, $\epsilon$ | $W$, $\varepsilon$ |
+| optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{Y}$ | $I$ | measurement matrix, one fitting frame per column | $\mathbb{R}^{P \times K}$, per group |
+| $\mathbf{L}$ | $I_B$ | low-rank part, the shading of every frame | $\mathbb{R}^{P \times K}$, per group |
+| $\mathbf{E}$ | $I_R$ | sparse residual, the specimen | $\mathbb{R}^{P \times K}$, per group |
+| $\mathbf{b}$ | $B$ | baselines of the fitting frames | $\mathbb{R}^K$, one entry per frame |
+| $\boldsymbol{\Phi}^\top \cdot$ | $\mathcal{F}(\cdot)$ | DCT (described as a Fourier transform, a DCT in the authors' code) | $\mathbb{R}^{P \times P}$, fixed |
+| $\lambda_f$, $\lambda_d$ | $\lambda_s$, $\lambda_d$ | smoothness weights of flat and dark fields | scalars, per group |
+| $d_Z$ | $D_Z$ | uniform part of the dark field | scalar, per group |
+| $\mathbf{d}_R$ | $D_R$ | spatially varying part of the dark field | $\mathbb{R}^P$, per group |
+| $\mathbf{W}$ | $W$ | reweighting of the residual | $\mathbb{R}^{P \times K}$, per group |
+| $\epsilon$ | $\varepsilon$ | floor of the reweighting | scalar |
 
 ## Inference / derivation
 
@@ -143,27 +153,45 @@ reweighting:
   $\mathbf{f}$ to mean 1 (`meta["flat_norm"] == "mean"`); the fields are then
   resized back to the image size.
 
+**Statistical counterpart.** For fixed weights the objective is a MAP
+estimate: an L1 data term is a Laplace likelihood for the specimen residual,
+and the L1 penalties are Laplace (sparsity) priors on the DCT coefficients of
+the fields. Reweighted L1 minimises a log-sum
+penalty by successive linear upper bounds; equivalently, EM for a Laplace scale mixture, each weight being the
+expected inverse scale of its residual (an IRLS-type robust M-estimator).
+
 **Baseline.** After sorting, the fitted $b_i$ belong to sorted frames, not to
 real ones. With `timelapse=True`, each $b_i$ is re-estimated on its own,
 unsorted frame with $\mathbf{f}$ and $\mathbf{d}$ fixed, by a reweighted
 $\min_b \lVert \mathbf{W} \odot (\mathbf{y}_i - b\,\mathbf{f} - \mathbf{d}) \rVert_1$
-(a weighted median). It is in units of the flat-corrected signal
+(a weighted median, the maximum-likelihood location under a Laplace
+likelihood). It is in units of the flat-corrected signal
 (`meta["baseline_units"] == "signal"`).
 
 ## Algorithm
 
-```text
-Input: stack Y
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$,
+optionally in groups. \
+**Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$, $\hat{\mathbf{d}}$ and,
+with `timelapse=True`, $\hat b_1, \ldots, \hat b_N$.
+
 For each group:
-    Pick max_frames = 512 fitting frames; sort each pixel; resize to 128 x 128
-    λ_f, λ_d from the mean frame (unless given); W = 1
-    Repeat (at most max_reweight = 10 times, until f and d change by < 10⁻³):
-        Solve the weighted problem by LADM (tol = 10⁻³, at most 500 iterations)
-        W = 1 / (|E / L| + ε), ε = 0.1, scaled to mean 1
-    Normalise f to mean 1; resize f, d to the image size
-    If timelapse: one pass over the stack to estimate every b_i
-Return ShadingEstimate(flat=f, dark=d, baseline=b)
-```
+
+1. **Select** $K \le$ `max_frames` $= 512$ fitting frames, sort each pixel over
+   them (`sort_intensity=True`) and resize them to 128 × 128, giving
+   $\mathbf{Y} \in \mathbb{R}^{P \times K}$.
+2. **Initialise** $\lambda_f$, $\lambda_d$ from the mean frame (unless given)
+   and $\mathbf{W} = \mathbf{1}$.
+3. **Reweight**, at most `max_reweight` $= 10$ times, until $\mathbf{f}$ and
+   $\mathbf{d}$ change by less than $10^{-3}$:
+    1. **solve** the weighted problem by LADM (`tol` $= 10^{-3}$, at most 500
+       iterations);
+    2. **update** $\mathbf{W} = 1 / (\lvert \mathbf{E} / \mathbf{L} \rvert + \epsilon)$,
+       $\epsilon = 0.1$, scaled to mean 1.
+4. **Normalise** $\mathbf{f}$ to mean 1 and resize $\mathbf{f}$, $\mathbf{d}$
+   to the image size.
+5. **Baseline** (with `timelapse=True`): one pass over the stack, estimating
+   each $b_i$ by the weighted median above.
 
 ## Faithful mode and extensions
 
