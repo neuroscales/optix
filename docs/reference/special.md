@@ -26,3 +26,4 @@ cancellation. See [Probability distributions](../concepts/distributions.md#numer
         - poisson_normal_logpdf
         - bessel_j0
         - bessel_j1
+        - bessel_j012
