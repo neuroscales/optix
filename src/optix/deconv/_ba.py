@@ -174,8 +174,6 @@ class BiggsAndrews(RichardsonLucy):
         n_iter: int | None = None,
         alpha: float | None = None,
         max_iter: int | None = None,
-        background: float | Tensor | None = None,
-        poisson_gaussian: bool | None = None,
         damping: float | None = None,
         halo: int | Sequence[int] | None = None,
         block: Sequence[int | None] | None = None,
@@ -193,7 +191,7 @@ class BiggsAndrews(RichardsonLucy):
             See [`RichardsonLucy`][optix.deconv.RichardsonLucy]. `alpha`
             is the level of the χ² stopping test, not the acceleration
             parameter αₖ.
-        background, poisson_gaussian, damping, halo, block
+        damping, halo, block
             See [`RichardsonLucy`][optix.deconv.RichardsonLucy].
         alpha_scope : {"global", "block", "auto"}
             Pixels over which the sums of the acceleration parameter αₖ
@@ -214,8 +212,6 @@ class BiggsAndrews(RichardsonLucy):
             n_iter=n_iter,
             alpha=alpha,
             max_iter=max_iter,
-            background=background,
-            poisson_gaussian=poisson_gaussian,
             damping=damping,
             halo=halo,
             block=block,
@@ -355,8 +351,7 @@ def biggs_andrews(
         Axis roles.
     **options
         Options of [`BiggsAndrews`][optix.deconv.BiggsAndrews]
-        (`n_iter`, `alpha_scope`, `background`, `damping`, `halo`,
-        `faithful`, ...).
+        (`n_iter`, `alpha_scope`, `damping`, `halo`, `faithful`, ...).
 
     Returns
     -------

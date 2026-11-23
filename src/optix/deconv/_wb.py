@@ -405,7 +405,7 @@ class WienerButterworth(RichardsonLucy):
         set to 0 at each iteration, and a pixel set to 0 stays at 0.
 
     Boundaries, blocks, layouts and the extensions (camera model,
-    background, Poisson–Gaussian noise, damping) are as in
+    damping) are as in
     [`RichardsonLucy`][optix.deconv.RichardsonLucy]. The paper uses a
     periodic (circulant) model; here the object extends past the image,
     and on the margin of that domain (outside the image) the matched
@@ -506,8 +506,6 @@ class WienerButterworth(RichardsonLucy):
         "chi2_stop": False,
         "alpha": 0.05,
         "max_iter": 100,
-        "background": None,
-        "poisson_gaussian": False,
         "damping": 1.0,
         "halo": None,
         "block": None,
@@ -528,8 +526,6 @@ class WienerButterworth(RichardsonLucy):
         chi2_stop: bool | None = None,
         alpha: float | None = None,
         max_iter: int | None = None,
-        background: float | Tensor | None = None,
-        poisson_gaussian: bool | None = None,
         damping: float | None = None,
         halo: int | Sequence[int] | None = None,
         block: Sequence[int | None] | None = None,
@@ -563,8 +559,8 @@ class WienerButterworth(RichardsonLucy):
             [`psf_fwhm`][optix.deconv.utils.psf_fwhm].
         start : str
             Starting estimate: `"data"` (default, Methods), the measured
-            image (background removed) with values below 0.001 replaced
-            by 0.001; or `"uniform"` (extension), its mean.
+            image with values below 0.001 replaced by 0.001; or
+            `"uniform"` (extension), its mean.
         n_iter : int
             Number of iterations. Default (Table S2.1, iSIM): 1.
         chi2_stop : bool
@@ -576,7 +572,7 @@ class WienerButterworth(RichardsonLucy):
             0.05.
         max_iter : int
             Iteration cap of the χ² stopping rule. Default: 100.
-        background, poisson_gaussian, damping, halo, block
+        damping, halo, block
             Extensions and blocking, as in
             [`RichardsonLucy`][optix.deconv.RichardsonLucy]. The halo is
             at least the kernel support K' (default: twice).
@@ -670,23 +666,22 @@ class WienerButterworth(RichardsonLucy):
         self,
         blk: _Block,
         op: PaddedConvolution,
-        level: float,
+        start: float,
         trace: dict | None = None,
     ) -> tuple[Tensor, int]:
         opts = self.options
-        start: float | Tensor = level
+        init: float | Tensor = start
         if opts["start"] == "data":
-            obj = (blk.data - blk.background).clamp(min=_START_FLOOR)
-            start = op.pad(obj - level) + level
+            obj = blk.data.clamp(min=_START_FLOOR)
+            init = op.pad(obj - start) + start
         chi2 = bool(opts["chi2_stop"])
         return rl_block(
             blk.data,
             op,
-            start,
+            init,
             n_iter=None if chi2 else int(opts["n_iter"]),
             alpha=float(opts["alpha"]),
             max_iter=int(opts["max_iter"]),
-            background=blk.background,
             damping=float(opts["damping"]),
             back=self._back(op),
             accelerate=self._accelerate,

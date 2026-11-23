@@ -21,3 +21,5 @@ cancellation. See [Probability distributions](../concepts/distributions.md#numer
         - kl_dirichlet
         - kl_normal
         - clipped_normal_moments
+        - poisson_normal_mean
+        - poisson_normal_logpdf

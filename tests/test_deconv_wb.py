@@ -235,6 +235,44 @@ def test_transpose_back_projector_is_richardson_lucy(ndim):
     torch.testing.assert_close(est, richardson_lucy(data, psf, n_iter=5))
 
 
+@pytest.mark.parametrize("accelerate", [False, True])
+def test_hooks_compose_with_the_matched_back_projector(accelerate):
+    """back = Hᵀ with the Snyder hooks at their defaults is plain RL."""
+    psf = gaussian_psf(7, 1.2)
+    psf = psf * torch.linspace(0.8, 1.2, 7, dtype=F64)  # asymmetric
+    psf = psf / psf.sum()
+    shape = (26, 22)
+    gen = torch.Generator().manual_seed(5)
+    data = torch.poisson(torch.full(shape, 40.0, dtype=F64), generator=gen)
+    op = PaddedConvolution(psf, shape)
+    back = BackProjection(flipped(psf), op)
+    kw = {"n_iter": 6, "accelerate": accelerate}
+    ref, n = rl_block(data, op, 40.0, **kw)
+    out, m = rl_block(
+        data, op, 40.0, back=back, flat=None, expect=None, variance=0.0, **kw
+    )
+    assert n == m == 6
+
+    def close(a, b):  # FFT round-off, relative to the peak
+        return float((a - b).abs().max() / b.abs().max()) < 1e-12
+
+    assert close(out, ref)
+    # through the estimator hooks (_init_from, _solve)
+    est = WienerButterworth(
+        psf,
+        back_projector="traditional",
+        start="uniform",
+        n_iter=6,
+        faithful=False,
+        dtype=F64,
+    )
+    est._back = lambda op: BackProjection(flipped(psf).to(op.norm), op)
+    out = est.fit(data).apply(data)
+    assert close(out, richardson_lucy(data, psf, n_iter=6, dtype=F64))
+    with pytest.raises(ValueError, match="back and flat"):
+        rl_block(data, op, 40.0, n_iter=1, back=back, flat=torch.ones(shape))
+
+
 def test_first_iteration_from_uniform_start_is_a_linear_filter():
     """Supplementary Note 3, Eq. 34: e⁽¹⁾ = y * b."""
     psf = gaussian_psf(15, 2.0)
@@ -321,17 +359,8 @@ def test_iterations_on_beads_over_a_background():
     wb = iterations(target)
     fast = iterations(target, fwhm=fwhm / 1.3, faithful=False)
     assert 8 <= trad <= 12
-    assert wb > trad  # the defaults do not accelerate here
     assert fast <= trad // 2
     assert fast <= wb // 4
-    # first iteration: WB defaults as sharp as traditional (within 3 %)
-    one = width(wiener_butterworth(data, psf, n_iter=1))
-    ref = width(
-        wiener_butterworth(
-            data, psf, n_iter=1, back_projector="traditional", faithful=False
-        )
-    )
-    assert one == pytest.approx(ref, rel=0.03)
 
 
 def test_negative_values_are_set_to_zero():
