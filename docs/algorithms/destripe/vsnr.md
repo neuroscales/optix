@@ -13,7 +13,7 @@
 [Fehrenbach, Weiss and Lorenzo (2012)](https://doi.org/10.1109/TIP.2012.2206037),
 removes structured noise from images, such as the stripes of light-sheet
 microscopy, scanning electron microscopy or FIB-nanotomography. The noise is
-described by a few known patterns $\boldsymbol{\psi}_i$ (a line, an elongated
+described by a few known patterns $\mathbf{k}_i$ (a line, an elongated
 Gaussian, a Dirac for white noise) that appear at random positions and with
 random amplitudes. The method finds the positions and amplitudes that make the
 rest of the image as smooth as possible, in the sense of total variation, and
@@ -50,12 +50,12 @@ itself to the noises obtained by convolving white noise with a pattern
     $$
     \mathbf{y} = \mathbf{x} + \mathbf{s},
     \qquad
-    \mathbf{s} = \sum_{i=1}^{m} \boldsymbol{\lambda}_i * \boldsymbol{\psi}_i ,
+    \mathbf{s} = \sum_{i=1}^{m} \boldsymbol{\lambda}_i * \mathbf{k}_i ,
     $$
 
     a frame $\mathbf{y}$ of $P$ pixels is the sum of the stripe-free image
     $\mathbf{x}$ and a stationary noise $\mathbf{s}$. The noise is made of $m$
-    known patterns $\boldsymbol{\psi}_i$, each convolved (with periodic
+    known patterns $\mathbf{k}_i$, each convolved (with periodic
     boundaries) with an unknown white noise $\boldsymbol{\lambda}_i$, one value
     per pixel.
 
@@ -76,7 +76,7 @@ itself to the noises obtained by convolving white noise with a pattern
 | $\mathbf{y}$ (data) | $u_0$ |
 | $\mathbf{x}$ (stripe-free) | $u$ |
 | $\mathbf{s}$ (stripes, stationary noise) | $b$ |
-| $\boldsymbol{\psi}_i$ (pattern) | $\psi_i$ |
+| $\mathbf{k}_i$ (pattern, kernel) | $\psi_i$ |
 | $\boldsymbol{\lambda}_i$ (white noise) | $\lambda_i$ |
 | $P$ (pixels) | $n = n_x n_y$ |
 | $m$ (patterns) | $m$ |
@@ -92,7 +92,7 @@ noise is a set of stripes that run over the whole frame, with independent
 amplitudes (Section VI-A). With a Dirac as a second pattern, white noise is
 removed as well. Shorter or thicker patterns give stripes of finite extent.
 
-The patterns are $\boldsymbol{\psi}_i$ (the paper's $\psi_i$), kernels centred on
+The patterns are $\mathbf{k}_i$ (the paper's $\psi_i$, not to be confused with the digamma function), kernels centred on
 their middle pixel. [`dirac`][optix.destripe.utils.dirac],
 [`line`][optix.destripe.utils.line] and
 [`gaussian_stripe`][optix.destripe.utils.gaussian_stripe] build the ones of
@@ -101,7 +101,7 @@ the paper:
 === "optix"
 
     $$
-    \boldsymbol{\psi}(\mathbf{r}) = \exp\!\left(
+    \mathbf{k}(\mathbf{r}) = \exp\!\left(
     -\frac{r_1'^2}{\sigma_1^2} - \frac{r_2'^2}{\sigma_2^2}\right),
     \quad
     \begin{aligned}
@@ -127,10 +127,25 @@ the paper:
     $$
 
 With $\theta = 0$, $\sigma_2 > \sigma_1$ gives stripes along the second axis and
-$\sigma_1 > \sigma_2$ stripes along the first, the stripe axis. The paper uses
-such an anisotropic Gaussian (Section III-B) and, in its experiments on real
-images, a Dirac and an anisotropic Gabor filter oriented along the stripes
-(Section VI-B); the Gabor filter is not provided, but any kernel can be passed.
+$\sigma_1 > \sigma_2$ stripes along the first, the stripe axis; $\theta$ is in
+degrees in `gaussian_stripe`, as the direction of the stripes is in the other
+destriping pages. `gaussian_stripe` is the
+filter of Section III-B. It is not the filter of the experiments on real images,
+which use a Dirac and an anisotropic Gabor filter oriented along the stripes
+(Section VI-B): the paper gives neither a formula nor parameters for the Gabor
+filter, and optix has no helper for it. Any kernel can be passed in `filters`;
+a Gabor-like kernel for stripes along the first axis is a stripe Gaussian times
+a cosine across the stripes, whose period is to be chosen from the data:
+
+```pycon
+>>> import torch
+>>> from optix.destripe.utils import gaussian_stripe
+>>> r2 = (torch.arange(65) - 65 // 2)[None, :]
+>>> envelope = gaussian_stripe((65, 65), (20.0, 4.0))
+>>> gabor = envelope * torch.cos(2 * torch.pi * r2 / 8)
+>>> gabor.shape
+torch.Size([65, 65])
+```
 
 ## Probabilistic model
 
@@ -146,7 +161,7 @@ posteriori estimate of the noise components minimises
     $$
     P(\boldsymbol{\lambda}) =
     \Bigl\lVert \nabla\Bigl(\mathbf{y} - \sum_{i=1}^m
-    \boldsymbol{\lambda}_i * \boldsymbol{\psi}_i\Bigr)\Bigr\rVert_{2,1}^{\epsilon}
+    \boldsymbol{\lambda}_i * \mathbf{k}_i\Bigr)\Bigr\rVert_{2,1}^{\epsilon}
     + \sum_{i=1}^m \phi_i(\boldsymbol{\lambda}_i),
     \qquad
     \lVert \boldsymbol{\lambda} \rVert_\infty \le C,
@@ -165,7 +180,7 @@ posteriori estimate of the noise components minimises
     where $\mathbf{g}_p \in \mathbb{R}^2$ is the gradient at pixel $p$ and $\nabla$
     the forward differences along the two axes, zero at the last row and
     column. The estimates are $\hat{\mathbf{s}} = \sum_i \hat{\boldsymbol{\lambda}}_i
-    * \boldsymbol{\psi}_i$ and $\hat{\mathbf{x}} = \mathbf{y} - \hat{\mathbf{s}}$.
+    * \mathbf{k}_i$ and $\hat{\mathbf{x}} = \mathbf{y} - \hat{\mathbf{s}}$.
     For $\epsilon = 0$, $h_\epsilon(t) = t$ and the prior is the isotropic total
     variation $\lVert \nabla \mathbf{x} \rVert_{2,1}$.
 
@@ -199,24 +214,28 @@ Three priors are available for the white noises (Section III-C):
 Here $\iota_S$ is the indicator of a set $S$: $0$ inside, $\infty$ outside. A
 larger $\alpha_i$ makes the $i$-th component smaller and sparser (`"l1"`),
 smaller (`"l2"`) or more bounded (`"linf"`). The weight depends on the amplitude
-of the pattern $\boldsymbol{\psi}_i$: a pattern that is scaled by a factor needs
+of the pattern $\mathbf{k}_i$: a pattern that is scaled by a factor needs
 a weight scaled by the same factor to give the same result. The paper rescales
 patterns and weights (Section VI-C) and leaves the choice to the user.
 
-$\epsilon > 0$ smooths the total variation. The standard total variation is
-$\epsilon = 0$, and $\epsilon \to \infty$ tends to a squared $\ell^2$ norm of
-the gradient (Tikhonov regularisation). A positive $\epsilon$ makes the scheme
-converge faster, and can give better results for some applications (Section
-IV-B).
+$\epsilon > 0$ smooths the total variation: the gradient magnitudes below
+$\epsilon$ are penalised quadratically, by $t^2 / (2\epsilon)$, and the larger
+ones linearly, as in the total variation, which is $\epsilon = 0$. When
+$\epsilon$ exceeds every gradient magnitude, the prior is a Tikhonov term
+$\tfrac{1}{2\epsilon} \lVert \nabla \mathbf{x} \rVert^2$, whose weight decreases
+as $\epsilon$ grows. A positive $\epsilon$ makes the scheme converge faster, and
+can give better results for some applications (Section IV-B).
 
 ## Inference / derivation
 
-The problem has no closed form, except for the Tikhonov case ($\ell^2$ priors
-and large $\epsilon$), so it is solved to a given precision by the primal–dual
+The problem has a closed form only in the Tikhonov case ($\ell^2$ priors and
+$\epsilon$ larger than every gradient magnitude at the solution, so that the
+prior is quadratic), where it reduces to small linear systems solved by FFT
+(Section V). In general it is solved to a given precision by the primal–dual
 algorithm of [Chambolle and Pock (2011)](https://doi.org/10.1007/s10851-010-0251-1)
 (Section V). Writing $\mathbf{A}$ for the linear operator
 $\boldsymbol{\lambda} \mapsto \nabla\sum_i \boldsymbol{\lambda}_i *
-\boldsymbol{\psi}_i$, $F(\mathbf{g}) = \lVert \nabla \mathbf{y} - \mathbf{g}
+\mathbf{k}_i$, $F(\mathbf{g}) = \lVert \nabla \mathbf{y} - \mathbf{g}
 \rVert_{2,1}^{\epsilon}$ and $G(\boldsymbol{\lambda}) = \sum_i
 \phi_i(\boldsymbol{\lambda}_i) + \iota_{\lVert \boldsymbol{\lambda}
 \rVert_\infty \le C}$, the problem is $\min_{\boldsymbol{\lambda}}
@@ -299,15 +318,20 @@ G^*(-\mathbf{A}^\top\mathbf{q}_k)$, whose difference is the duality gap
 $\Delta(\boldsymbol{\lambda}_k, \mathbf{q}_k) = P - D$ (Eq. 15), an upper bound on
 $P(\boldsymbol{\lambda}_k) - P(\boldsymbol{\lambda}^*)$. The iterations stop when
 the gap has fallen to a fraction `tol` of its initial value, with the paper's
-$10^{-3}$ (Section VI-C).
+$10^{-3}$ (Section VI-C). For the components with an `"l1"` prior, $D$ is
+evaluated at the dual-feasible point $\mathbf{q}_k / \kappa$, with
+$\kappa = \max(1, \max_i \lVert (\mathbf{A}^\top \mathbf{q}_k)_i \rVert_\infty /
+\alpha_i)$ over those components, and the conjugate of $\phi_i$ alone, which is
+then zero. This is still an upper bound on $P(\boldsymbol{\lambda}_k) -
+P(\boldsymbol{\lambda}^*)$, and it does not depend on $C$.
 
 **Step sizes.** Convergence needs $\sigma_0 \tau_0 L^2 < 1$, with
 $L = \lVert\lVert \mathbf{A} \rVert\rVert$ the norm of $\mathbf{A}$. With periodic
 differences, it is computed exactly by the FFT (Appendix B):
-$L^2 = \max_{\mathbf{k}} \Sigma(\mathbf{k})
-(\lvert\hat d_1(\mathbf{k})\rvert^2 + \lvert\hat d_2(\mathbf{k})\rvert^2)$, with
-$\Sigma = \sum_i \lvert\hat{\psi}_i\rvert^2$ and
-$\lvert\hat d_j(\mathbf{k})\rvert^2 = 4\sin^2(\pi k_j / n_j)$ the transfer
+$L^2 = \max_{\boldsymbol{\omega}} \Sigma(\boldsymbol{\omega})
+(\lvert\hat d_1(\boldsymbol{\omega})\rvert^2 + \lvert\hat d_2(\boldsymbol{\omega})\rvert^2)$, with
+$\Sigma = \sum_i \lvert\hat{\mathbf{k}}_i\rvert^2$ and
+$\lvert\hat d_j(\boldsymbol{\omega})\rvert^2 = 4\sin^2(\pi \omega_j / n_j)$ the transfer
 function of a forward difference. An over-estimate of $L$ slows the scheme down
 and an under-estimate makes it diverge (Section VI-C). The rules of the paper
 (Algorithm 2) depend on the strong convexity of $F^*$ (parameter $\epsilon$) and
@@ -349,7 +373,7 @@ value is faithful, and `faithful=False` gives the same result.
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
-| `filters` | patterns $\boldsymbol{\psi}_i$, `(h, w)`, `(m, h, w)` or a list of kernels up to the frame size | required | required |
+| `filters` | patterns $\mathbf{k}_i$, `(h, w)`, `(m, h, w)` or a list of kernels up to the frame size | required | required |
 | `alpha` | weights $\alpha_i > 0$, one value or one per filter | required | required |
 | `prior` | `"l1"`, `"l2"` or `"linf"`, one value or one per filter | `"l1"` | `"l1"` |
 | `eps` | Huber parameter $\epsilon \ge 0$ | 0 | 0 |
@@ -379,10 +403,12 @@ value is faithful, and `faithful=False` gives the same result.
   P(\boldsymbol{\lambda}^*) \le P(\mathbf{0})$, which gives, per frame, the
   maximum over $i$ of $P(\mathbf{0})/\alpha_i$ (`"l1"`), $\sqrt{2P(\mathbf{0})/\alpha_i}$
   (`"l2"`) or $\alpha_i$ (`"linf"`). The box is then inactive at the minimiser.
-  With `"l1"` priors this bound is loose, and the term
-  $C \sum \max(0, \lvert\eta_i\rvert - \alpha_i)$ of $G^*$ can keep the duality
-  gap above `tol` until `max_iter`: a smaller `bound`, still above
-  $\lVert \boldsymbol{\lambda}^* \rVert_\infty$, stops earlier.
+  With `"l1"` priors this bound is loose, but it does not enter the stopping
+  rule (see above): the gap does not depend on $C$.
+- **Stopping at `max_iter`.** A `RuntimeWarning` is raised when some frames reach
+  `max_iter` before the gap has fallen to `tol` (not when `tol=0` or
+  `max_iter=0`). With `"l1"` priors and $\epsilon = 0$, the rate is only
+  $O(1/k)$ (Proposition 5.3), so this is common.
 - **Iteration cap.** `max_iter` is not in the paper, which stops on the gap only.
 - **Boundaries and norm.** The convolutions are periodic (as in the paper). The
   differences are the forward ones of Section II, zero at the last row and
@@ -404,9 +430,10 @@ Frames are independent: they are read in batches sized from the memory budget
 (per-frame streaming), denoised and written back, so arrays larger than memory
 (`zarr`, memmap) can be processed, and `apply` works in place. The batch is
 solved at once, and a frame leaves the iterations when its gap is below `tol`.
-The working memory is a few copies of the batch and, for the $m$ components, $m$
-copies of it in the primal and the adjoint variables (the batch size accounts for
-it). The cost is $2m + 2$ FFTs of the frame size per iteration; the paper reports
+The working memory is $16 + 9m$ buffers of the size of the chunk, with $m$ the
+number of patterns: the iterates, their updated copies, the spectra of the
+convolutions and the temporaries of the duality gap. The batch size accounts for
+it. The cost is $2m + 2$ FFTs of the frame size per iteration; the paper reports
 about 5 seconds for a 1024 × 1024 frame and one pattern on a 2012 laptop. The
 patterns must fit in a frame; a pattern as long as the frame (stripes over the
 whole frame) is a valid choice.
@@ -422,8 +449,8 @@ whole frame) is a valid choice.
 >>> x = torch.zeros(64, 64)
 >>> x[16:48, 16:48] = 100.0
 >>> y = (x + 10 * torch.randn(1, 64))[None]  # (frames, H, W)
->>> # 2. One pattern: a line as long as the frame, along the first axis.
->>> filters = line((64, 64), axis=0)
+>>> # 2. One pattern: a line as long as the frame, along the first axis (the default).
+>>> filters = line((64, 64))
 >>> x_hat = VSNR(filters, alpha=10.0, prior="l2").fit(y).apply(y)
 >>> # 3. The error before and after.
 >>> print(f"{float((y - x).std()):.2f} {float((x_hat - x).std()):.2f}")
@@ -434,16 +461,18 @@ whole frame) is a valid choice.
 170 9.6e-04
 ```
 
-The `"l1"` prior suits sparse stripes but converges more slowly with the default
-box bound (see above): give a `bound` a few times larger than the expected
-amplitude of the stripes, or raise `max_iter`.
+The default prior, `"l1"`, suits sparse stripes, but with $\epsilon = 0$ its
+convergence rate is only $O(1/k)$: it often reaches `max_iter` before the gap
+falls to `tol`, and a `RuntimeWarning` says so. Check the gap with `history=True`, raise
+`max_iter`, or use `"l2"` (as above) or `eps > 0`, which converge faster.
 
 Common variations: [`vsnr_solve`][optix.destripe.utils.vsnr_solve] with
 `history=True` returns the noise, its components and the primal value and the
 duality gap of every iteration, to check the convergence; `axis` of
-[`line`][optix.destripe.utils.line] and the angle of
-[`gaussian_stripe`][optix.destripe.utils.gaussian_stripe] set the stripe
-direction; `prior="l2"` and `eps > 0` use the accelerated schemes of
+[`line`][optix.destripe.utils.line] (a frame position, default $-2$, the first
+spatial axis, or a layout label with `layout=`) and the `angle` of
+[`gaussian_stripe`][optix.destripe.utils.gaussian_stripe] (in degrees) set the
+stripe direction; `prior="l2"` and `eps > 0` use the accelerated schemes of
 Algorithm 2; and the function `optix.destripe.vsnr(tensor, filters, alpha=...)`
 works on a tensor `(..., H, W)` without a layout. See the
 [API reference](../../reference/destripe.md).
