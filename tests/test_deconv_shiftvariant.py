@@ -689,8 +689,8 @@ def test_nagy_oleary_float32_matches_float64(ndim, precondition):
     rel = float(
         (out[torch.float32].double() - out[F64]).norm() / out[F64].norm()
     )
-    # CG amplifies float32 rounding over the iterations: ~3e-7 locally, but
-    # 1.5e-4 on CI (3-D plain CG, other BLAS); 1e-3 still catches dtype bugs
+    # CG amplifies float32 rounding over the iterations: ~3e-7 locally,
+    # 1.5e-4 on CI (3-D plain CG); 1e-3 still catches dtype bugs
     assert rel < 1e-3
     # cgls itself, on the operator in both precisions
     f32, _ = cgls(
