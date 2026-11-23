@@ -3,7 +3,8 @@
 Richardson–Lucy for Poisson counts, its acceleration by Biggs & Andrews
 (1997), its extension by Snyder et al. (1993) to CCD data (flat field,
 background counts, read noise) and its total-variation regularisation by
-Dey et al. (2006); the linear Wiener and Tikhonov filters.
+Dey et al. (2006); multiview deconvolution of registered views by
+Preibisch et al. (2014); the linear Wiener and Tikhonov filters.
 
 Building blocks (FFT convolution with padding, the Richardson–Lucy update,
 the Biggs–Andrews acceleration parameter, the back projectors) are in
@@ -13,6 +14,7 @@ the Biggs–Andrews acceleration parameter, the back projectors) are in
 from . import utils
 from ._ba import BiggsAndrews, biggs_andrews
 from ._linear import Tikhonov, Wiener, tikhonov, wiener
+from ._multiview import MultiviewRL, multiview_rl
 from ._rl import RichardsonLucy, richardson_lucy
 from ._rltv import RichardsonLucyTV, richardson_lucy_tv
 from ._snyder import Snyder
@@ -20,6 +22,7 @@ from ._wb import WienerButterworth, wiener_butterworth
 
 __all__ = [
     "BiggsAndrews",
+    "MultiviewRL",
     "RichardsonLucy",
     "RichardsonLucyTV",
     "Snyder",
@@ -27,6 +30,7 @@ __all__ = [
     "Wiener",
     "WienerButterworth",
     "biggs_andrews",
+    "multiview_rl",
     "richardson_lucy",
     "richardson_lucy_tv",
     "tikhonov",

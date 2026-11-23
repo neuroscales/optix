@@ -10,16 +10,19 @@ from ._linear import (
     linear_filter,
     smooth_periodic_extension,
 )
+from ._multiview import Multiview, compound_kernels
 from ._rl import biggs_andrews_alpha, chi2_probability, rl_block, rl_step
 from ._rltv import tv_curvature
 from ._wb import BackProjection, back_projector, kernel_shape, psf_fwhm
 
 __all__ = [
     "BackProjection",
+    "Multiview",
     "PaddedConvolution",
     "back_projector",
     "biggs_andrews_alpha",
     "chi2_probability",
+    "compound_kernels",
     "frequencies",
     "laplacian_power",
     "linear_filter",

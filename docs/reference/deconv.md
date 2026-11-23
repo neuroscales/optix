@@ -15,6 +15,7 @@ Deconvolution with a known point spread function.
         - Snyder
         - WienerButterworth
         - BiggsAndrews
+        - MultiviewRL
         - Wiener
         - Tikhonov
 
@@ -30,6 +31,7 @@ Deconvolution with a known point spread function.
         - richardson_lucy_tv
         - wiener_butterworth
         - biggs_andrews
+        - multiview_rl
         - wiener
         - tikhonov
 
@@ -60,3 +62,5 @@ Deconvolution with a known point spread function.
         - kernel_shape
         - BackProjection
         - psf_fwhm
+        - Multiview
+        - compound_kernels
