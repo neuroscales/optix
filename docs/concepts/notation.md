@@ -59,7 +59,7 @@ never `rₙ_k`.
 | $\mathbf{d}$ | dark field (additive, camera offset included) | ADU | `ShadingEstimate.dark` |
 | $\mathbf{s}_b$ | background profile, mean 1, when the background has its own profile | dimensionless | `ShadingEstimate.dark` ÷ its mean |
 | $\beta_i$, $\bar\beta$ | mean background intensity of frame $i$; its mean over frames | ADU | `KaskFlatField.background_level_` |
-| $\kappa$ | noise constant, local variance over local mean on the background | ADU | |
+| $\kappa_{\text{n}}$ | noise constant of a channel: local variance over local mean on the background; it equals the gain $g$ only when the offset $o$ is 0, and is $g\,(\bar y - o)/\bar y$ otherwise (written $\kappa$ in docstrings) | ADU | `meta["noise_constant"]` |
 | $b_i$, $\mathbf{b}$ | baseline of frame $i$; all baselines | ADU | `ShadingEstimate.baseline` |
 | $\lambda$ | expected number of photoelectrons | e⁻ | `signal` of `simulate_sensor` |
 | $n$ | actual number of photoelectrons (Poisson) | e⁻ | |
@@ -136,8 +136,8 @@ stray light. This is the reason why corrections never subtract both
 | $h$, $\ell$ | grid spacing; order of the energy $\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$ | `dct_bending(order=)` |
 | $\mathbf{A}$ | forward operator (blur) | |
 | $\mathbf{W}$ | pixel weights | |
-| $\gamma$ | regularisation coefficient of a smooth fit | `regularization` |
-| $\mathbf{L}_x$, $\mathbf{L}_y$ | second differences along $x$ and $y$ | |
+| $\lambda$ | weight of a regulariser (a subscript tells several apart: $\lambda_f$, $\lambda_d$); distinct from the photoelectron count by context | `regularization` |
+| $\mathbf{L}_x$, $\mathbf{L}_y$ | second-difference operators along $x$ and $y$ | |
 
 ## Morphology
 

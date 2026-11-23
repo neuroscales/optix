@@ -29,8 +29,8 @@ baseline that drifts frame to frame inside the flat field, use
 
 It returns a `ShadingEstimate` in `estimates["shading"]`, plus the background
 level of every fitted frame in `background_level_`. The random error of each
-profile, the numbers of images used and the mean background level are in
-`meta`.
+profile, the numbers of images used, the mean background level and the noise
+constant (`noise_constant`) are in `meta`.
 
 ## Image formation (optics)
 
@@ -83,7 +83,7 @@ restores the original background level.
 | $\mathbf{f}$ | $S_f$ (normalised $S_M$) | foreground profile, `flat` |
 | $\mathbf{s}_b$ | $S_b$ (normalised $S_A$) | background profile |
 | $\beta_i$, $\hat\beta_i$ | $B$, $\hat{B}$ | mean background intensity of frame $i$ |
-| $\bar\beta$ | | mean of $\beta_i$ over the fitted frames |
+| $\bar\beta$ | | mean of $\beta_i$ over the images used in the background fit |
 
 The estimate stores $\mathbf{f}$ in `flat` (`meta["flat_norm"] == "mean"`) and
 $\mathbf{d} = \bar\beta\,\mathbf{s}_b$ in `dark`, in ADU. Unlike the shading
@@ -103,10 +103,10 @@ The method has no likelihood. It rests on four assumptions:
 - **Poisson-like noise.** For a pure counting process,
   $\operatorname{var}(n) = \langle n \rangle$ (Eq. 4). The ratio of local
   variance to local mean, the *noise image*, is therefore a constant
-  $\kappa$ of the detection channel on the background, whatever the local
+  $\kappa_{\text{n}}$ of the detection channel on the background, whatever the local
   intensity, and much larger on objects.
 - **Smooth profiles.** Each profile is a smooth function of the position,
-  imposed on a $17 \times 16$ binned image by regularisation, or by a
+  imposed on a binned image ($17 \times 16$ in the paper) by regularisation, or by a
   fourth-order polynomial.
 - **Background present.** A frame is useful for the background profile only
   if at least 15 % of its pixels are background.
@@ -117,7 +117,7 @@ Smoothing is the minimisation, over the binned grid, of
 
     $$
     F(\mathbf{t}) = \sum_{i,j} (e_{ij} - t_{ij})^2
-    + \gamma \sum_{i,j} \bigl[(\mathbf{L}_x \mathbf{t})_{ij}^2 + (\mathbf{L}_y \mathbf{t})_{ij}^2\bigr]
+    + \lambda \sum_{i,j} \bigl[(\mathbf{L}_x \mathbf{t})_{ij}^2 + (\mathbf{L}_y \mathbf{t})_{ij}^2\bigr]
     $$
 
 === "Kask et al. 2016"
@@ -131,26 +131,47 @@ Smoothing is the minimisation, over the binned grid, of
 |---|---|---|
 | $\mathbf{e}$ | $E$ | measured binned image |
 | $\mathbf{t}$ | $T$ | smooth solution |
-| $\gamma$ | $R$ | regularisation coefficient |
-| $\mathbf{L}_x\mathbf{t}$, $\mathbf{L}_y\mathbf{t}$ | $Lxx$, $Lyy$ | second differences along $x$ and $y$ |
-| $\kappa$ | | noise constant, $\operatorname{var}/\text{mean}$ on the background |
+| $\lambda$ | $R$ | regularisation weight |
+| $\mathbf{L}_x$, $\mathbf{L}_y$ | $Lxx$, $Lyy$ (applied to $T$) | second-difference operators along $x$ and $y$ |
+| $\kappa_{\text{n}}$ | | noise constant of the channel, $\operatorname{var}/\text{mean}$ on the background (written $\kappa$ in the docstrings) |
 | $N$ (paper) | | number of pixels; $1/N$ does not change the minimiser |
+| $\bar{\mathbf{e}}$ | | mean over the images of $e_k/a_k$ |
+| $W_{ij}$ | | number of images that define bin $ij$ |
 
-The paper writes Eq. 5 for one image $E$. With many images, the code uses the
-**summed reading**: the deviation term is summed over the
-$K$ images of a set, each divided by its own level $a_k$ (image-to-image
-scale differences are not smoothing),
+The paper writes Eq. 5 for one image $E$ ("a noisy image") and says that
+"a data set is usually an image of the size 17 × 16", which can be read as
+a single combined image. With many images, the code uses the **summed
+reading** instead: the deviation term is summed over the $K$ images of a
+set, each divided by its own level $a_k$ (scale differences between images
+are not roughness),
 
 $$
 F(\mathbf{t}, \mathbf{a}) = \sum_{k=1}^{K} \sum_{i,j}
 \bigl(e_{kij}/a_k - t_{ij}\bigr)^2
-+ \gamma \sum_{i,j} \bigl[(\mathbf{L}_x \mathbf{t})_{ij}^2 + (\mathbf{L}_y \mathbf{t})_{ij}^2\bigr]
++ \lambda \sum_{i,j} \bigl[(\mathbf{L}_x \mathbf{t})_{ij}^2 + (\mathbf{L}_y \mathbf{t})_{ij}^2\bigr]
 \quad \text{s.t.}\ \bar{\mathbf{t}} = 1 ,
 $$
 
-summed over the pixels defined in each image (a bin without segmented pixels is
-undefined). This is a choice of interpretation, stated again under
+summed over the bins defined in each image (a bin without segmented pixel is
+undefined). Both readings are consistent with Eq. 5; this one is an
+interpretation, stated again under
 [Faithful mode](#faithful-mode-and-extensions).
+
+**Why the summed reading.** Let $\bar{\mathbf{e}}$ be the mean of the
+$e_k/a_k$ and $W_{ij}$ the number of images that define bin $ij$. Then the
+deviation term equals $\sum_{ij} W_{ij} (\bar e_{ij} - t_{ij})^2$ plus a
+constant, so the summed reading is a weighted fit of $\bar{\mathbf{e}}$ with
+weight $\lambda$ on the roughness. When every image defines every bin,
+$W_{ij} = K$ and this is the fit of $\bar{\mathbf{e}}$ with the coefficient
+$\lambda/K$. The noise in $\bar{\mathbf{e}}$ has variance $\sigma^2/K$, so the
+best $\lambda$ of the summed reading depends on the noise $\sigma^2$ of one
+image and not on $K$. This agrees with the paper, which fixes one value per
+profile for the whole study (0.2 and 20, "in the rest of this study") while
+the number of images ranges from about 10 to several hundred (Fig. 8), and
+which finds that "the optimal value of the regularization coefficient tends to
+be bigger for data sets with bigger noise" (Fig. 7). Fitting
+$\bar{\mathbf{e}}$ with a fixed $\lambda$ would smooth more and more as $K$
+grows.
 
 ## Inference / derivation
 
@@ -163,14 +184,19 @@ Profiles are estimated in one pass in this order:
       reference profile $\mathbf{p}$, which removes the contribution of the
       slope of the profile to the local variance. Its local variance over
       local mean in a $9 \times 9$ window, multiplied by $\mathbf{p}$, is
-      $\approx \kappa$ on the background. $\kappa$ is the mode of the
-      noise image.
+      $\approx \kappa_{\text{n}}$ on the background. The paper treats
+      $\kappa_{\text{n}}$ as a constant of the detection channel, estimated
+      from a series of images containing background; by default
+      (`kappa="series"`) it is one value per group, the median over the
+      frames of the mode of each frame's noise image, a running median while
+      streaming (an optix choice). A float sets it directly; `"per-frame"`
+      takes the mode of each frame (an extension).
     - *Background pixels* are those where the noise image is below an upper
-      threshold in units of $\kappa$ and where a local-intensity threshold
+      threshold in units of $\kappa_{\text{n}}$ and where a local-intensity threshold
       removes flat bright regions inside objects.
     - *Foreground pixels* are those above, in each block of the binning grid,
       the block mean plus $5$ expected standard deviations
-      $\sqrt{\kappa \cdot \text{mean}}$, without looking at neighbouring
+      $\sqrt{\kappa_{\text{n}} \cdot \text{mean}}$, without looking at neighbouring
       blocks.
 2. **Bin** each segmented image by block averaging into $17 \times 16$
    images.
@@ -181,16 +207,23 @@ Profiles are estimated in one pass in this order:
 4. **Foreground profile.** Take consecutive sets of 16 binned foreground
    images, filter outliers in each and average it; subtract the background
    $\bar\beta\,\mathbf{s}_b$ from each average; fit the averages globally.
-5. **Quality control.** Split the data into subsets, fit each, and take the
-   spread of their profiles as the range of the random error. A profile
+5. **Quality control.** Split the data into subsets, fit each (with $\lambda$
+   scaled by the share $n_s/n$ of the images of the subset, so that it smooths
+   as much as the full fit), and take the spread of their profiles as the
+   range of the random error. A profile
    above its limit is replaced by 1, with a warning, and the foreground
    profile is only estimated when the background profile passes.
 
-Each global fit alternates the per-image levels $a_k$ (least squares) and the
-profile $\mathbf{t}$ (a smooth fit of the mean normalised image, weighted by
-the number of images that define each bin) until the profile changes by less
-than $10^{-9}$, normalising $\mathbf{t}$ to mean 1. That fixes the scale
-ambiguity between $a_k$ and $\mathbf{t}$. Profiles go from bins to pixels by
+Each global fit alternates two steps until the profile changes by less than
+$10^{-9}$. It is not coordinate descent on one objective, and the paper does
+not give the objective of the global fit:
+
+- *Levels.* $a_k = \arg\min_{a} \sum_{ij} (e_{kij} - a\,t_{ij})^2$, by least
+  squares over the defined bins.
+- *Profile.* The Eq. 5 smooth fit $\mathbf{t}$ of $\bar{\mathbf{e}}$, with
+  weights $W_{ij}$, renormalised to mean 1. That fixes the scale ambiguity
+  between $a_k$ and $\mathbf{t}$.
+ Profiles go from bins to pixels by
 linear interpolation between bin centres (the polynomial is evaluated at the
 pixels).
 
@@ -202,22 +235,24 @@ background pixels (the mean level of the fit if the frame has none).
 
 ```text
 Input: stack Y (frames of H × W), per group of frames
-Bins (16, 17); window 9; noise threshold 1.5 κ; intensity threshold 1.25
+Bins (16, 17); window 9; noise threshold 1.5 κn; intensity threshold 1.25
+κn: median over the frames of the mode of the noise image (running median)
 For each frame y, in storage order:
     profile p = current background profile (or 1 - c ρ², c minimising noise)
-    noise image = p · var(y/p) / mean(y/p) over a 9 × 9 window; κ = its mode
-    background mask = noise < 1.5 κ and local level < 1.25 × median level
-    foreground mask = y > block mean + 5 √(κ · block mean)
+    noise image = p · var(y/p) / mean(y/p) over a 9 × 9 window; mode → κn
+    background mask = noise < 1.5 κn and local level < 1.25 × median level
+    foreground mask = y > block mean + 5 √(κn · block mean)
     bin y over each mask into (16, 17) images; keep only these
     if ≥ 15 % background: count the frame for the background profile
     after 10, 20, 40, ... background frames: refit the provisional p
-Background: outlier-filtered global fit (γ = 0.2), repeated until no outlier
+Background: outlier-filtered global fit (λ = 0.2), repeated until no outlier
     (outlier: mean square deviation > 3 × median over the images)
 Levels: β_i = Σ background / Σ (s_b over background bins), per frame
+    β̄ = mean of β_i over the images used in the background fit
 Foreground: for each set of 16 binned images: filter outliers, average,
-    subtract β̄ s_b; fit all averages globally (γ = 20)
-Random error: 4 contiguous subsets; background ≤ 2 %, foreground ≤ 4 %
-Return flat = f, dark = β̄ s_b, background_level_ = β_i
+    subtract β̄ s_b; fit all averages globally (λ = 20)
+Random error: 4 contiguous subsets, λ scaled by n_s / n; background ≤ 2 %, foreground ≤ 4 %
+Return flat = f, dark = β̄ s_b, background_level_ = β_i, κn
 ```
 
 ## Faithful mode and extensions
@@ -229,7 +264,8 @@ choose between variants or set limits described in the paper.
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
 | `model` | profile model: image regularisation (Eq. 5) or fourth-order polynomial | `"regularization"` | `"regularization"` |
-| `regularization` | coefficient $\gamma$ of Eq. 5 for the (background, foreground) profile | `(0.2, 20)` | `(0.2, 20)` |
+| `regularization` | weight $\lambda$ of Eq. 5 for the (background, foreground) profile | `(0.2, 20)` | `(0.2, 20)` |
+| `kappa` | noise constant: `"series"` (one value per group), a float, or `"per-frame"` (extension) | `"series"` | `"series"` |
 | `max_error` | limits on the range of the random error (None disables) | `(0.02, 0.04)` | same |
 
 ### The polynomial model
@@ -255,14 +291,18 @@ With `model="polynomial"`, `regularization` is not used.
 
 - **Eq. 5 with many images (summed reading).** Eq. 5 is written for one
   image. Here the deviation term is summed over the $K$ images of a set, each
-  divided by its level. Since
-  $\sum_k (e_k/a_k - \mathbf{t})^2 = K(\bar{\mathbf{e}} - \mathbf{t})^2 + \text{const}$, this
-  equals fitting the mean normalised image with the coefficient $\gamma/K$.
-  The other reading, fitting that mean image with the coefficient
-  $\gamma$ itself, smooths $K$ times as strongly for the same $\gamma$. The
-  values $0.2$ and $20$ were given for the paper's own implementation, whose
-  convention is not stated, so `regularization` should be read with this
-  choice in mind.
+  divided by its level, which is a weighted fit of $\bar{\mathbf{e}}$ (the
+  mean of $e_k/a_k$) with weights $W_{ij}$; it equals the fit with
+  coefficient $\lambda/K$ only when every image defines every bin. The other
+  reading, fitting one combined image with the coefficient $\lambda$ itself,
+  smooths $K$ times as strongly for the same $\lambda$. The reasons for the
+  choice are given [above](#probabilistic-model). It is not a keyword.
+- **Global fit.** The paper does not give the objective of the global fit;
+  the alternation of levels and smooth fit described above is an optix choice.
+- **Noise constant.** The paper takes $\kappa_{\text{n}}$ as a constant of
+  the detection channel, estimated from a series of images. `kappa="series"`
+  does so with the median of the per-frame modes (a running median while
+  streaming), which are optix choices; `kappa="per-frame"` is an extension.
 - **Second differences** are taken between neighbouring bins, at interior bins
   only, on the binned grid.
 - **Stopping.** The paper stops collecting images when the random error is
@@ -271,14 +311,21 @@ With `model="polynomial"`, `regularization` is not used.
 - **Foreground selection.** The block threshold (mean + 5 standard
   deviations) excludes dim objects in dark corners, which biases the
   foreground profile there; this is a property of the paper's segmentation.
+  The authors report that, in their tests on synthetic images with a known
+  profile and objects of varying intensity, "distortions of the estimated
+  profile are negligible"; the effect can matter for deep foreground profiles
+  or dim objects.
 - **Not implemented:** the method of overlapping fields is the authors'
   evaluation of the correction, which needs specially acquired images, not
   an estimation step.
 - Not specified in the paper, with their defaults: `noise_threshold=1.5`,
   `intensity_threshold=1.25`, `outlier_factor=3`, `subsets=4` (contiguous),
   `max_error` of the foreground (the paper gives 2 % as an example for the
-  background), the way $\kappa$ is taken (mode of the histogram of the
-  logarithm of the noise image), the curvatures tried for the initial
+  background), the mode of the histogram of the logarithm of the noise image as the
+  per-frame $\kappa_{\text{n}}$, the number of bins (the paper fixes the
+  block size, 80 × 64 or 64 × 64 pixels; `bins=(16, 17)` gives these blocks on
+  1360 × 1024 frames only, and $\lambda$ keeps its per-bin meaning on other
+  sizes), the curvatures tried for the initial
   profile ($c \in \{0, 0.05, \ldots, 0.6\}$), the refits of the provisional
   profile at 10, 20, 40, ... background frames, the mean-square-deviation
   statistic of the outlier filter, the handling of bins without segmented
@@ -288,7 +335,8 @@ With `model="polynomial"`, `regularization` is not used.
 
 The estimator is tagged `per-frame`. Frames are segmented one at a time, in
 storage order, and only their binned images are kept: the sums and the pixel
-counts of the background and of the foreground, $4hw$ values per frame.
+counts of the background and of the foreground, $4hw$ values per frame (the
+running median of $\kappa_{\text{n}}$ keeps one number per frame).
 Memory is therefore $O(N\,hw)$ for $N$ frames and $h \times w$ bins, not
 $O(N\,HW)$; only one batch of frames and its masks is in memory at a time. The
 provisional background profile is refitted at fixed counts of background
@@ -336,6 +384,8 @@ re-estimates $\beta_i$ per image.
 (torch.Size([128, 136]), 'per-frame')
 >>> kask.background_level_.shape
 torch.Size([96])
+>>> shading.meta["noise_constant"] > 0
+True
 >>> # 3. Compare the profiles to the truth (relative rms error).
 >>> bool((shading.flat / s_f - 1).square().mean().sqrt() < 0.05)
 True
