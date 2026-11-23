@@ -183,24 +183,6 @@ def poisson_normal_mean(
     `max_terms` terms. As σ → 0 the result tends to r − m, which is
     returned where σ² = 0.
 
-    Parameters
-    ----------
-    data : Tensor
-        Observations r.
-    rate : Tensor or float
-        Poisson mean μ ≥ 0.
-    variance : Tensor or float
-        Gaussian variance σ² ≥ 0.
-    offset : Tensor or float
-        Gaussian mean m.
-    max_terms : int
-        Number of series terms evaluated at once (memory bound).
-
-    Returns
-    -------
-    Tensor
-        E[n | r], in the dtype of `data` (broadcast shape).
-
     !!! references "References"
 
         1. Snyder DL, Hammoud AM, White RL. *Image recovery from data
@@ -224,6 +206,24 @@ def poisson_normal_mean(
               doi     = {10.1364/JOSAA.10.001014}
             }
             ```
+
+    Parameters
+    ----------
+    data : Tensor
+        Observations r.
+    rate : Tensor or float
+        Poisson mean μ ≥ 0.
+    variance : Tensor or float
+        Gaussian variance σ² ≥ 0.
+    offset : Tensor or float
+        Gaussian mean m.
+    max_terms : int
+        Number of series terms evaluated at once (memory bound).
+
+    Returns
+    -------
+    Tensor
+        E[n | r], in the dtype of `data` (broadcast shape).
     """
     data, rate, variance = _broadcast(data, rate, variance)
     dtype = data.dtype if data.is_floating_point() else torch.float64
