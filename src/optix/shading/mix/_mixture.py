@@ -862,7 +862,7 @@ class GammaMixture(Estimator):
               in ADU, of the shape of `data`.
             - `"foreground"`: p(z ≠ background | y), of the shape of
               `data`.
-            - `"classes"`: p(z = c | y) of each tissue class,
+            - `"classes"`: p(z = k | y) of each tissue class,
               `(K, *data.shape)`.
             - `"mean"`: E[u | y] (0 in the background), of the shape of
               `data`.

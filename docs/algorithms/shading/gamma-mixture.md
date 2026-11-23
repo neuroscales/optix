@@ -87,6 +87,11 @@ Data are quantised: each value stands for a uniform bin of width $\Delta$,
 which adds $\Delta^2/12$ to every squared residual and keeps the bound finite
 for pixels that repeat the same value.
 
+After fitting, `concentration_` holds the concentrations
+$\boldsymbol{\alpha}_i$ of $q(\boldsymbol{\pi}_i)$ for every training frame,
+and `apply(..., output="mean")` returns the posterior mean
+$\mathbb{E}[u \mid y]$ of the signal of each pixel (0 in the background).
+
 ## Inference / derivation
 
 Variational EM. The posterior is approximated by
