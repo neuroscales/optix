@@ -417,9 +417,13 @@ def test_global_alpha_out_of_core(tmp_path, monkeypatch):
     ref = mem.apply(data.float())
     assert kinds == ["disk", "memory"]
     torch.testing.assert_close(torch.from_numpy(dst[:]), ref)
+    # float32: block-wise and whole-image sums round differently, and the
+    # extrapolation amplifies it over 12 iterations (float64 agrees to
+    # 1e-10, see test_global_alpha_matches_whole_image_2d); same bound as the
+    # float32-vs-float64 check
     for i in range(2):
         whole = biggs_andrews(data[i].float(), psf, n_iter=12)
-        assert float((ref[i] - whole).abs().max() / whole.max()) < 1e-4
+        assert float((ref[i] - whole).abs().max() / whole.max()) < 1e-3
 
 
 class _Recorder:
