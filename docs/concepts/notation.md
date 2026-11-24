@@ -343,6 +343,31 @@ shared with the other destriping pages.
 | $\mathbf{w}_v$, $k$ | weight image of view $v$; sum of the weights over the views | `weights`, `weight_sum` |
 | $\rho_v$ | reach of view $v$ on the margin of the object domain | |
 
+## Optimisation
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $f_k$, $\mathbf{A}_k$ | function and circulant operator of term $k$ in $\sum_k f_k(\mathbf{A}_k\mathbf{x})$ | `Term.function`, `Term.operator` |
+| $\mathbf{z}_k$ | split variable, $\mathbf{z}_k = \mathbf{A}_k\mathbf{x}$ | `AdmmResult.splits` |
+| $\mathbf{u}_k$ | scaled dual variable of term $k$ | `AdmmResult.duals` |
+| $\rho$ | ADMM penalty parameter | `rho` |
+| $\nu$ | weight of a regulariser, $\nu\sum_j\lVert(\mathbf{H}\mathbf{x})_j\rVert_2$ | `Ikoma.nu` |
+| $t$ | step size of a proximity operator | `t` of `prox` |
+| $\mathrm{prox}_{tf}$, $\iota_{\mathcal{S}}$ | proximity operator of $f$; indicator function of a set ($0$ inside, $+\infty$ outside) | `optix.optim` |
+| $\mathbf{D}_a$, $\mathbf{D}_{ab}$ | forward difference along axis $a$; second difference $\mathbf{D}_a\mathbf{D}_b$ | `diff` |
+| $\nabla$, $\mathbf{H}$ | stacked first differences; Hessian, its distinct second differences with $\sqrt{2}$ on the off-diagonal ones | `Gradient`, `Hessian` |
+| $\mathcal{C}$, $\Omega$ | observed voxels, where the data term applies; voxels where the regulariser applies | `Term.region` |
+| $\tilde{\mathbf{y}}$, $\tilde\sigma^2$ | data in electrons, $(\mathbf{y} - \mathbf{d}) / (\mathbf{f}\,g)$; shifted-Poisson read-noise variance, $\sigma^2 / (g\,f)^2$ (pixel-wise, $f \equiv 1$ without a flat field) | `variance` of `ShiftedPoisson` |
+| $\kappa$ | constant of the default weight, $\nu = \kappa \sum\mathbf{h} / q_{99.9}(\tilde{y})$ (a scalar; unrelated to the eigenvalues $\kappa_j$ of the basis) | `Ikoma` default of `nu` |
+| $\xi_a$ | frequency along axis $a$, $k_a / N_a$ | `rfft_frequencies` |
+
+The shifted Poisson law of $\tilde{\mathbf{y}}$ is $\tilde{y} + \tilde\sigma^2 \sim
+\mathrm{Poisson}(\lambda + \tilde\sigma^2)$, which has the mean and variance of the
+Poisson-Gaussian model. The letters $\rho$ and $\nu$ have other meanings in the
+sections on morphology and distributions (the radius of a ball, the shape of a
+Gamma); the context always tells which is meant. $\mathbf{H}$ in bold is the
+Hessian operator, $H$ in plain type a count of rows.
+
 ## Indices and layouts
 
 | Symbol | Ranges over |

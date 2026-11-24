@@ -19,6 +19,7 @@ Deconvolution with a known point spread function.
         - MultiviewRL
         - Wiener
         - Tikhonov
+        - Ikoma
 
 ## Shift-variant PSF models
 
@@ -47,6 +48,7 @@ Deconvolution with a known point spread function.
         - multiview_rl
         - wiener
         - tikhonov
+        - ikoma
 
 ## Utilities
 

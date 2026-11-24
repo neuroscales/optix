@@ -18,7 +18,7 @@ from ..io import (
     prepare_out,
 )
 from ._lockstep import lockstep
-from ._rl import _OVERHEAD_ACCEL, RichardsonLucy
+from ._rl import RichardsonLucy
 from ._shiftvariant import ShiftVariantPSF
 
 __all__ = ["BiggsAndrews", "biggs_andrews"]
@@ -265,7 +265,7 @@ class BiggsAndrews(RichardsonLucy):
             data,
             self.options["block"],
             self._halo(psf),
-            overhead=self._overhead(psf, _OVERHEAD_ACCEL, data),
+            overhead=self._overhead_for(psf, data),
             contiguous=True,
             align=chunks_of(out),
             **backend,

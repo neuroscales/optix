@@ -13,6 +13,7 @@ nav = [
     "concepts/image-formation.md",
     "concepts/estimators.md",
     "concepts/distributions.md",
+    "concepts/optimisation.md",
   ]},
   {"Algorithms" = [
     "algorithms/index.md",
@@ -49,6 +50,7 @@ nav = [
       "algorithms/deconv/tikhonov.md",
       "algorithms/deconv/wiener-butterworth.md",
       "algorithms/deconv/multiview.md",
+      "algorithms/deconv/ikoma.md",
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
@@ -81,6 +83,7 @@ nav = [
     "reference/basis.md",
     "reference/background.md",
     "reference/special.md",
+    "reference/optim.md",
     "reference/sensor.md",
     "reference/shading.md",
     "reference/deconv.md",
