@@ -408,7 +408,11 @@ Common variations:
   [API reference](../../reference/destripe.md).
 
 The tests check the method on synthetic stripes from `optix.models`, where the
-truth is known; there are no stored fixtures from the authors' code.
+truth is known, and against stored results of the authors' Python code (commit
+`f1972aa`), which optix reproduces to rounding error in 2-D and 3-D (with
+$\rho_z = 1$); for negative angles the authors mirror the frame, which changes
+the discretisation of the total variation, so their results there match optix on
+the mirrored frame.
 
 ## References
 

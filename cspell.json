@@ -1081,7 +1081,12 @@
     "κᵐᵃᵈₙ",
     "κᵐᵃᵈₙᵢ",
     "σ̂ᵐᵃᵈ",
-    "σ̂ᵐᵃᵈᵢ"
+    "σ̂ᵐᵃᵈᵢ",
+    "noproj",
+    "resz",
+    "gsr",
+    "NiklasRottmayer",
+    "spec"
   ],
   "language": "en,en-GB",
   "ignorePaths": [
