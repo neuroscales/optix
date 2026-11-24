@@ -105,7 +105,7 @@ whole-image operator restricted to that block.
 ## Inference / derivation
 
 The object minimises the least-squares misfit, $\min_{\mathbf{x}} \|\mathbf{A}\mathbf{x} - \mathbf{y}\|^2$,
-by conjugate gradients on the normal equations (CGLS, Björck 1989), from $\mathbf{x}^{(0)} = \mathbf{0}$. The problem
+by conjugate gradients on the normal equations (CGLS, [Björck 1989](https://doi.org/10.1016/S1570-8659(05)80036-5)), from $\mathbf{x}^{(0)} = \mathbf{0}$. The problem
 is ill-posed and the noise enters the iterates after a few iterations, so
 regularisation is by stopping early
 ([§1](https://doi.org/10.1137/S106482759528507X)): the paper uses no stopping
@@ -133,7 +133,7 @@ conjugate transfer function).
 $\tilde{\mathbf{K}}_i$ be $\mathbf{K}_i$ restricted to region $i$ (Eq. 4.1). On a
 region of $\rho$ pixels, $\tilde{\mathbf{K}}_i$ is block Toeplitz with Toeplitz
 blocks; its closest block-circulant matrix with circulant blocks in the Frobenius
-norm (Chan and Olkin 1993, as in [§4.1](https://doi.org/10.1137/S106482759528507X)) has first column
+norm ([Chan and Olkin 1993](https://doi.org/10.1007/BF02149764), as in [§4.1](https://doi.org/10.1137/S106482759528507X)) has first column
 
 $$
 c_j = \sum_{\mathbf{d} \equiv j \,(\mathrm{mod}\ \rho)} \prod_a \left(1 - \frac{|d_a|}{\rho_a}\right) h(\mathbf{d}),
@@ -142,7 +142,7 @@ $$
 with $h(\mathbf{d})$ the PSF at offset $\mathbf{d}$ from its centre, and eigenvalues
 given by its DFT, one per frequency. The block-diagonal matrix $\mathbf{C}$ of these
 blocks has its eigenvalues of magnitude below $\tau$ replaced by 1, which gives
-$\mathbf{C}_\tau$ (after Hanke, Nagy and Plemmons 1993, as in [§4](https://doi.org/10.1137/S106482759528507X)): it matches
+$\mathbf{C}_\tau$ (after [Hanke, Nagy and Plemmons 1993](https://doi.org/10.1515/9783110857658.141), as in [§4](https://doi.org/10.1137/S106482759528507X)): it matches
 $\mathbf{A}$ on the large singular values (the signal subspace) and leaves the
 small ones (the noise subspace) unchanged. CGLS then runs on the right-preconditioned
 system, with $\mathbf{P} = \mathbf{C}_\tau^{-1}$ applied by one FFT pair per region:
@@ -336,11 +336,14 @@ instead: `RichardsonLucy(NagyOLearyPSF(psf, centres))`. See the
        [doi:10.1007/s11263-015-0817-x](https://doi.org/10.1007/s11263-015-0817-x)
     3. Chan TF, Olkin JA. *Preconditioners for Toeplitz-block systems.*
        Numer Algorithms **6**:89-101, 1993.
+       [doi:10.1007/BF02149764](https://doi.org/10.1007/BF02149764)
     4. Hanke M, Nagy JG, Plemmons R. *Preconditioned iterative regularization.*
        In: Reichel L, Ruttan A, Varga RS (eds) Numerical Linear Algebra, de Gruyter,
        141-163, 1993.
+       [doi:10.1515/9783110857658.141](https://doi.org/10.1515/9783110857658.141)
     5. Björck Å. *Least squares methods.* In: Ciarlet P, Lions J (eds) Handbook of
        Numerical Analysis, vol 1, Elsevier/North Holland, 1989.
+       [doi:10.1016/S1570-8659(05)80036-5](https://doi.org/10.1016/S1570-8659(05)80036-5)
 
     ??? quote "BibTeX"
 
@@ -372,6 +375,7 @@ instead: `RichardsonLucy(NagyOLearyPSF(psf, centres))`. See the
           volume  = {6},
           pages   = {89--101},
           year    = {1993},
+          doi     = {10.1007/BF02149764},
         }
         @incollection{hanke1993preconditioned,
           author    = {Hanke, Martin and Nagy, James G. and Plemmons, Robert},
@@ -382,6 +386,7 @@ instead: `RichardsonLucy(NagyOLearyPSF(psf, centres))`. See the
           address   = {Berlin},
           pages     = {141--163},
           year      = {1993},
+          doi       = {10.1515/9783110857658.141},
         }
         @incollection{bjorck1989least,
           author    = {Bj{\"o}rck, {\AA}ke},
@@ -392,5 +397,6 @@ instead: `RichardsonLucy(NagyOLearyPSF(psf, centres))`. See the
           publisher = {Elsevier/North Holland},
           address   = {Amsterdam},
           year      = {1989},
+          doi       = {10.1016/S1570-8659(05)80036-5},
         }
         ```
