@@ -5,13 +5,13 @@ Reference: the Python code of Rottmayer et al. (2025),
 (MIT licence), file `Python-Stripe-Removal/GeneralStripeRemover.py` at commit
 f1972aa47fc3ecf6580984f72ce7ce630b1ea683 (the file was last changed in
 7838aa99cc4ea1c6d44e0bd5256303f1a59c79d0, "Improved GSR", 29 July 2025),
-PyTorch 2.15.0, CPU, float64:
+PyTorch 2.15.0, NumPy 2.5.5, CPU, float64:
 
 ```text
 SHA=f1972aa47fc3ecf6580984f72ce7ce630b1ea683
 curl -O https://raw.githubusercontent.com/NiklasRottmayer/General-Stripe-Removal/$SHA/Python-Stripe-Removal/GeneralStripeRemover.py
 uv venv -p 3.12 gsr-venv
-VIRTUAL_ENV=gsr-venv uv pip install torch==2.15.0 numpy
+VIRTUAL_ENV=gsr-venv uv pip install torch==2.15.0 numpy==2.5.5
 gsr-venv/bin/python -I tests/data/make_rottmayer_fixtures.py \\
     GeneralStripeRemover.py
 ```

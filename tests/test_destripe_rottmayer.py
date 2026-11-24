@@ -647,7 +647,7 @@ def test_matches_authors_code(ref, name):
 def test_matches_authors_code_float32(ref):
     data, kw, expected = ref_case(ref, "default")
     u = general_stripe_remover(data.float(), **kw).double()
-    np.testing.assert_allclose(u.numpy(), expected, rtol=0, atol=1e-5)
+    np.testing.assert_allclose(u.numpy(), expected, rtol=0, atol=1e-6)
 
 
 def test_estimator_matches_authors_code(ref):
