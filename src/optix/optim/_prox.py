@@ -6,8 +6,19 @@ from collections.abc import Callable
 import torch
 from torch import Tensor
 
+from ._spectral import (
+    clip,
+    eigenvalues,
+    l1_level,
+    packed_ndim,
+    soft,
+    spectral_map,
+    voxelwise,
+)
+
 __all__ = [
     "project_group_l2",
+    "project_schatten",
     "prox_box",
     "prox_conjugate",
     "prox_group_l2",
@@ -220,28 +231,15 @@ def _schatten_p(p: float | str) -> float:
 
 def _packed_ndim(components: int) -> int:
     """d such that d(d + 1)/2 = C."""
-    d = round((math.sqrt(8 * components + 1) - 1) / 2)
-    if d < 1 or d * (d + 1) // 2 != components:
-        raise ValueError(
-            f"{components} components do not pack a symmetric matrix"
+    return packed_ndim(components)
+
+
+def _check_spectral(d: int, what: str) -> None:
+    if d > 3:
+        raise NotImplementedError(
+            f"{what} with p in {{1, inf}} is implemented for matrices up to "
+            "3 × 3 (2-D and 3-D images); use p=2"
         )
-    return d
-
-
-def _eig2(v: Tensor, dim: int) -> tuple[Tensor, Tensor, Tensor]:
-    """m, r and the off-centre part of packed symmetric 2 × 2 matrices.
-
-    v holds (a, d, √2·b) along `dim`, for X = [[a, b], [b, d]]. The
-    eigenvalues are μ± = m ± r with m = (a + d)/2 and
-    r = √(((a − d)/2)² + b²) ≥ 0. Returns m, r (size-1 dims along `dim`)
-    and X − m·I in packed form.
-    """
-    a, d, c = v.unbind(dim)
-    m = (a + d) / 2
-    h = (a - d) / 2
-    r = torch.hypot(h, c / math.sqrt(2))
-    dev = torch.stack([h, -h, c], dim=dim)
-    return m.unsqueeze(dim), r.unsqueeze(dim), dev
 
 
 def schatten_norm(v: Tensor, p: float | str, *, dim: int = 0) -> Tensor:
@@ -251,14 +249,16 @@ def schatten_norm(v: Tensor, p: float | str, *, dim: int = 0) -> Tensor:
     the output of [`Hessian`][optix.optim.Hessian]: the d diagonal
     entries, then √2 times the entries above the diagonal, C = d(d + 1)/2
     components. The singular values of X are the absolute values of its
-    eigenvalues, so
+    eigenvalues, so (Lefkimmiatis, Ward & Unser 2013, Eq. 4)
 
         ‖X‖_{S₁} = ∑ |μᵢ|,   ‖X‖_{S₂} = ‖X‖_F = ‖v‖₂,
         ‖X‖_{S∞} = maxᵢ |μᵢ|.
 
-    For d = 2 the eigenvalues are computed in closed form (Lefkimmiatis,
-    Bourquard & Unser 2012, Eq. 15); p = 2 is available for any d;
-    p ∈ {1, ∞} needs d ≤ 2.
+    p = 2 is available for any d. For p ∈ {1, ∞} the eigenvalues are
+    computed in closed form for d ≤ 3: Lefkimmiatis, Bourquard & Unser
+    (2012, Eq. 15) for d = 2, and the method described in
+    [`prox_schatten`][optix.optim.prox_schatten] for d = 3. The result
+    has finite derivatives everywhere.
 
     Parameters
     ----------
@@ -273,24 +273,23 @@ def schatten_norm(v: Tensor, p: float | str, *, dim: int = 0) -> Tensor:
     -------
     Tensor
         ‖Xⱼ‖_{S_p} per voxel (`dim` removed).
+
+    Raises
+    ------
+    NotImplementedError
+        For p ∈ {1, ∞} with d > 3.
     """
     p = _schatten_p(p)
-    d = _packed_ndim(v.shape[dim])
+    d = packed_ndim(v.shape[dim])
     if p == 2:
         return torch.linalg.vector_norm(v, dim=dim)
-    if d == 1:
-        return v.abs().squeeze(dim)
-    if d != 2:
-        raise NotImplementedError(
-            "Schatten norms with p in {1, inf} are implemented for 2 × 2 "
-            "matrices only"
-        )
-    m, r, _ = _eig2(v, dim)
-    m, r = m.squeeze(dim), r.squeeze(dim)
-    if p == 1:
-        # |m + r| + |m − r| = 2·max(|m|, r)
-        return 2 * torch.maximum(m.abs(), r)
-    return m.abs() + r
+    _check_spectral(d, "schatten_norm")
+
+    def kernel(x: Tensor, t: object) -> Tensor:
+        a = eigenvalues(x).abs()
+        return a.sum(0) if p == 1 else a.amax(0)
+
+    return voxelwise(kernel, v, 0.0, dim, components=False)
 
 
 def prox_schatten(
@@ -310,30 +309,59 @@ def prox_schatten(
     - p = 2: block soft threshold of the whole matrix (Eq. 44), the same
       as [`prox_group_l2`][optix.optim.prox_group_l2] on the packed
       vector;
-    - p = ∞: σ̂ᵢ = min(σᵢ, c), with c = 0 if σ₁ + σ₂ ≤ t,
-      c = (σ₁ + σ₂ − t)/2 if |σ₁ − σ₂| < t < σ₁ + σ₂, and c = σ₁ − t
-      if σ₁ − σ₂ ≥ t (σ₁ ≥ σ₂). This is Eq. (46) with the threshold
-      written out: the paper states it for t = 1, and c = t·γ(σ/t).
+    - p = ∞: σ̂ᵢ = min(σᵢ, c), with c = max(0, maxₖ (Sₖ − t)/k) and Sₖ
+      the sum of the k largest σᵢ. For 2 × 2 matrices (σ₁ ≥ σ₂) this is
+      c = 0 if σ₁ + σ₂ ≤ t, c = (σ₁ + σ₂ − t)/2 if
+      |σ₁ − σ₂| < t < σ₁ + σ₂, and c = σ₁ − t if σ₁ − σ₂ ≥ t: Eq. (46)
+      with the threshold written out (the paper states it for t = 1,
+      and c = t·γ(σ/t)). It is σ minus the projection of σ onto the ℓ1
+      ball of radius t (Moreau).
 
-    For symmetric 2 × 2 matrices no decomposition is computed: the
-    eigenvalues μ± = m ± r (m the mean of the diagonal, r ≥ 0 half
-    their gap), whose absolute values are the singular values, are
-    mapped to μ̂± by the ℓ_p prox with their signs kept, and
-
-        X̂ = m̂·I + (r̂/r)·(X − m·I),   m̂ = (μ̂₊ + μ̂₋)/2,
-        r̂ = (μ̂₊ − μ̂₋)/2,
-
-    which keeps the eigenvectors of X (X̂ = m̂·I where r = 0). The
-    proxes are monotone in μ, so μ̂₊ ≥ μ̂₋ and 0 ≤ r̂ ≤ r.
-
-    The packing is that of [`Hessian`][optix.optim.Hessian] (diagonal
-    entries, then √2 times the off-diagonal ones), an isometry for the
-    Frobenius inner product, so this is exactly the matrix prox.
+    For a symmetric matrix the singular values are the absolute
+    eigenvalues, and the map keeps the signs of the eigenvalues and the
+    eigenvectors: X̂ = U diag(ĝ(μ)) Uᵀ with ĝ(μ) = sign(μ)·σ̂. No
+    decomposition is formed for 2 × 2 matrices (eigenvalues m ± r,
+    X̂ = m̂·I + (r̂/r)·(X − m·I)); 3 × 3 matrices use the closed form
+    below. The packing is that of [`Hessian`][optix.optim.Hessian]
+    (diagonal entries, then √2 times the off-diagonal ones), an isometry
+    for the Frobenius inner product, so this is exactly the matrix prox.
 
     !!! note "Dimensions"
         p = 2 is available for matrices of any size; p ∈ {1, ∞} for
-        2 × 2 matrices (C = 3) and 1 × 1 ones (C = 1), the case of the
-        2-D images of the paper.
+        1 × 1, 2 × 2 and 3 × 3 matrices (C = 1, 3, 6): 1-D, 2-D and 3-D
+        images.
+
+    ??? note "3 × 3 closed form (not in the papers, which are 2-D)"
+        X = m·I + s·B with m = tr(X)/3 and s the largest absolute entry
+        of X − m·I, so B is traceless with q = tr(B²) ≥ 1.
+
+        1. The eigenvalue of B farthest from the other two is
+           λ = sign(ρ)·2√(q/6)·cos(arccos(|ρ|)/3), with
+           ρ = det(B)/(2(q/6)^{3/2}) (the trigonometric solution of the
+           characteristic cubic, Smith 1961), refined by one Newton step
+           on the cubic. Its gap to the others is at least √(q/2).
+        2. Its unit eigenvector u is the largest cross product of two
+           rows of B − λI, normalised; the gap keeps it well
+           conditioned.
+        3. The other two eigenvalues are m₂ ± r₂, those of B on the
+           plane P = I − uuᵀ: m₂ = (tr B − uᵀBu)/2, r₂ = ‖D‖_F/√2 with
+           D = P B P − m₂P, solved like a 2 × 2 matrix without a basis
+           of the plane.
+
+        The map is X̂ = ĝ_u·uuᵀ + m̂·P + (r̂/r)·s·D. A repeated
+        eigenvalue is always the pair, which needs no eigenvectors, so
+        the result is accurate to a few ulps of s with repeated, nearly
+        repeated or zero eigenvalues; X = m·I maps to g(m)·I. Compared
+        with batched `torch.linalg.eigh` and the reconstruction
+        U diag(ĝ) Uᵀ (2·10⁵ matrices, one CPU thread), it is about 3
+        times faster in float32 (1.6 times in float64), at least as
+        accurate (within 5 ulps of a float64 reference in float32 and
+        about 10 in float64; float32 `eigh`: 16), element-wise (processed in
+        chunks of voxels to bound memory), and differentiable without
+        NaN, where the derivatives of `eigh` are NaN at repeated
+        eigenvalues. Smith OK, *Eigenvalues of a symmetric 3 × 3
+        matrix*, Commun ACM 4(4):168, 1961,
+        [doi:10.1145/355578.366316](https://doi.org/10.1145/355578.366316).
 
     Parameters
     ----------
@@ -351,40 +379,95 @@ def prox_schatten(
     -------
     Tensor
         The prox, packed like `v`.
+
+    Raises
+    ------
+    NotImplementedError
+        For p ∈ {1, ∞} with d > 3.
     """
     p = _schatten_p(p)
-    d = _packed_ndim(v.shape[dim])
+    d = packed_ndim(v.shape[dim])
     if p == 2:
         return prox_group_l2(v, t, dim=dim)
-    if d == 1:  # |x|: soft threshold for every p
-        return torch.sign(v) * (v.abs() - t).clamp(min=0)
-    if d != 2:
-        raise NotImplementedError(
-            "prox_schatten with p in {1, inf} is implemented for 2 × 2 "
-            "matrices (2-D images) only; use p=2"
-        )
-    m, r, dev = _eig2(v, dim)
-    hi, lo = m + r, m - r  # μ₊ ≥ μ₋
-    s1, s2 = hi.abs(), lo.abs()
+    _check_spectral(d, "prox_schatten")
     if p == 1:
-        n1 = (s1 - t).clamp(min=0)
-        n2 = (s2 - t).clamp(min=0)
-    else:
-        big = torch.maximum(s1, s2)
-        small = torch.minimum(s1, s2)
-        cap = torch.where(
-            big - small >= t,
-            big - t,
-            ((big + small - t) / 2).clamp(min=0),
+        return voxelwise(
+            lambda x, s: spectral_map(x, soft, s), v, t, dim, components=True
         )
-        n1 = torch.minimum(s1, cap)
-        n2 = torch.minimum(s2, cap)
-    hi = torch.sign(hi) * n1
-    lo = torch.sign(lo) * n2
-    m_new = (hi + lo) / 2
-    r_new = (hi - lo) / 2
-    tiny = torch.finfo(r.dtype).tiny
-    ratio = torch.where(r > tiny, r_new / r.clamp(min=tiny), 0)
-    eye = torch.zeros_like(v)
-    eye.narrow(dim, 0, 2).copy_(m_new.expand_as(eye.narrow(dim, 0, 2)))
-    return eye + ratio * dev
+
+    def cap(mu: Tensor, s: float | Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        return clip(mu, l1_level(mu.abs(), s))
+
+    return voxelwise(
+        lambda x, s: spectral_map(x, cap, s), v, t, dim, components=True
+    )
+
+
+def project_schatten(
+    v: Tensor, radius: float | Tensor, q: float | str, *, dim: int = 0
+) -> Tensor:
+    """Projection of packed symmetric matrices onto the S_q ball of radius r.
+
+    By Proposition 1 of Lefkimmiatis, Ward & Unser (2013), the
+    projection onto {X : ‖X‖_{S_q} ≤ r} projects the singular values
+    onto the ℓ_q ball of radius r and keeps the singular vectors
+    (Eqs. 33–36):
+
+    - q = 2: X · min(1, r/‖X‖_F) (Eq. 33; the same as
+      [`project_group_l2`][optix.optim.project_group_l2] on the packed
+      vector);
+    - q = ∞: σ̂ᵢ = min(σᵢ, r) (Eq. 34);
+    - q = 1: σ̂ᵢ = max(σᵢ − γ, 0), with γ = max(0, maxₖ (Sₖ − r)/k) and
+      Sₖ the sum of the k largest σᵢ (Eq. 35; for 2 × 2 matrices this is
+      Eq. 36 scaled to radius r).
+
+    With 1/p + 1/q = 1 it is the prox of the convex conjugate of
+    r·‖·‖_{S_p} (Moreau decomposition):
+
+        X = prox_schatten(X, r, p) + project_schatten(X, r, q).
+
+    The decomposition is that of [`prox_schatten`][optix.optim.prox_schatten]
+    (closed form, 3 × 3 included).
+
+    Parameters
+    ----------
+    v : Tensor
+        Packed symmetric matrices, components along `dim`.
+    radius : float or Tensor
+        Radius r ≥ 0; a tensor broadcasts against the voxels (with a
+        size-1 `dim`).
+    q : {1, 2, inf}
+        Order of the Schatten ball.
+    dim : int
+        Component dim.
+
+    Returns
+    -------
+    Tensor
+        The projection, packed like `v`.
+
+    Raises
+    ------
+    NotImplementedError
+        For q ∈ {1, ∞} with d > 3.
+    """
+    q = _schatten_p(q)
+    d = packed_ndim(v.shape[dim])
+    if q == 2:
+        return project_group_l2(v, radius, dim=dim)
+    _check_spectral(d, "project_schatten")
+    if q == math.inf:
+        return voxelwise(
+            lambda x, s: spectral_map(x, clip, s),
+            v,
+            radius,
+            dim,
+            components=True,
+        )
+
+    def level(mu: Tensor, s: float | Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        return soft(mu, l1_level(mu.abs(), s))
+
+    return voxelwise(
+        lambda x, s: spectral_map(x, level, s), v, radius, dim, components=True
+    )

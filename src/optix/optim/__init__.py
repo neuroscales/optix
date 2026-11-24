@@ -6,11 +6,13 @@ regularised estimators (for example
 [`Ikoma`][optix.deconv.Ikoma]).
 
 - Proximity operators: `prox_box`, `prox_group_l2`, `project_group_l2`,
-  `prox_schatten` (with `schatten_norm`), `prox_squared_l2`,
-  `prox_shifted_poisson`, `prox_conjugate`.
+  `prox_schatten` (with `schatten_norm`), `project_schatten`,
+  `prox_squared_l2`, `prox_shifted_poisson`, `prox_conjugate`; the
+  iterative `prox_hessian_schatten` (with `HessianSchattenResult`).
 - Functions pairing a value and a prox: `Box`, `GroupL2`, `Schatten`,
-  `SquaredL2`, `ShiftedPoisson`; smooth functions (value, gradient,
-  Lipschitz constant): the protocol `Smooth` and `PoissonGaussian`.
+  `HessianSchatten`, `SquaredL2`, `ShiftedPoisson`; smooth functions
+  (value, gradient, Lipschitz constant): the protocol `Smooth` and
+  `PoissonGaussian`.
 - Linear operators: the protocols `LinearOperator` (forward, adjoint,
   norm2) and `Circulant` (adds the Fourier symbols); `Identity`,
   `Convolution` (a transfer function), the finite differences `diff`,
@@ -30,6 +32,11 @@ from ._functions import (
     Smooth,
     SquaredL2,
 )
+from ._hessian_schatten import (
+    HessianSchatten,
+    HessianSchattenResult,
+    prox_hessian_schatten,
+)
 from ._operators import (
     Circulant,
     Convolution,
@@ -40,6 +47,7 @@ from ._operators import (
 from ._primal_dual import PrimalDualResult, primal_dual, primal_dual_step
 from ._prox import (
     project_group_l2,
+    project_schatten,
     prox_box,
     prox_conjugate,
     prox_group_l2,
@@ -58,6 +66,8 @@ __all__ = [
     "Gradient",
     "GroupL2",
     "Hessian",
+    "HessianSchatten",
+    "HessianSchattenResult",
     "Identity",
     "LinearOperator",
     "PoissonGaussian",
@@ -74,9 +84,11 @@ __all__ = [
     "primal_dual",
     "primal_dual_step",
     "project_group_l2",
+    "project_schatten",
     "prox_box",
     "prox_conjugate",
     "prox_group_l2",
+    "prox_hessian_schatten",
     "prox_schatten",
     "prox_shifted_poisson",
     "prox_squared_l2",

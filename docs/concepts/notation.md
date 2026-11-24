@@ -373,8 +373,11 @@ shared with the other destriping pages.
 | $\lambda_{\mathrm{H}}$ | weight of the Frobenius norm of the Hessian, next to $\lambda_{\mathrm{TV}}$ | `Chouzenoux.hessian` |
 | $C$, $x_+$ | range of the image, $C = [0, x_+]^N$, and its upper bound | `upper` |
 | $\mathbf{X}_j$ | symmetric Hessian matrix of the image at voxel $j$, packed in $(\mathbf{H}\mathbf{x})_j$ | |
-| $\lVert\cdot\rVert_{S_p}$ | Schatten norm of order $p \in \{1, 2, \infty\}$: the $\ell_p$ norm of the singular values; nuclear, Frobenius and spectral norm | `schatten_norm`, `Schatten` |
-| $\mu_\pm$, $m$, $r$ | eigenvalues of a symmetric $2 \times 2$ matrix, $\mu_\pm = m \pm r$, with $m$ the mean of the diagonal and $r \ge 0$ half the gap | `prox_schatten` |
+| $\lVert\cdot\rVert_{S_p}$, $\lVert\cdot\rVert_{1,p}$ | Schatten norm of order $p \in \{1, 2, \infty\}$ of a $2 \times 2$ or $3 \times 3$ matrix: the $\ell_p$ norm of the singular values (nuclear, Frobenius and spectral norm); the mixed norm $\sum_j \lVert\mathbf{X}_j\rVert_{S_p}$ of a field | `schatten_norm`, `Schatten`, `HessianSchatten` |
+| $\mu_i$, $\mu_\pm$, $m$, $r$ | eigenvalues of a symmetric $2 \times 2$ or $3 \times 3$ matrix; for $2 \times 2$, $\mu_\pm = m \pm r$, with $m$ the mean of the diagonal and $r \ge 0$ half the gap | `prox_schatten` |
+| $q$, $\mathcal{B}_q$, $P_{\mathcal{B}_q}$ | conjugate order, $1/p + 1/q = 1$; unit ball of the Schatten norm of order $q$ and the projection of a matrix onto it (the $S_q$ ball of radius $r$ is $r\mathcal{B}_q$); not the percentile $q_{99.9}$ | `project_schatten` |
+| $\boldsymbol\Omega$, $\boldsymbol\Psi$, $t_n$ | dual field (one matrix per pixel, in $\mathcal{B}_q$), its extrapolation and the momentum of the FISTA iteration for the prox of $\tau\lVert\mathbf{H}\cdot\rVert_{1,p} + \iota_C$; bold $\boldsymbol\Omega$ is not the set $\Omega$ of voxels | `prox_hessian_schatten`, `HessianSchatten` |
+| $\partial_{r_a r_b}$ | second difference of the papers of Lefkimmiatis et al., $\mathbf{D}_{ab}$ here; with the mirror boundary of their Eq. 10 for `Hessian(boundary="mirror")` | `Hessian` |
 
 The shifted Poisson law of $\tilde{\mathbf{y}}$ is $\tilde{y} + \tilde\sigma^2 \sim
 \mathrm{Poisson}(\lambda + \tilde\sigma^2)$, which has the mean and variance of the
