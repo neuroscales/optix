@@ -32,7 +32,7 @@ without clipping. Nothing about the optics is assumed.
 === "optix"
 
     $$
-    y = g\,n + o + \varepsilon, \qquad n \sim \operatorname{Poisson}(\lambda),\quad
+    y = g\,e + o + \varepsilon, \qquad e \sim \operatorname{Poisson}(\lambda),\quad
     \varepsilon \sim \mathcal{N}(0, \sigma^2)
     $$
 
@@ -100,11 +100,11 @@ the posterior-mean map, not a full Bayesian estimate of $y$.
 
 ## Algorithm
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$ ($P$
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$ ($\lvert\Omega\rvert$
 pixels per frame); camera parameters $(g, o, \sigma^2)$ from a `SensorEstimate`
 or from `alpha`, `sigma`, `mu`; `inverse="exact"`. \
-**Output:** `apply`: stabilised frames $f(\mathbf{y}_i) \in \mathbb{R}^P$;
-`inverse`: an estimate of $\mathbb{E}[\mathbf{y}] \in \mathbb{R}^P$ in ADU.
+**Output:** `apply`: stabilised frames $f(\mathbf{y}_n) \in \mathbb{R}^{\lvert\Omega\rvert}$;
+`inverse`: an estimate of $\mathbb{E}[\mathbf{y}] \in \mathbb{R}^{\lvert\Omega\rvert}$ in ADU.
 
 1. **Forward** (`apply`), pointwise: $d = f(y)$.
 2. **Inverse** (`inverse`), pointwise, with $s^2 = (\sigma/g)^2$:

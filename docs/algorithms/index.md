@@ -20,16 +20,23 @@ example. The sections follow the modules of the
 | | [Defective pixels](sensor/defective-pixels.md) (`DefectivePixels`) | hot, dead and noisy pixels |
 | [`optix.shading`](../reference/shading.md) | [BaSiC](shading/basic.md) (`BaSiC`) | flat field, dark field and baseline |
 | | [CIDRE](shading/cidre.md) (`CIDRE`) | flat field and dark field |
+| | [Likar](shading/likar-entropy.md) (`Likar`) | flat field and dark field, from one image |
+| | [Kask](shading/kask.md) (`KaskFlatField`) | foreground and background flat fields |
 | | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
 | | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
 | [`optix.background`](../reference/background.md) | [Rolling ball](background/rolling-ball.md) (`RollingBall`, `TopHat`) | background, by grey-scale opening |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
 | | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
+| | [Nagy–O'Leary](deconv/nagy-oleary.md) (`NagyOLeary`, `NagyOLearyPSF`) | deconvolved image with a spatially variant PSF |
+| | [Denis](deconv/denis.md) (`DenisPSF`) | spatially variant PSF model for the RL family |
 | | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
 | | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
+| | [Multiview Richardson–Lucy](deconv/multiview.md) (`MultiviewRL`) | one deconvolved image from several registered views |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
+| | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |
+| | [VSNR](destripe/vsnr.md) (`VSNR`) | stripe-free image, variational |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
 | | [Phase retrieval](psf/phase-retrieval.md) (`PhaseRetrieval`) | pupil function and Zernike aberrations from a bead z-stack |
 | | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |

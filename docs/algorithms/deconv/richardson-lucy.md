@@ -37,16 +37,16 @@ extensions below.
     $$
     \mathbf{y} \sim \mathrm{Poisson}(\mathbf{A}\mathbf{x} + \mathbf{b}),
     \qquad
-    (\mathbf{A}\mathbf{x})_p = \sum_q h(p - q)\, x_q ,
+    (\mathbf{A}\mathbf{x})_i = \sum_q h(i - q)\, x_q ,
     \qquad \mathbf{x} \ge 0,
     $$
 
-    with $\mathbf{y} \in \mathbb{R}^P$ one recorded image of $P$ pixels, in
+    with $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$ one recorded image of $\lvert\Omega\rvert$ pixels, in
     counts (photons or electrons); $\mathbf{x} \in \mathbb{R}^Q$ the latent
-    image on the extended domain of $Q \ge P$ pixels; $\mathbf{h}$ the PSF of
-    $K$ voxels; $\mathbf{A} \in \mathbb{R}^{P \times Q}$ the blur
+    image on the extended domain of $Q \ge \lvert\Omega\rvert$ pixels; $\mathbf{h}$ the PSF of
+    $K$ voxels; $\mathbf{A} \in \mathbb{R}^{\lvert\Omega\rvert \times Q}$ the blur
     ($\mathbf{h} \circledast$, cropped to the observed region); and
-    $\mathbf{b} \in \mathbb{R}^P$ an optional background ($\mathbf{0}$ in
+    $\mathbf{b} \in \mathbb{R}^{\lvert\Omega\rvert}$ an optional background ($\mathbf{0}$ in
     the papers).
 
 === "Richardson 1972"
@@ -69,11 +69,11 @@ extensions below.
 
 | optix | [Richardson 1972](https://doi.org/10.1364/JOSA.62.000055) | [Lucy 1974](https://doi.org/10.1086/111605) | Meaning | Shape |
 |---|---|---|---|---|
-| $\mathbf{y}$ | $H$ (recorded) | $\tilde\psi$ | recorded image, in counts | $P$, one per image |
-| $\mathbf{A}\mathbf{x}$ | $H$ (model) | $\psi$ | blurred latent image, the noise-free prediction | $P$, one per image |
+| $\mathbf{y}$ | $H$ (recorded) | $\tilde\psi$ | recorded image, in counts | $\lvert\Omega\rvert$, one per image |
+| $\mathbf{A}\mathbf{x}$ | $H$ (model) | $\psi$ | blurred latent image, the noise-free prediction | $\lvert\Omega\rvert$, one per image |
 | $\mathbf{x}$ | $W$ | $\phi$ | latent (deconvolved) image | $Q$, one per image |
-| $\mathbf{h}$, $\mathbf{A}$ | $S$ | $P(x \mid \xi)$ | PSF and the blur operator it defines | $K$ and $P \times Q$, one for the whole stack |
-| $\mathbf{b}$ | none | none | optional background | $P$ or scalar, one for the whole stack |
+| $\mathbf{h}$, $\mathbf{A}$ | $S$ | $P(x \mid \xi)$ | PSF and the blur operator it defines | $K$ and $\lvert\Omega\rvert \times Q$, one for the whole stack |
+| $\mathbf{b}$ | none | none | optional background | $\lvert\Omega\rvert$ or scalar, one for the whole stack |
 | $p$, $q$ | $k$, $i$ | $x$, $\xi$ | image and object pixel indices | scalars |
 | $t$ (iteration) | $r$ | $r$ | iteration counter | scalar |
 
@@ -86,16 +86,16 @@ iteration is exactly the expectation-maximisation (EM) algorithm for the
 maximum-likelihood estimate
 ([Shepp and Vardi 1982](https://doi.org/10.1109/TMI.1982.4307558)): the
 complete data are the unobserved photon counts $z_{pq}$ emitted at object
-pixel $q$ and detected at pixel $p$, each $\mathrm{Poisson}(A_{pq} x_q)$; the
-E-step splits each $y_p$ among the $q$ in proportion to $A_{pq} x_q$, and the
+pixel $q$ and detected at pixel $i$, each $\mathrm{Poisson}(A_{iq} x_q)$; the
+E-step splits each $y_i$ among the $q$ in proportion to $A_{iq} x_q$, and the
 M-step sets $x_q$ to the expected counts it emitted divided by
-$\sum_p A_{pq}$. This keeps
+$\sum_{i\in\Omega} A_{iq}$. This keeps
 $\mathbf{x}$ non-negative, increases the likelihood at every step and conserves
 the flux. Because the unregularised maximum fits the noise, the iteration is
 stopped early, by
 [Lucy's (1974, §IV)](https://doi.org/10.1086/111605) rule: stop as soon as the χ²
-statistic of the fit, $\sum_p (y_p - \mu_p)^2 / \mu_p$ with
-$\boldsymbol{\mu} = \mathbf{A}\mathbf{x}^{(t)} + \mathbf{b}$ and $P - 1$ degrees of
+statistic of the fit, $\sum_{i\in\Omega} (y_i - \mu_i)^2 / \mu_i$ with
+$\boldsymbol{\mu} = \mathbf{A}\mathbf{x}^{(t)} + \mathbf{b}$ and $\lvert\Omega\rvert - 1$ degrees of
 freedom, is no longer significant.
 
 === "optix"
@@ -122,7 +122,7 @@ near its edges, where the extended domain receives less data.
 
 ## Algorithm
 
-**Input:** an image $\mathbf{y} \in \mathbb{R}^P$ in counts, the PSF
+**Input:** an image $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$ in counts, the PSF
 $\mathbf{h}$; hyper-parameters `alpha` $= 0.05$, `max_iter` $= 100$, `n_iter`
 $=$ `None`. \
 **Output:** the deconvolved image $\hat{\mathbf{x}}$, cropped to the observed
@@ -133,9 +133,9 @@ region.
 2. **Repeat** for $t = 0, 1, \ldots$ until `n_iter` iterations (if given) or
    `max_iter` iterations:
     1. **Test** (only when `n_iter` is `None`): compute
-       $\chi^2 = \sum_p (y_p - \mu_p)^2 / \mu_p$ with
+       $\chi^2 = \sum_{i\in\Omega} (y_i - \mu_i)^2 / \mu_i$ with
        $\boldsymbol{\mu} = \mathbf{A}\mathbf{x}^{(t)} + \mathbf{b}$; stop if
-       $\Pr(\chi^2_{P-1} > \chi^2) \ge$ `alpha`;
+       $\Pr(\chi^2_{\lvert\Omega\rvert-1} > \chi^2) \ge$ `alpha`;
     2. **Update** $\mathbf{x}^{(t+1)}$ by the multiplicative Richardson–Lucy
        step above.
 3. **Crop** $\mathbf{x}$ to the observed region and return it.

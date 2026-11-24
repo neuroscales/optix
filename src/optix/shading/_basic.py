@@ -71,18 +71,18 @@ class BaSiC(Estimator):
     Image formation for frame i of a group (one flat and dark field per
     group, shared by its samples):
 
-        yᵢ = f ⊙ (xᵢ + bᵢ) + d
+        yₙ = f ⊙ (xₙ + bₙ) + d
 
     with a smooth flat field f (mean 1), a smooth dark field d, a
-    spatially constant baseline bᵢ (time-lapse data) and the latent
-    image xᵢ. The corrected frame is
+    spatially constant baseline bₙ (time-lapse data) and the latent
+    image xₙ. The corrected frame is
 
-        x̂ᵢ = (yᵢ − d) / f − bᵢ + b_{norm}
+        x̂ₙ = (yₙ − d) / f − bₙ + b_{norm}
 
     where b_{norm} is an arbitrary background: 0 removes the background
-    (fluorescence), meanᵢ bᵢ keeps the raw intensity range (bright field).
+    (fluorescence), meanₙ bₙ keeps the raw intensity range (bright field).
     ([Peng et al. 2017](https://doi.org/10.1038/ncomms14836): I = y, S = f, D =
-    d, Bᵢ = bᵢ, F = x, I_B = L, I_R = E.)
+    d, Bᵢ = bₙ, F = x, I_B = L, I_R = E.)
 
     **Flat and dark field.** The fitting frames, sorted at each pixel
     over the frames and resized to the working size (128 × 128), form the
@@ -101,10 +101,10 @@ class BaSiC(Estimator):
     mean frame divided by its mean. The fields are resized back
     (bilinear) to the image size; d = d_Z + d_R.
 
-    **Baseline** (`timelapse=True`). After sorting, the fitted bᵢ belong
-    to the sorted frames, so bᵢ is estimated in a second step on every
+    **Baseline** (`timelapse=True`). After sorting, the fitted bₙ belong
+    to the sorted frames, so bₙ is estimated in a second step on every
     unsorted frame (at the working size) with f and d fixed:
-    min_b ‖W ⊙ (yᵢ − bᵢ f − d)‖₁, reweighted as above.
+    min_b ‖W ⊙ (yₙ − bₙ f − d)‖₁, reweighted as above.
 
     !!! note
         The fit reads the `max_frames` fitting frames of each group (a
@@ -164,8 +164,8 @@ class BaSiC(Estimator):
         - `variant="basicpy"`: the solver of
           [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0
           (`fitting_mode="approximate"`): weights divided by the frame mean
-          of L and normalised to mean 1, bᵢ clipped at 0, f started at 1,
-          the dark field fitted on the frames with bᵢ < 1 with a 10× smaller
+          of L and normalised to mean 1, bₙ clipped at 0, f started at 1,
+          the dark field fitted on the frames with bₙ < 1 with a 10× smaller
           threshold, and λ_d = λ_f / 10 by default. With
           `sort_intensity=False` and `reweight_tol=1e-2` it reproduces
           [BaSiCPy](https://github.com/peng-lab/BaSiCPy).
@@ -258,7 +258,7 @@ class BaSiC(Estimator):
             Also estimate the dark field d.
         timelapse : bool
             Estimate (in [`fit`][optix.Estimator.fit]) and remove (in
-            [`apply`][optix.Estimator.apply]) the per-frame baseline bᵢ.
+            [`apply`][optix.Estimator.apply]) the per-frame baseline bₙ.
         lambda_flat, lambda_dark : float, optional
             λ_f and λ_d, the weights of the DCT sparsity of f and of d_R.
             Default: derived from the data, per group.
