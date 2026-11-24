@@ -509,6 +509,13 @@ def general_stripe_remover(
           adjoint ∇ᵀ, as Eq. (2) implies. The authors' code applies it in
           the adjoint only, so 3-D results with 0 < ρ_z < 1 differ from
           theirs.
+        - **Negative angles.** The authors' code mirrors the frame across
+          the stripe axis and solves at the positive angle, which turns
+          the total variation into a backward difference across the
+          stripes. optix keeps forward differences for every angle, which
+          gives a slightly different result with a lower objective.
+          Mirroring the input (and the output) and passing the positive
+          angle reproduces the authors' result.
 
     !!! note "Defaults"
         μ₁ = 1/3 and μ₂ = 1/300. The Discussion of the paper prints
@@ -726,6 +733,12 @@ class GeneralStripeRemover(Estimator):
     results of the paper. With three, the first spatial axis (in layout
     order) is z and each volume is solved as a whole, ∇_z being weighted
     by ρ_z (Section 2.1.1).
+
+    For a negative angle, the authors' code mirrors the frame and solves
+    at the positive angle; optix keeps forward differences for every angle,
+    which gives a slightly different result with a lower objective. Mirror
+    the input (and the output) to reproduce the authors' result (see
+    [`general_stripe_remover`][optix.destripe.general_stripe_remover]).
 
     !!! note
         μ₁ and μ₂ are to be tuned to the data (Section 2.1.1), and any

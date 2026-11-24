@@ -1110,7 +1110,12 @@
     "otsu1979threshold",
     "maximiser",
     "centres",
-    "Nobuyuki"
+    "Nobuyuki",
+    "noproj",
+    "resz",
+    "gsr",
+    "NiklasRottmayer",
+    "spec"
   ],
   "language": "en,en-GB",
   "ignorePaths": [
