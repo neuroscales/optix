@@ -46,6 +46,7 @@ def rl_step(
     mu: Tensor | None = None,
     flat: Tensor | None = None,
     back: Callable[[Tensor], Tensor] | None = None,
+    penalty: Callable[[Tensor], Tensor] | None = None,
 ) -> Tensor:
     """One Richardson–Lucy update on a block.
 
@@ -79,6 +80,10 @@ def rl_step(
         Back projector B, block `(..., *L)` to object `(..., *N)`, used in
         place of Hᵀ (an unmatched back projector); `inv_norm` is then
         1 / B1. Not combined with `flat`. Default: Hᵀ.
+    penalty : callable, optional
+        Denominator d(f) > 0 of a one-step-late regularised update
+        (Green 1990), evaluated at the current estimate: c ← c / d(f)
+        before damping. Default: none (d = 1).
 
     Returns
     -------
@@ -94,6 +99,8 @@ def rl_step(
             raise ValueError("back and flat cannot be combined")
         ratio = ratio * flat
     c = (op.adjoint if back is None else back)(ratio) * inv_norm
+    if penalty is not None:
+        c = c / penalty(f)
     if damping != 1.0:
         c = 1.0 - damping + damping * c
     return (f * c).clamp_(min=0)
@@ -189,6 +196,8 @@ def rl_block(
     back: Callable[[Tensor], Tensor] | None = None,
     accelerate: bool = False,
     trace: dict | None = None,
+    penalty: Callable[[Tensor], Tensor] | None = None,
+    tol: float | None = None,
     step: Callable[..., Tensor] | None = None,
 ) -> tuple[Tensor, int]:
     """Richardson–Lucy iterations on one block, optionally accelerated.
@@ -249,6 +258,13 @@ def rl_block(
         pixels set to 0) and `"effective"` (estimated number of
         unaccelerated iterations, ∑ₖ ηₖ, [Biggs and Andrews 1997,
         Eq. 12](https://doi.org/10.1364/AO.36.001766)).
+    penalty : callable, optional
+        Denominator of a one-step-late regularised update (see
+        [`rl_step`][optix.deconv.utils.rl_step]).
+    tol : float, optional
+        With `n_iter=None`: stop once the relative change of the
+        estimate on the block, ‖f⁽ʳ⁺¹⁾ − f⁽ʳ⁾‖₂ / ‖f⁽ʳ⁾‖₂, is below `tol`
+        (or at `max_iter`), in place of the χ² test.
     step : callable, optional
         Update used in place of [`rl_step`][optix.deconv.utils.rl_step],
         e.g. the update over several views,
@@ -256,17 +272,20 @@ def rl_block(
         a [`Multiview`][optix.deconv.utils.Multiview] and `data` the
         views stacked. It is called once per iteration as
         `step(f, data, op, inv_norm=, background=, damping=, mu=,
-        flat=, back=)` and returns the new estimate on the object grid:
-        `f` the current estimate (or the extrapolated prediction with
-        `accelerate`), `data` the data (or the conditional mean of the
-        counts with `expect`), `inv_norm` the reciprocal of Hᵀ1 (of
-        Hᵀβ with `flat`, of B1 with `back`) on the support, 0
-        elsewhere, and `mu` the expected data β·H f + b at `f` if
-        already computed (by the χ² test or `expect`), else None; the
-        other keywords are those given to `rl_block`. A hook may ignore
-        `inv_norm` (it need not be the normaliser of its update) but
-        must accept every keyword; a hook that also takes `**kwargs`
-        keeps working if keywords are added to this call. Default:
+        flat=, back=, penalty=)` and returns the new estimate on the
+        object grid: `f` the current estimate (or the extrapolated
+        prediction with `accelerate`), `data` the data (or the
+        conditional mean of the counts with `expect`), `inv_norm` the
+        reciprocal of Hᵀ1 (of Hᵀβ with `flat`, of B1 with `back`) on
+        the support, 0 elsewhere, and `mu` the expected data β·H f + b
+        at `f` if already computed (by the χ² test or `expect`), else
+        None; the other keywords are those given to `rl_block`. A hook
+        may ignore `inv_norm` (it need not be the normaliser of its
+        update) but must accept every keyword, and should raise for an
+        option it does not implement: `Multiview.step` rejects `flat`,
+        `back` and `penalty`, so multiview RL-TV is an error. A hook
+        that also takes `**kwargs` keeps working if keywords are added
+        to this call. Default:
         `rl_step`.
 
     Returns
@@ -306,7 +325,7 @@ def rl_block(
                 num = float((g1 * g2).sum(dtype=torch.float64))
                 gamma = (a * num / den) ** 2 if den > 0 else 0.0
         mu = None
-        if n_iter is None:
+        if n_iter is None and tol is None:
             mu = _expected(f, op, background, flat)
             if chi2_probability(data + variance, mu + variance) >= alpha:
                 break
@@ -330,7 +349,16 @@ def rl_block(
             mu=mu,
             flat=flat,
             back=back,
+            penalty=penalty,
         )
+        stop = False
+        if n_iter is None and tol is not None:
+            old = op.crop(f)
+            f64 = torch.float64
+            change = torch.linalg.vector_norm(op.crop(new) - old, dtype=f64)
+            stop = bool(
+                change <= tol * torch.linalg.vector_norm(old, dtype=f64)
+            )
         if accelerate:
             if n > 0:  # the first update only sets the starting image
                 g1, g2 = new - y, g1
@@ -341,6 +369,8 @@ def rl_block(
         eta = 1.0 + gamma * eta
         effective += eta
         n += 1
+        if stop:
+            break
     if trace is not None:
         trace["alpha"] = alphas
         trace["clipped"] = clipped
@@ -487,6 +517,7 @@ class RichardsonLucy(Estimator):
     }
     recommended = dict(paper)
     _accelerate = False
+    _extra_overhead = 0.0  # working buffers of a subclass's update
 
     def __init__(
         self,
@@ -765,7 +796,10 @@ class RichardsonLucy(Estimator):
             self.options["block"],
             halo,
             overhead=self._overhead(
-                psf, _OVERHEAD_ACCEL if self._accelerate else _OVERHEAD, data
+                psf,
+                (_OVERHEAD_ACCEL if self._accelerate else _OVERHEAD)
+                + self._extra_overhead,
+                data,
             ),
             contiguous=True,
             align=chunks_of(out),

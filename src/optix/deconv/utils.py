@@ -13,6 +13,7 @@ from ._linear import (
 from ._multiview import Multiview, compound_kernels
 from ._nagy import RegionPreconditioner, cgls, optimal_circulant
 from ._rl import biggs_andrews_alpha, chi2_probability, rl_block, rl_step
+from ._rltv import tv_curvature
 from ._shiftvariant import (
     ShiftVariantConvolution,
     ShiftVariantPSF,
@@ -46,4 +47,5 @@ __all__ = [
     "rl_step",
     "smooth_periodic_extension",
     "transfer_function",
+    "tv_curvature",
 ]

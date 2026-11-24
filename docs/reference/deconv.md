@@ -11,6 +11,7 @@ Deconvolution with a known point spread function.
       show_root_toc_entry: false
       members:
         - RichardsonLucy
+        - RichardsonLucyTV
         - Snyder
         - WienerButterworth
         - BiggsAndrews
@@ -39,6 +40,7 @@ Deconvolution with a known point spread function.
       show_root_toc_entry: false
       members:
         - richardson_lucy
+        - richardson_lucy_tv
         - wiener_butterworth
         - biggs_andrews
         - nagy_oleary
@@ -73,6 +75,7 @@ Deconvolution with a known point spread function.
         - linear_filter
         - rl_step
         - rl_block
+        - tv_curvature
         - biggs_andrews_alpha
         - chi2_probability
         - back_projector

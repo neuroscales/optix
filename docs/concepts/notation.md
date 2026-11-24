@@ -184,6 +184,8 @@ write `λ₀`, `k₀`.
 | $\kappa_j$ | eigenvalue of the $j$-th basis function for the Laplacian | `dct_bending` |
 | $h$, $\ell$ | grid spacing; order of the energy $\mathbf{f}^\top(-\boldsymbol{\Delta}_h)^\ell \mathbf{f}$ | `dct_bending(order=)` |
 | $\mathbf{A}$ | forward operator (blur) | |
+| $\lambda_{\mathrm{TV}}$ | weight of the total-variation penalty $\sum_p \lVert\nabla\mathbf{x}\rVert_p$ | `lambda_tv` |
+| $\nabla$, $\operatorname{div}$ | gradient and divergence of an image (forward and backward differences) | `tv_curvature` |
 | $\mathbf{W}$ | pixel weights | |
 | $\lambda$ | weight of a regulariser (a subscript tells several apart: $\lambda_f$, $\lambda_d$); distinct from the photoelectron count by context | `regularization` |
 | $\mathbf{L}_x$, $\mathbf{L}_y$ | second-difference operators along $x$ and $y$ | |

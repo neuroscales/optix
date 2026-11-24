@@ -27,6 +27,7 @@ example. The sections follow the modules of the
 | [`optix.attenuation`](../reference/attenuation.md) | [Depth-resolved attenuation](attenuation/depth-resolved.md) (`DepthResolved`) | attenuation coefficient along the propagation axis, and the compensated data |
 | [`optix.background`](../reference/background.md) | [Rolling ball](background/rolling-ball.md) (`RollingBall`, `TopHat`) | background, by grey-scale opening |
 | [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
+| | [Richardson–Lucy with TV](deconv/richardson-lucy-tv.md) (`RichardsonLucyTV`) | deconvolved image, total-variation regularised |
 | | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
 | | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
 | | [Nagy–O'Leary](deconv/nagy-oleary.md) (`NagyOLeary`, `NagyOLearyPSF`) | deconvolved image with a spatially variant PSF |

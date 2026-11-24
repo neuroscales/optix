@@ -40,6 +40,7 @@ nav = [
     ]},
     {"Deconvolution" = [
       "algorithms/deconv/richardson-lucy.md",
+      "algorithms/deconv/richardson-lucy-tv.md",
       "algorithms/deconv/biggs-andrews.md",
       "algorithms/deconv/snyder.md",
       "algorithms/deconv/nagy-oleary.md",

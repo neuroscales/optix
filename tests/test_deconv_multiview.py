@@ -309,6 +309,19 @@ def test_combined_updates_agree_and_keep_flux():
     )
 
 
+def test_step_rejects_penalty():
+    """Multiview RL-TV is not implemented: a penalty given to rl_block
+    with the multiview step hook raises rather than being ignored."""
+    truth, psfs, views = four_views(n=2, shape=(32, 32))
+    data = torch.stack(views)
+    ops = [PaddedConvolution(p, truth.shape) for p in psfs]
+    mv = Multiview(ops)
+    with pytest.raises(NotImplementedError, match="penalty"):
+        rl_block(
+            data, mv, 1.0, n_iter=1, step=mv.step, penalty=torch.ones_like
+        )
+
+
 def test_nonnegative_and_finite_with_zeros():
     truth, psfs, views = four_views(n=3, shape=(32, 32))
     views = [v * (torch.rand(v.shape) > 0.3) for v in views]
