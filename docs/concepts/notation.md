@@ -273,6 +273,9 @@ pixels of a profile (here, and only here, $j$ counts depth pixels).
 | $\mu_1$, $\mu_2$ | weights of the total variation and of the sparsity of $\mathbf{s}$ (the Gamma mean $\mu$ is unrelated) | `mu1`, `mu2` |
 | $\rho_z$ | weight of the differences along $z$ | `rho_z` |
 | $\iota_{S}$ | indicator of a set $S$: $0$ inside, $\infty$ outside | |
+| $t$, $c$ | background/foreground threshold and crossover (intensity range of the transition) of the dual-band wavelet-FFT filter | `threshold`, `crossover` |
+| $\boldsymbol{\chi}$ | foreground fraction of the dual-band wavelet-FFT filter: smoothed sigmoid of $(\mathbf{y} - t) / c$ | |
+| $\sigma_{\text{fg}}$, $\sigma_{\text{bg}}$ | foreground and background bandwidths of the dual-band wavelet-FFT filter | `sigma`, `sigma_background` |
 
 ## Distributions
 
