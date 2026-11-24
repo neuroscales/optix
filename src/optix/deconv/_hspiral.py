@@ -14,6 +14,7 @@ from ..optim import (
     Box,
     Convolution,
     Hessian,
+    HessianSchatten,
     Schatten,
     ShiftedPoisson,
     Term,
@@ -26,13 +27,15 @@ from ._variational import _Problem, _Variational
 __all__ = ["HSPIRAL", "hspiral"]
 
 _BOUNDARY = ("periodic", "unknown")
+_VARIANTS = (1, 2)
 #: Constant κ of the default weight τ = κ / (q₉₉.₉(y) − q₅₀(y)) (not in
 #: the paper).
 _KAPPA = 1.6
 #: Working buffers of `admm_fft` per voxel of the FFT grid (measured
-#: peak), per number of Hessian components C: base + per_component·C.
-_GRID_BASE = 21.0
-_GRID_COMPONENT = 3.5
+#: peak), per number of Hessian components C: base + per_component·C,
+#: for HSPIRAL2 and HSPIRAL1 (with its inner dual algorithm).
+_GRID_BASE = {2: 21.0, 1: 27.0}
+_GRID_COMPONENT = {2: 3.5, 1: 3.0}
 
 
 class _CircularConvolution:
@@ -60,7 +63,7 @@ class _CircularConvolution:
 
 
 class HSPIRAL(_Variational):
-    """Poisson deconvolution with a Hessian Schatten-norm prior (HSPIRAL2).
+    """Poisson deconvolution with a Hessian Schatten-norm prior (HSPIRAL).
 
     **Model** (Lefkimmiatis & Unser 2013, Eqs. 1–3). The data are photon
     counts y ~ Poisson(K x), with K the convolution with the PSF and
@@ -74,31 +77,50 @@ class HSPIRAL(_Variational):
     the Schatten norm of order p (Eq. 5), the ℓ_p norm of its singular
     values, which are the absolute eigenvalues of the symmetric Hessian:
     the nuclear norm (p = 1, sum), the Frobenius norm (p = 2) or the
-    spectral norm (p = ∞, largest). The second differences compose
-    forward differences, D_ab = D_a D_b (Lefkimmiatis, Bourquard & Unser
-    2012, Eq. 21; [`Hessian`][optix.optim.Hessian]).
+    spectral norm (p = ∞, largest). The second differences are forward
+    stencils (Section IV: "defined as in [16]", Lefkimmiatis, Ward &
+    Unser 2013, Eq. 10; [`Hessian`][optix.optim.Hessian]).
 
-    **Solver** (Algorithm 2, HSPIRAL2). ADMM with the splits z₁ = K x,
-    z₂ = H x, z₃ = x and one penalty α (see
-    [`admm_fft`][optix.optim.admm_fft], `order="z-first"`): z₁ by the
-    closed-form Poisson prox (Eq. 27), z₂ by the Schatten-norm prox
-    (Proposition 1; closed forms of Eqs. 43–47, see
-    [`prox_schatten`][optix.optim.prox_schatten]), z₃ by projection onto
-    x ≥ 0 (Eq. 32), then the x-update (Eq. 42), solved in the Fourier
-    domain, and the dual updates. It starts from x⁰ = y with zero duals,
-    uses α = 60τ/M (Section IV-C) and stops when
+    **Solvers.** The paper gives two ADMM algorithms for Eq. (12), with
+    the z-update first (Eqs. 18a–c; see
+    [`admm_fft`][optix.optim.admm_fft], `order="z-first"`), one penalty
+    α and scaled duals s. Both start from x⁰ = y with zero duals, use
+    α = 60τ/M (Sections IV-A and IV-C) and stop when
     ‖xᵏ⁺¹ − xᵏ‖₂ ≤ 10⁻⁵ ‖xᵏ‖₂ or after 400 iterations (Section IV-B).
-    The result is xᵏ (Algorithm 2 returns x); it is not projected onto
+    The result is xᵏ (the algorithms return x); it is not projected onto
     x ≥ 0. Each solve records its number of iterations, last relative
     change and last primal and dual residuals in `history.extras`.
 
+    - **HSPIRAL1** (Algorithm 1, `variant=1`, the default: the variant
+      of the paper's experiments, Section IV-B). Splits z₁ = K x and
+      z₂ = x (Eqs. 24–25): z₁ by the closed-form Poisson prox (Eq. 27),
+      z₂ = prox of (τ/α)‖H·‖₁,ₚ + ι_C (Eq. 28), x = (KᵀK + I)⁻¹(Kᵀ(z₁ −
+      s₁) + z₂ − s₂) (Eq. 29, in the Fourier domain), then the dual
+      updates (Eq. 23). The prox of Eq. (28) has no closed form: it is
+      computed by 5 iterations (Section IV-B) of the dual algorithm of
+      Lefkimmiatis, Ward & Unser (2013, Algorithm 2; see
+      [`prox_hessian_schatten`][optix.optim.prox_hessian_schatten] and
+      [`HessianSchatten`][optix.optim.HessianSchatten]), started from
+      its dual of the previous ADMM iteration (Section III-C). H has
+      the boundary of that paper (Eq. 10: half-sample mirror,
+      `Hessian(boundary="mirror")`).
+    - **HSPIRAL2** (Algorithm 2, `variant=2`). Splits z₁ = K x, z₂ = H x,
+      z₃ = x (Eqs. 30–31): z₁ by Eq. (27), z₂ by the Schatten-norm prox
+      (Proposition 1; closed forms of Eqs. 43–47, see
+      [`prox_schatten`][optix.optim.prox_schatten]), z₃ by projection
+      onto x ≥ 0 (Eq. 32), then the x-update (Eq. 42) in the Fourier
+      domain, and the dual updates. The Fourier solve needs H periodic
+      (D_ab = D_a D_b with wrap-around; Lefkimmiatis, Bourquard & Unser
+      2012, Eq. 21), so the two variants differ in the Hessian at the
+      last two rows and columns of the block.
+
     **Boundary.** The paper assumes periodic (or mirror) boundaries for
-    the FFT solve of Eq. (42) and does not say which its experiments
-    use; the default here is periodic: the blur and the differences wrap
-    around the block, as in a circular-blur simulation.
-    `boundary="unknown"` is an extension (not in the paper): x lives on
-    a larger grid (the block plus the PSF, as in
-    [`Ikoma`][optix.deconv.Ikoma]), the Poisson term sums over the
+    the FFT solve of Eqs. (29) and (42) and does not say which its
+    experiments use; the default here is periodic: the blur (and, for
+    HSPIRAL2, the differences) wrap around the block, as in a
+    circular-blur simulation. `boundary="unknown"` is an extension (not
+    in the paper): x lives on a larger grid (the block plus the PSF, as
+    in [`Ikoma`][optix.deconv.Ikoma]), the Poisson term sums over the
     observed pixels only, and x⁰ is the data continued smoothly over the
     margin; it avoids wrap-around artefacts on real images and is the
     default of the `faithful=False` preset.
@@ -110,9 +132,15 @@ class HSPIRAL(_Variational):
     - p: the paper compares 1, 2 and ∞ with no default; p = 1 gave the
       best pooled PSNR in its Table I and is the default. All three are
       the paper's method.
-    - Dimension: the paper is 2-D. In 3-D, p = 2 works unchanged (the
-      Frobenius norm of the 3 × 3 Hessian, the prox needs no
-      eigenvalues); p ∈ {1, ∞} raises `NotImplementedError`.
+    - Dimension: the paper is 2-D. In 3-D both variants are unchanged,
+      with the 3 × 3 Hessian (6 components, ‖H‖² ≤ 144 for the step of
+      the inner algorithm of HSPIRAL1): p = 2 needs no eigenvalues, and
+      p ∈ {1, ∞} use the closed-form 3 × 3 eigen-decomposition of
+      [`prox_schatten`][optix.optim.prox_schatten].
+    - HSPIRAL1 warm start: the inner algorithm restarts its momentum at
+      every ADMM iteration (t₁ = 1, Ψ₁ = Ω from the previous iteration);
+      the paper says only that its internal variables are initialised
+      with those of the previous iteration.
     - The regularisation weight τ: the paper tunes τ per image for the
       best PSNR. The default here is
 
@@ -131,7 +159,9 @@ class HSPIRAL(_Variational):
       up to a constant, so ℓ(x; y) + κ‖H x/s‖ has the weight τ = κ/s.
       The rule needs q₉₉.₉(y) > q₅₀(y) (pass `tau` otherwise).
 
-      κ was calibrated for the paper's α rule and stopping rule on
+      κ was calibrated with HSPIRAL2 (both variants minimise Eq. 12,
+      with Hessians that differ only at the last two rows and columns),
+      for the paper's α rule and stopping rule, on
       simulated images with circular blur (Gaussian, σ_b = 2, 9 × 9;
       uniform 7 × 7): blobs, filaments, their mixture and
       piecewise-smooth scenes, peaks of 10, 100 and 1000 photons on a
@@ -171,21 +201,19 @@ class HSPIRAL(_Variational):
 
     Paper notation: K the blur (h here elsewhere), H the Hessian
     (ℋ in the paper), τ, α, p as here; the paper's s are the scaled
-    duals u of `admm_fft`.
-
-    !!! note "HSPIRAL1"
-        The paper's second variant, HSPIRAL1 (Algorithm 1, used for its
-        tables), splits only z₁ = K x and z₂ = x and evaluates the prox
-        of τ‖H·‖₁,ₚ + ι_C iteratively with the algorithm of Lefkimmiatis,
-        Ward & Unser (2013). Both variants minimise Eq. (12); only
-        HSPIRAL2 is implemented.
+    duals u of `admm_fft`; the inner algorithm's Ω, Ψ, t are those of
+    [`prox_hessian_schatten`][optix.optim.prox_hessian_schatten].
 
     !!! references "References"
         1. Lefkimmiatis S, Unser M. *Poisson image reconstruction with
            Hessian Schatten-norm regularization.* IEEE Trans Image
            Process **22**(11):4314-4327, 2013.
            [doi:10.1109/TIP.2013.2271852](https://doi.org/10.1109/TIP.2013.2271852)
-        2. Lefkimmiatis S, Bourquard A, Unser M. *Hessian-based norm
+        2. Lefkimmiatis S, Ward JP, Unser M. *Hessian Schatten-norm
+           regularization for linear inverse problems.* IEEE Trans Image
+           Process **22**(5):1873-1888, 2013.
+           [doi:10.1109/TIP.2013.2237919](https://doi.org/10.1109/TIP.2013.2237919)
+        3. Lefkimmiatis S, Bourquard A, Unser M. *Hessian-based norm
            regularization for image restoration with biomedical
            applications.* IEEE Trans Image Process **21**(3):983-995,
            2012.
@@ -203,6 +231,18 @@ class HSPIRAL(_Variational):
               pages   = {4314--4327},
               year    = {2013},
               doi     = {10.1109/TIP.2013.2271852}
+            }
+            @article{lefkimmiatis2013hessian,
+              author  = {Lefkimmiatis, Stamatios and Ward, John Paul and
+                         Unser, Michael},
+              title   = {{Hessian} {Schatten}-Norm Regularization for
+                         Linear Inverse Problems},
+              journal = {IEEE Transactions on Image Processing},
+              volume  = {22},
+              number  = {5},
+              pages   = {1873--1888},
+              year    = {2013},
+              doi     = {10.1109/TIP.2013.2237919}
             }
             @article{lefkimmiatis2012hessian,
               author  = {Lefkimmiatis, Stamatios and Bourquard, Aur{\\'e}lien
@@ -252,6 +292,8 @@ class HSPIRAL(_Variational):
     paper = {
         "tau": None,
         "p": 1,
+        "variant": 1,
+        "inner_iter": 5,
         "rho": None,
         "max_iter": 400,
         "tol": 1e-5,
@@ -263,9 +305,10 @@ class HSPIRAL(_Variational):
     #: wrap-around of the periodic boundary on real images.
     recommended = {**paper, "boundary": "unknown"}
     #: Options that do not make an estimate unfaithful: τ is tuned per
-    #: image and p ∈ {1, 2, ∞} are all compared in the paper; `halo` and
-    #: `block` are memory settings.
-    _free = ("tau", "p", "halo", "block")
+    #: image, p ∈ {1, 2, ∞} are all compared in the paper and both
+    #: variants are its algorithms; `halo` and `block` are memory
+    #: settings.
+    _free = ("tau", "p", "variant", "halo", "block")
 
     def __init__(
         self,
@@ -273,6 +316,8 @@ class HSPIRAL(_Variational):
         *,
         tau: float | None = None,
         p: float | str | None = None,
+        variant: int | None = None,
+        inner_iter: int | None = None,
         rho: float | None = None,
         max_iter: int | None = None,
         tol: float | None = None,
@@ -298,7 +343,13 @@ class HSPIRAL(_Variational):
             paper).
         p : {1, 2, inf}
             Order of the Schatten norm. Default: 1 (all three are the
-            paper's method; p ∈ {1, inf} needs a 2-D PSF).
+            paper's method).
+        variant : {1, 2}
+            HSPIRAL1 (default, the paper's experiments) or HSPIRAL2; both
+            are faithful.
+        inner_iter : int
+            Iterations of the inner prox of HSPIRAL1 per ADMM iteration.
+            Default (paper): 5. Unused by HSPIRAL2.
         rho : float, optional
             ADMM penalty α > 0. Default (paper): 60τ / max y per image.
         max_iter : int
@@ -353,16 +404,15 @@ class HSPIRAL(_Variational):
         if p not in (1.0, 2.0, math.inf):
             raise ValueError(f"p must be 1, 2 or inf, got {opts['p']!r}")
         opts["p"] = p
+        if opts["variant"] not in _VARIANTS:
+            raise ValueError(
+                f"variant must be 1 or 2, got {opts['variant']!r}"
+            )
+        if int(opts["inner_iter"]) < 1:
+            raise ValueError("inner_iter must be positive")
         psf = self.psf
-        if psf is not None:
-            ndim = torch.as_tensor(psf).ndim
-            if ndim not in (2, 3):
-                raise ValueError("psf must be 2-D or 3-D")
-            if ndim == 3 and p != 2:
-                raise NotImplementedError(
-                    "HSPIRAL in 3-D is implemented for p=2 only (the "
-                    "Frobenius norm of the Hessian)"
-                )
+        if psf is not None and torch.as_tensor(psf).ndim not in (2, 3):
+            raise ValueError("psf must be 2-D or 3-D")
         if opts["boundary"] not in _BOUNDARY:
             raise ValueError(f"boundary must be one of {_BOUNDARY}")
         if opts["tau"] is not None and not float(opts["tau"]) >= 0:
@@ -383,11 +433,8 @@ class HSPIRAL(_Variational):
             raise ValueError("psf must be non-negative")
         if not psf.sum() > 0:
             raise ValueError("psf must have a positive sum")
-        if psf.ndim == 3 and self.options["p"] != 2:
-            raise NotImplementedError(
-                "HSPIRAL in 3-D is implemented for p=2 only (the "
-                "Frobenius norm of the Hessian)"
-            )
+        if psf.ndim not in (2, 3):
+            raise ValueError("psf must be 2-D or 3-D")
         return psf / psf.sum()
 
     def _prepare(self, chunk: Chunk, maps: dict) -> _Problem:
@@ -425,7 +472,9 @@ class HSPIRAL(_Variational):
     def _grid_buffers(self) -> float:
         psf = self.psf
         ndim = 2 if psf is None else torch.as_tensor(psf).ndim
-        return _GRID_BASE + _GRID_COMPONENT * (ndim * (ndim + 1) // 2)
+        variant = self.options["variant"]
+        components = ndim * (ndim + 1) // 2
+        return _GRID_BASE[variant] + _GRID_COMPONENT[variant] * components
 
     def _grid_shape(
         self, loaded: Sequence[int], kernel: Sequence[int]
@@ -466,14 +515,26 @@ class HSPIRAL(_Variational):
                 (g - n) // 2 for g, n in zip(op.grid, op.shape, strict=True)
             ]
             x0 = smooth_periodic_extension(data, op.grid, mirror)
-        terms = [
-            Term(Convolution(op.otf, op.grid), ShiftedPoisson(data), region),
-            Term(
-                Hessian(op.ndim),
-                Schatten(tau, self.options["p"], ndim=op.ndim),
-            ),
-            Term(None, Box(0.0)),
-        ]
+        p = self.options["p"]
+        blur = Term(Convolution(op.otf, op.grid), ShiftedPoisson(data), region)
+        if self.options["variant"] == 1:
+            # Algorithm 1: z₂ = x, f₂ = τ‖H·‖₁,ₚ + ι_C (Eqs. 24–25, 28)
+            penalty = HessianSchatten(
+                tau,
+                p,
+                ndim=op.ndim,
+                lower=0.0,
+                n_iter=int(self.options["inner_iter"]),
+                boundary="mirror",
+            )
+            terms = [blur, Term(None, penalty)]
+        else:
+            # Algorithm 2: z₂ = H x, z₃ = x (Eqs. 30–31)
+            terms = [
+                blur,
+                Term(Hessian(op.ndim), Schatten(tau, p, ndim=op.ndim)),
+                Term(None, Box(0.0)),
+            ]
         tol = self.options["tol"]
         res = admm_fft(
             terms,

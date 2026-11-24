@@ -144,7 +144,7 @@ class Schatten:
     [`GroupL2`][optix.optim.GroupL2]) or the spectral norm (p = ∞, the
     largest absolute eigenvalue). See
     [`prox_schatten`][optix.optim.prox_schatten] for the prox; p ∈ {1, ∞}
-    is available for 2 × 2 matrices (2-D images) only.
+    is available for matrices up to 3 × 3 (2-D and 3-D images).
     """
 
     def __init__(
@@ -164,7 +164,7 @@ class Schatten:
         p : {1, 2, inf}
             Order of the Schatten norm.
         ndim : int, optional
-            Matrix size d, checked against p (p ∈ {1, ∞} needs d ≤ 2).
+            Matrix size d, checked against p (p ∈ {1, ∞} needs d ≤ 3).
             Default: taken from the number of components.
         dim : int
             Component dim.
@@ -172,7 +172,7 @@ class Schatten:
         Raises
         ------
         NotImplementedError
-            For p ∈ {1, ∞} with d > 2.
+            For p ∈ {1, ∞} with d > 3.
         """
         self.weight = weight
         self.p = _schatten_p(p)
@@ -182,10 +182,10 @@ class Schatten:
             self._check(int(ndim))
 
     def _check(self, d: int) -> None:
-        if self.p != 2 and d > 2:
+        if self.p != 2 and d > 3:
             raise NotImplementedError(
-                "Schatten norms with p in {1, inf} are implemented for 2-D "
-                "images (2 × 2 Hessians) only; use p=2"
+                "Schatten norms with p in {1, inf} are implemented for "
+                "matrices up to 3 × 3 (2-D and 3-D images); use p=2"
             )
 
     def value(self, z: Tensor) -> Tensor:

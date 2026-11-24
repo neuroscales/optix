@@ -366,15 +366,17 @@ def test_prox_schatten_special_cases():
     torch.testing.assert_close(
         prox_schatten(v, 0.5, 1, dim=1), prox_schatten(v.T, 0.5, 1).T
     )
-    # 3 × 3 with p in {1, inf}: not implemented; bad p and C rejected
+    # 4 × 4 with p in {1, inf}: not implemented; bad p and C rejected
     v6 = torch.randn(6, 4, generator=g, dtype=F64)
+    v10 = torch.randn(10, 4, generator=g, dtype=F64)
     for p in (1, math.inf):
         with pytest.raises(NotImplementedError):
-            prox_schatten(v6, 0.1, p)
+            prox_schatten(v10, 0.1, p)
         with pytest.raises(NotImplementedError):
-            schatten_norm(v6, p)
+            schatten_norm(v10, p)
         with pytest.raises(NotImplementedError):
-            Schatten(1.0, p, ndim=3)
+            Schatten(1.0, p, ndim=4)
+        Schatten(1.0, p, ndim=3)  # 3 × 3: closed form
     assert Schatten(1.0, "inf").p == math.inf
     with pytest.raises(ValueError, match="p must be"):
         prox_schatten(v6, 0.1, 3)
