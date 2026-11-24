@@ -233,36 +233,35 @@ makes an iteration dearer than one of Richardson–Lucy;
 
 ## Usage
 
+The example images a [phantom](../../reference/models.md#phantoms) of filaments through a Gaussian PSF
+and a simulated camera with read noise.
+
 ```python
 import torch
-from optix.deconv import Snyder, RichardsonLucy
-from optix.models import gaussian_psf, simulate_blur
-from optix.estimates import SensorEstimate
-
-torch.manual_seed(0)
-
-# 1. A Gaussian PSF and a test pattern, imaged by a camera with read noise.
-psf = gaussian_psf((15, 15), sigma=2.0)
-x = torch.full((64, 64), 2.0)
-x[16:48:8, 16:48] = 40.0
-gain, offset, sigma = 2.0, 100.0, 3.0
-counts = torch.poisson(simulate_blur(x, psf))
-y = offset + gain * counts + sigma * torch.randn(64, 64)
-sensor = SensorEstimate(offset=offset, gain=gain, variance=sigma**2)
-
-# 2. Snyder with the camera model; Richardson–Lucy for comparison.
-sn = Snyder(psf, n_iter=30).fit(y, init=sensor)
-x_sn = sn.apply(y)
-x_sp = (
-    Snyder(psf, n_iter=30, noise="shifted-poisson")
-    .fit(y, init=sensor)
-    .apply(y)
+from optix.deconv import RichardsonLucy, Snyder
+from optix.models import (
+    gaussian_psf,
+    phantoms,
+    random_sensor,
+    simulate_blur,
+    simulate_sensor,
 )
-x_rl = RichardsonLucy(psf, n_iter=30).fit(y, init=sensor).apply(y)
 
-# 3. Errors against the truth (in electrons).
-for est in (x_sn, x_sp, x_rl):
-    print(float((est - x).abs().mean()))
+# 1. Filaments, blurred and imaged by a camera with read noise.
+psf = gaussian_psf((15, 15), sigma=2.0)
+x = phantoms.filaments((64, 64), intensity=40.0, seed=0) + 2
+sensor = random_sensor((64, 64), gain=2.0, read_sd=6.0, offset_sd=0.0, seed=0)
+y = simulate_sensor(simulate_blur(x, psf), sensor, seed=0)
+
+# 2. Fit Snyder with the camera model, and Richardson–Lucy to compare.
+sn = Snyder(psf, n_iter=30).fit(y, init=sensor)
+sp = Snyder(psf, n_iter=30, noise="shifted-poisson").fit(y, init=sensor)
+rl = RichardsonLucy(psf, n_iter=30).fit(y, init=sensor)
+
+# 3. Apply, and 4. compare to the truth (electrons):
+# mean error about 3.7, 3.7 and 4.0.
+for est in (sn, sp, rl):
+    print(float((est.apply(y) - x).abs().mean()))
 ```
 
 Common variations: `fit(y, init=[sensor, shading])` to take the flat and dark

@@ -456,25 +456,25 @@ whole frame) is a valid choice.
 
 ## Usage
 
+The example adds stripes to a [phantom](../../reference/models.md#phantoms) of cells.
+
 ```pycon
->>> import torch
 >>> from optix.destripe import VSNR
 >>> from optix.destripe.utils import line, vsnr_solve
->>> _ = torch.manual_seed(0)
->>> # 1. A frame (64 × 64) with stripes along the first axis: one offset per column.
->>> x = torch.zeros(64, 64)
->>> x[16:48, 16:48] = 100.0
->>> y = (x + 10 * torch.randn(1, 64))[None]  # (frames, H, W)
+>>> from optix.models import phantoms
+>>> # 1. Cells (the truth) with stripes along the first axis: one offset per column.
+>>> x = phantoms.cells((1, 64, 64), count=4, radius=10.0, seed=0)  # (frames, H, W)
+>>> y = x + phantoms.stripes((1, 64, 64), strength=10.0, seed=1)
 >>> # 2. One pattern: a line as long as the frame, along the first axis (the default).
 >>> filters = line((64, 64))
 >>> x_hat = VSNR(filters, alpha=10.0, prior="l2").fit(y).apply(y)
->>> # 3. The error before and after.
+>>> # 3. Compare to the truth: the error before and after.
 >>> print(f"{float((y - x).std()):.2f} {float((x_hat - x).std()):.2f}")
-10.42 1.38
+11.12 0.19
 >>> # 4. The iterations run and the final duality gap, relative to the first.
 >>> sol = vsnr_solve(y, filters, alpha=10.0, prior="l2", history=True)
 >>> print(int(sol.iterations), f"{float(sol.gap[-1] / sol.gap[0]):.1e}")
-170 9.6e-04
+209 9.9e-04
 ```
 
 The default prior, `"l1"`, suits sparse stripes, but with $\epsilon = 0$ its

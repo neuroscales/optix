@@ -244,14 +244,17 @@ works on frame batches. Tune `working_size`, `quantiles` and `bins`.
 
 ## Usage
 
+The example shades a [phantom](../../reference/models.md#phantoms) of cells
+with a known flat and dark field from
+[`optix.models`](../../reference/models.md).
+
 ```python
-import torch
-from optix.models import random_shading, simulate_shading
+from optix.models import phantoms, random_shading, simulate_shading
 from optix.shading import CIDRE
 
-# 1. A synthetic stack with known truth.
+# 1. A synthetic stack with known truth: 200 frames of cells, one shading.
 truth = random_shading((64, 64), dark=20.0, seed=0)
-x = 100 + 400 * torch.rand(50, 64, 64)
+x = phantoms.cells((200, 64, 64), count=40, intensity=400.0, seed=1) + 100
 data = simulate_shading(x, truth)
 
 # 2. Fit.
@@ -264,6 +267,7 @@ direct = cidre.apply(data, mode="direct")
 
 # 4. Compare to the truth: f is relative to Q, so normalise it first.
 flat = shading.flat / shading.flat.mean()
+error = ((flat - truth.flat).abs() / truth.flat).mean()  # about 0.02
 zero_light = cidre.zero_light_  # (Z_Q, Z_q)
 ```
 

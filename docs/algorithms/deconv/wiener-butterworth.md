@@ -186,26 +186,29 @@ Richardson–Lucy iteration.
 
 ## Usage
 
+The example blurs a [phantom](../../reference/models.md#phantoms) of thin filaments with a Gaussian PSF
+and compares one WB iteration with 20 Richardson–Lucy iterations.
+
 ```python
 import torch
 from optix.deconv import RichardsonLucy, WienerButterworth
-from optix.models import gaussian_psf, simulate_blur
+from optix.models import gaussian_psf, phantoms, simulate_blur
 
 torch.manual_seed(0)
 
-# 1. A Gaussian PSF and a blurred, Poisson-noisy test pattern.
+# 1. A Gaussian PSF and a blurred, Poisson-noisy specimen of filaments.
 psf = gaussian_psf((15, 15), sigma=2.0)
-x = torch.full((96, 96), 5.0)
-x[20:76:8, 20:76] = 200.0
+x = phantoms.filaments((96, 96), intensity=200.0, seed=0) + 5
 y = torch.poisson(simulate_blur(x, psf))
 
-# 2. One WB iteration, against 20 Richardson–Lucy iterations.
+# 2. Fit one WB iteration, and 20 Richardson–Lucy iterations to compare.
 wb = WienerButterworth(psf).fit(y)
-x_wb = wb.apply(y)
-x_rl = RichardsonLucy(psf, n_iter=20).fit(y).apply(y)
+rl = RichardsonLucy(psf, n_iter=20).fit(y)
 
-# 3. The back-projector kernel, and the errors against the truth.
-print(tuple(wb.kernel().shape))
+# 3. Apply.
+x_wb, x_rl = wb.apply(y), rl.apply(y)
+
+# 4. Compare to the truth: mean error about 18 (WB), 9 (RL).
 print(float((x_wb - x).abs().mean()), float((x_rl - x).abs().mean()))
 ```
 

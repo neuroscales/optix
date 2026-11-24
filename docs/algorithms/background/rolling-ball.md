@@ -261,23 +261,24 @@ cheaper.
 
 ## Usage
 
+The example puts the beads of a [phantom](../../reference/models.md#phantoms) on a smooth background.
+
 ```pycon
 >>> import torch
 >>> from optix.background import RollingBall, rolling_ball
->>> r, c = torch.meshgrid(torch.arange(128.0), torch.arange(128.0), indexing="ij")
->>> background = 20 + 10 * torch.sin(c / 40) + 5 * torch.cos(r / 30)
->>> spots = sum(
-...     60 * torch.exp(-((r - cy) ** 2 + (c - cx) ** 2) / 18)
-...     for cy, cx in [(30, 40), (80, 90), (100, 25)]
-... )
+>>> from optix.models import phantoms
+>>> # 1. A smooth background (the truth) under ten blurred beads.
+>>> background = phantoms.background((128, 128), level=20.0, seed=0)
+>>> spots, _ = phantoms.beads((128, 128), count=10, sigma=2.0, seed=1)
 >>> data = background + spots
-
+>>> # 2. Subtract the background, or 3. return it.
 >>> corrected = rolling_ball(data, radius=15)
 >>> estimate = rolling_ball(data, radius=15, output="background")
 >>> bool((corrected >= 0).all())
 True
->>> bool((estimate - background).abs().mean() < 0.5)
-True
+>>> # 4. Compare to the truth: mean error about 0.07 (level 20).
+>>> round(float((estimate - background).abs().mean()), 2)
+0.07
 ```
 
 For a stack, the estimator filters every frame and returns the background with

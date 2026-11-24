@@ -141,22 +141,23 @@ with a filter of length $F$; the working memory is a few copies of a batch.
 
 ## Usage
 
+The example adds stripes to a [phantom](../../reference/models.md#phantoms) of cells on a smooth background.
+
 ```python
-import torch
 from optix.destripe import WaveletFFT
+from optix.models import phantoms
 
-torch.manual_seed(0)
+# 1. Cells on a background (the truth), plus stripes along the first axis.
+shape = (1, 128, 128)  # (frames, H, W)
+x = phantoms.cells(shape, intensity=50.0, seed=0)
+x = x + phantoms.background(shape, level=100.0, seed=1)
+y = x + phantoms.stripes(shape, strength=10.0, seed=2)
 
-# 1. A frame with stripes along the first axis (one offset per column).
-x = torch.rand(128, 128) * 10 + 100
-stripes = 5 * torch.randn(128)
-y = (x + stripes[None, :])[None]  # (frames, H, W)
-
-# 2. Filter (nothing is fitted).
+# 2. Fit (nothing is learned) and 3. filter.
 y_hat = WaveletFFT().fit(y).apply(y)
 
-# 3. Residual stripes, before and after.
-print(float((y[0] - x).std()), float((y_hat[0] - x).std()))
+# 4. Compare to the truth: error std about 8.9 before, 3.5 after.
+print(float((y - x).std()), float((y_hat - x).std()))
 ```
 
 Common variations: `axis=-1` for horizontal stripes, `level=` and `sigma=` for

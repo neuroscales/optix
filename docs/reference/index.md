@@ -26,7 +26,7 @@ the reference to look up a signature.
 | [`optix.background`](background.md) | `RollingBall`, `TopHat`, `rolling_ball` and `top_hat`: background subtraction by grey-scale opening |
 | [`optix.psf`](psf.md) | point spread functions: `BeadPSF`, `bead_psf` and `lightsheet_psf` |
 | [`optix.fusion`](fusion.md) | tiled acquisitions: `IntensityAdjustment` |
-| [`optix.models`](models.md) | simulators of the camera, shading and tiling models |
+| [`optix.models`](models.md) | simulators of the camera, shading and tiling models; phantoms |
 | [`optix.distributions`](distributions.md) | `Gamma`, `Normal`, `Dirichlet`, `Categorical`, statistics and conjugate updates |
 | [`optix.distributions.functional`](functional.md) | the pure tensor kernels behind the distributions |
 

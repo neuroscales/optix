@@ -238,6 +238,7 @@ pixels of a profile (here, and only here, $j$ counts depth pixels).
 | $w_q$ | weight of the difference between positions $q+1$ and $q$ in the total variation, $1/(y_q + \epsilon)$ | `weighted_tv` |
 | $\eta$, $\epsilon$ | weight of the total variation, and floor of its weights; $\eta$ is also the natural parameters of a distribution, and $\epsilon$ (this glyph) differs from the read noise $\varepsilon$ | `eta`, `epsilon` |
 | $\sigma^2$ | average noise power of the restoration filter (also the read-noise variance) | `noise_power` |
+
 ## Tiles
 
 | Symbol | Meaning | In code |

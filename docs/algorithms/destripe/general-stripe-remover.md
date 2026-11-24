@@ -375,21 +375,21 @@ set `tol`, for large frames, and check the result.
 
 ## Usage
 
+The example adds stripes to a [phantom](../../reference/models.md#phantoms) of cells.
+
 ```pycon
->>> import torch
 >>> from optix.destripe import GeneralStripeRemover
->>> _ = torch.manual_seed(0)
->>> # 1. A disc with stripes along the first axis (one offset per column).
->>> rows, cols = torch.meshgrid(torch.arange(48), torch.arange(48), indexing="ij")
->>> clean = 0.2 + 0.5 * (((rows - 24) ** 2 + (cols - 24) ** 2) < 14**2)
->>> stripes = 0.15 * torch.randn(48)
->>> data = (clean + stripes[None, :]).clamp(0, 1)[None]  # (frames, H, W)
->>> # 2. Destripe (nothing is fitted); few iterations for the example.
+>>> from optix.models import phantoms
+>>> # 1. Cells on a constant level (the truth), stripes along the first axis.
+>>> shape = (1, 48, 48)  # (frames, H, W)
+>>> x = phantoms.cells(shape, count=3, radius=8.0, intensity=0.5, seed=0) + 0.2
+>>> y = (x + phantoms.stripes(shape, strength=0.15, seed=1)).clamp(0, 1)
+>>> # 2. Fit (nothing is learned; few iterations for the example) and 3. apply.
 >>> remover = GeneralStripeRemover(max_iter=300)
->>> destriped = remover.fit(data).apply(data)
->>> # 3. Residual stripes, before and after.
->>> print(f"{(data[0] - clean).std():.3f} -> {(destriped[0] - clean).std():.3f}")
-0.137 -> 0.031
+>>> x_hat = remover.fit(y).apply(y)
+>>> # 4. Compare to the truth: the error std before and after.
+>>> print(f"{(y - x).std():.3f} -> {(x_hat - x).std():.3f}")
+0.145 -> 0.048
 >>> remover.is_faithful
 True
 ```

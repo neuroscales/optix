@@ -242,13 +242,12 @@ batches. To trade accuracy for speed, lower `working_size` or `max_frames`.
 ## Usage
 
 ```python
-import torch
-from optix.models import random_shading, simulate_shading
+from optix.models import phantoms, random_shading, simulate_shading
 from optix.shading import BaSiC
 
-# 1. A synthetic stack with known truth.
+# 1. A synthetic stack with known truth: 40 frames of cells, one flat field.
 truth = random_shading((64, 64), seed=0)
-x = 100 + 50 * torch.rand(40, 64, 64)
+x = phantoms.cells((40, 64, 64), seed=1) + 20  # on autofluorescence
 data = simulate_shading(x, truth)
 
 # 2. Fit.
@@ -259,7 +258,7 @@ flat = basic.estimates["shading"].flat
 corrected = basic.apply(data)
 
 # 4. Compare to the truth (both flats have mean 1).
-error = ((flat - truth.flat).abs() / truth.flat).max()
+error = ((flat - truth.flat).abs() / truth.flat).max()  # about 0.006
 ```
 
 Common variations:

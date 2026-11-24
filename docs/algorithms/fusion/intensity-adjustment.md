@@ -290,17 +290,15 @@ dimensions, which is why the paper fits on downsampled images, and why
 
 ## Usage
 
-A synthetic scene is cut into $2 \times 3$ overlapping tiles with random gains
+A [phantom](../../reference/models.md#phantoms) of cells on a smooth background is cut into $2 \times 3$ overlapping tiles with random gains
 and offsets; `positions` are the positions of the first pixel of each tile.
 
 ```pycon
 >>> import torch
 >>> from optix.fusion import IntensityAdjustment
->>> from optix.models import simulate_tiles
->>> gen = torch.Generator().manual_seed(0)
->>> r, c = torch.meshgrid(torch.arange(96.0), torch.arange(128.0), indexing="ij")
->>> x = 100 + 40 * torch.sin(r / 7) * torch.cos(c / 9)
->>> x = x + 20 * torch.rand(96, 128, generator=gen)
+>>> from optix.models import phantoms, simulate_tiles
+>>> x = phantoms.cells((96, 128), count=20, seed=0)
+>>> x = x + phantoms.background((96, 128), level=50.0, seed=1)
 >>> tiles, positions, truth = simulate_tiles(x, grid=(2, 3), overlap=0.25, seed=1)
 >>> len(tiles), tiles[0].shape
 (6, torch.Size([55, 52]))
@@ -333,7 +331,7 @@ agreement is good but not exact:
 True
 >>> harmonised = adj.apply(tiles)
 >>> estimate = adj.estimates["intensity"]
->>> estimate.meta["mse_after"][0] < 0.05 * estimate.meta["mse_before"][0]
+>>> estimate.meta["mse_after"][0] < 0.02 * estimate.meta["mse_before"][0]
 True
 >>> bool(torch.equal(estimate.correct(tiles[1], 1), harmonised[1]))
 True
