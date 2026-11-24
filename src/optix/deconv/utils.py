@@ -11,22 +11,36 @@ from ._linear import (
     smooth_periodic_extension,
 )
 from ._multiview import Multiview, compound_kernels
+from ._nagy import RegionPreconditioner, cgls, optimal_circulant
 from ._rl import biggs_andrews_alpha, chi2_probability, rl_block, rl_step
+from ._shiftvariant import (
+    ShiftVariantConvolution,
+    ShiftVariantPSF,
+    interpolation_weights,
+    object_positions,
+)
 from ._wb import BackProjection, back_projector, kernel_shape, psf_fwhm
 
 __all__ = [
     "BackProjection",
     "Multiview",
     "PaddedConvolution",
+    "RegionPreconditioner",
+    "ShiftVariantConvolution",
+    "ShiftVariantPSF",
     "back_projector",
     "biggs_andrews_alpha",
+    "cgls",
     "chi2_probability",
+    "interpolation_weights",
     "compound_kernels",
     "frequencies",
     "laplacian_power",
     "linear_filter",
     "kernel_shape",
     "next_fast_len",
+    "object_positions",
+    "optimal_circulant",
     "psf_fwhm",
     "rl_block",
     "rl_step",

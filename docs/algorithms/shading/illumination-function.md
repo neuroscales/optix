@@ -32,9 +32,9 @@ baseline, and, in the paper, no dark field:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d},
+    \mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \mathbf{d},
     \qquad
-    \hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \mathbf{d}}{\hat{\mathbf{f}}}
+    \hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \mathbf{d}}{\hat{\mathbf{f}}}
     $$
 
     with $\mathbf{d} = \mathbf{0}$ unless a dark field is given (extension).
@@ -45,25 +45,25 @@ baseline, and, in the paper, no dark field:
     I_{\text{corrected}} = \frac{I}{F}
     $$
 
-Frames have $P$ pixels, flattened into vectors, and a batch (group) has $N$
+Frames have $\lvert\Omega\rvert$ pixels, flattened into vectors, and a batch (group) has $N$
 frames; products and divisions of vectors are pixel-wise.
 
 | optix | [Singh et al. 2014](https://doi.org/10.1111/jmi.12178) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}_i$ | $I$ | recorded image $i$ of the batch | $\mathbb{R}^P$, one per frame |
-| $\mathbf{x}_i$, $\hat{\mathbf{x}}_i$ | $I_{\text{corrected}}$ | latent image and its estimate | $\mathbb{R}^P$, one per frame |
-| $\mathbf{f}$ | $F$ | flat field (illumination correction function) | $\mathbb{R}^P$, shared by all frames of a group |
-| $\mathbf{d}$ | — (not modelled) | dark field, optional | $\mathbb{R}^P$, shared by all frames of a group |
+| $\mathbf{y}_n$ | $I$ | recorded image $n$ of the batch | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{x}_n$, $\hat{\mathbf{x}}_n$ | $I_{\text{corrected}}$ | latent image and its estimate | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{f}$ | $F$ | flat field (illumination correction function) | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\mathbf{d}$ | — (not modelled) | dark field, optional | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
 
 Because the flat is never normalised in faithful mode, the corrected images
-are rescaled by the mean brightness of the batch: $\hat{\mathbf{x}}_i$ is the
+are rescaled by the mean brightness of the batch: $\hat{\mathbf{x}}_n$ is the
 latent image divided by the average signal.
 
 ## Probabilistic model
 
 There is no likelihood. The assumption is statistical: over the batch, the
 expected latent image is spatially uniform,
-$\mathbb{E}_i[\mathbf{x}_i] = \bar{x}\,\mathbf{1}$, so that the average image
+$\mathbb{E}_n[\mathbf{x}_n] = \bar{x}\,\mathbf{1}$, so that the average image
 is proportional to the flat field, and the flat field is smooth, so that
 whatever specimen structure survives the average is removed by a smoothing
 operator $\mathcal{S}$:
@@ -71,7 +71,7 @@ operator $\mathcal{S}$:
 === "optix"
 
     $$
-    \hat{\mathbf{f}} = \mathcal{S}\!\left(\frac{1}{N}\sum_{i=1}^{N} (\mathbf{y}_i - \mathbf{d})\right)
+    \hat{\mathbf{f}} = \mathcal{S}\!\left(\frac{1}{N}\sum_{n=1}^{N} (\mathbf{y}_n - \mathbf{d})\right)
     \;\approx\; \bar{x}\,\mathbf{f}
     $$
 
@@ -83,10 +83,10 @@ operator $\mathcal{S}$:
 
 | optix | [Singh et al. 2014](https://doi.org/10.1111/jmi.12178) | Meaning | Shape |
 |---|---|---|---|
-| $\frac{1}{N}\sum_i \mathbf{y}_i$ | $\frac{1}{N}\sum_n I_n$ | average image of the batch | $\mathbb{R}^P$, per group |
+| $\frac{1}{N}\sum_n \mathbf{y}_n$ | $\frac{1}{N}\sum_n I_n$ | average image of the batch | $\mathbb{R}^{\lvert\Omega\rvert}$, per group |
 | $\bar{x}$ | | mean latent intensity of the batch | scalar, per group |
-| $\mathcal{S}$ | $\operatorname{median}_{500}$ | smoothing operator (paper: median filter, window of 500 pixels) | $\mathbb{R}^P \to \mathbb{R}^P$ |
-| $\hat{\mathbf{f}}$ | $F$ | estimated flat field | $\mathbb{R}^P$, per group |
+| $\mathcal{S}$ | $\operatorname{median}_{500}$ | smoothing operator (paper: median filter, window of 500 pixels) | $\mathbb{R}^{\lvert\Omega\rvert} \to \mathbb{R}^{\lvert\Omega\rvert}$ |
+| $\hat{\mathbf{f}}$ | $F$ | estimated flat field | $\mathbb{R}^{\lvert\Omega\rvert}$, per group |
 
 ## Inference / derivation
 
@@ -94,13 +94,13 @@ The strategy is *average, then smooth*. The per-pixel mean (or, as an
 extension, the median) is accumulated in one streaming pass. Smoothing then
 removes residual structure; the paper uses a large median filter, robust to
 bright objects that the mean did not wash out. The scale ambiguity between
-$\mathbf{f}$ and $\mathbf{x}_i$ is left unresolved in the paper (the ICF keeps
+$\mathbf{f}$ and $\mathbf{x}_n$ is left unresolved in the paper (the ICF keeps
 the units of the data); the `"robust-min"` extension resolves it as
 CellProfiler does, by dividing by the 2nd percentile of the positive values
 after clipping below it, so that $\hat{\mathbf{f}} \ge 1$.
 
 **Statistical counterpart.** The per-pixel mean is a method-of-moments
-estimate of $\bar{x}\,\mathbf{f}$ (from $\mathbb{E}[\mathbf{y}_i] =
+estimate of $\bar{x}\,\mathbf{f}$ (from $\mathbb{E}[\mathbf{y}_n] =
 \bar{x}\,\mathbf{f} + \mathbf{d}$), and also its maximum-likelihood estimate
 under i.i.d. Gaussian residuals; the median is the corresponding Laplace
 (robust, L1) estimate. The median filter is a robust local M-estimate that
@@ -108,15 +108,15 @@ plays the role of a smoothness prior.
 
 ## Algorithm
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$,
-optional dark field $\mathbf{d} \in \mathbb{R}^P$; options `statistic`,
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$,
+optional dark field $\mathbf{d} \in \mathbb{R}^{\lvert\Omega\rvert}$; options `statistic`,
 `smoothing`, `size`, `rescale`. \
 **Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$ (and $\mathbf{d}$ when
 given).
 
 For each group of a layout:
 
-1. **Average:** $\mathbf{a} = \frac{1}{N}\sum_i \mathbf{y}_i$ (or the
+1. **Average:** $\mathbf{a} = \frac{1}{N}\sum_n \mathbf{y}_n$ (or the
    per-pixel median with `statistic="median"`), in one streaming pass.
 2. **Subtract the dark field** (extension): $\mathbf{a} \leftarrow \mathbf{a} - \mathbf{d}$.
 3. **Smooth:** $\hat{\mathbf{f}} = \mathcal{S}(\mathbf{a})$, by default a
@@ -125,7 +125,7 @@ For each group of a layout:
    $\hat{\mathbf{f}} \leftarrow \max(\hat{\mathbf{f}}, q_{0.02}) / q_{0.02}$,
    with $q_{0.02}$ the 2nd percentile of the positive values.
 
-`apply` returns $\hat{\mathbf{x}}_i = (\mathbf{y}_i - \mathbf{d}) / \hat{\mathbf{f}}$.
+`apply` returns $\hat{\mathbf{x}}_n = (\mathbf{y}_n - \mathbf{d}) / \hat{\mathbf{f}}$.
 
 ## Faithful mode and extensions
 

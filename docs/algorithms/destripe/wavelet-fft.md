@@ -38,8 +38,8 @@ There is no noise model; the filter rests on a deterministic signal model:
     \qquad s(r_1, r_2) = s(r_2),
     $$
 
-    a frame $\mathbf{y} \in \mathbb{R}^{P_1\times P_2}$ ($P_1$ pixels along
-    the stripe axis, $P_2$ across) is the stripe-free image $\mathbf{x}$ of
+    a frame $\mathbf{y} \in \mathbb{R}^{L_1\times L_2}$ ($L_1$ pixels along
+    the stripe axis, $L_2$ across) is the stripe-free image $\mathbf{x}$ of
     the same shape plus stripes
     $\mathbf{s}$ constant along the stripe axis $r_1$ (the first spatial axis by
     default).
@@ -54,11 +54,11 @@ There is no noise model; the filter rests on a deterministic signal model:
 
 | optix | [Münch et al. 2009](https://doi.org/10.1364/OE.17.008567) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}$ | $f$ | recorded frame | $\mathbb{R}^{P_1\times P_2}$, per frame |
-| $\mathbf{x}$ | $f_0$ | stripe-free frame | $\mathbb{R}^{P_1\times P_2}$, per frame |
-| $\mathbf{s}$ | $s$ | stripe offsets, constant along $r_1$ | $\mathbb{R}^{P_2}$, per frame |
+| $\mathbf{y}$ | $f$ | recorded frame | $\mathbb{R}^{L_1\times L_2}$, per frame |
+| $\mathbf{x}$ | $f_0$ | stripe-free frame | $\mathbb{R}^{L_1\times L_2}$, per frame |
+| $\mathbf{s}$ | $s$ | stripe offsets, constant along $r_1$ | $\mathbb{R}^{L_2}$, per frame |
 | $r_1$, $r_2$ | $y$, $x$ | pixel index along and across the stripes | scalars |
-| $\mathbf{c}_l$ | $c_{v,l}$ | vertical detail band at level $l$ | about $\mathbb{R}^{P_1/2^l\times P_2/2^l}$, per frame |
+| $\mathbf{c}_l$ | $c_{v,l}$ | vertical detail band at level $l$ | about $\mathbb{R}^{L_1/2^l\times L_2/2^l}$, per frame |
 | $\hat{\mathbf{c}}_l$ | $\hat c_{v,l}$ | its 1-D FFT along the stripe axis | same shape as $\mathbf{c}_l$, complex |
 | $\omega$ | $\hat y$ | frequency along the stripe axis | scalar |
 | $L$ | `decNum` | number of wavelet levels | scalar, whole stack |
@@ -100,7 +100,7 @@ shrinkage of the low frequencies along the stripes.
 
 ## Algorithm
 
-**Input:** a frame $\mathbf{y} \in \mathbb{R}^{P_1\times P_2}$;
+**Input:** a frame $\mathbf{y} \in \mathbb{R}^{L_1\times L_2}$;
 `wavelet = "db10"`; $L = 4$; $\sigma = 1.5$ \
 **Output:** the destriped frame $\hat{\mathbf{x}}$, same shape.
 
@@ -136,7 +136,7 @@ $\sigma = 7$, $L = 8$ for its FIB-nt image, Section 4.1).
 
 Frames are processed independently, in batches sized from the memory budget
 (per-frame streaming), so arrays larger than memory (`zarr`, memmap) can be
-filtered, and `apply` works in place. The cost is $O(PF)$ per frame of $P$ pixels
+filtered, and `apply` works in place. The cost is $O(\lvert\Omega\rvert F)$ per frame of $\lvert\Omega\rvert$ pixels
 with a filter of length $F$; the working memory is a few copies of a batch.
 
 ## Usage

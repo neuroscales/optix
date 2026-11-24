@@ -30,23 +30,24 @@ in the paper's, followed by a table mapping one set of symbols onto the other.*
 === "optix"
 
     $$
-    \mathbf{y}_i = \ldots
+    \mathbf{y}_n = \ldots
     $$
 
 === "Author et al. 2000"
 
     $$
-    I_i = \ldots
+    I_n = \ldots
     $$
 
 | optix | Author et al. 2000 | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}_i$ | $I_i$ | recorded frame $i$ | $P$, one per frame |
-| $\mathbf{f}$ | $S$ | flat field | $P$, shared by all frames of a group |
+| $\mathbf{y}_n$ | $I_n$ | recorded frame $n$ | $\lvert\Omega\rvert$, one per frame |
+| $\mathbf{f}$ | $S$ | flat field | $\lvert\Omega\rvert$, shared by all frames of a group |
 
 *Every table of symbols says in words what each symbol means, gives the shape
-of vectors and matrices ($\mathbf{y}_i \in \mathbb{R}^P$,
-$\boldsymbol{\Phi} \in \mathbb{R}^{P \times K}$), and says what each
+of vectors and matrices ($\mathbf{y}_n \in \mathbb{R}^{\lvert\Omega\rvert}$,
+$\boldsymbol{\Phi} \in \mathbb{R}^{\lvert\Omega\rvert \times K}$), with pixels $i \in \Omega$ and frames
+$n = 1, \ldots, N$ as in the [notation](../concepts/notation.md#indices-and-layouts), and says what each
 parameter is shared across: one value per pixel, per frame, per group, or one
 for the whole stack. Annotate terms of an equation with `\underbrace`, never
 with text such as `mode=""` inside the equation.*
@@ -80,7 +81,7 @@ without them.*
 inputs, initialisation, iterations, stopping rule, outputs, and the default
 hyper-parameters. No raw-text pseudocode block.*
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$;
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$;
 hyper-parameters $\lambda$, ... \
 **Output:** the estimate, for instance $\hat{\mathbf{f}}$.
 

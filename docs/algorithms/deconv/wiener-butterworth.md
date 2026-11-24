@@ -41,10 +41,10 @@ paper uses a periodic model; see
 
 | optix | [Guo et al. 2020](https://doi.org/10.1038/s41587-020-0560-x) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}$ | $y$ | recorded image, $P$ pixels | $\mathbb{R}^P$, per image |
-| $\mathbf{x}$ | $e$ | latent image, on the extended domain of $Q \ge P$ pixels | $\mathbb{R}^Q$, per image |
+| $\mathbf{y}$ | $y$ | recorded image, $\lvert\Omega\rvert$ pixels | $\mathbb{R}^{\lvert\Omega\rvert}$, per image |
+| $\mathbf{x}$ | $e$ | latent image, on the extended domain of $Q \ge \lvert\Omega\rvert$ pixels | $\mathbb{R}^Q$, per image |
 | $\mathbf{h}$ | $f$ (forward projector) | PSF, unit sum | kernel, one per group |
-| $\mathbf{A}$ | $H$ | convolution by $\mathbf{h}$, cropped to the image | $\mathbb{R}^{P\times Q}$, one per group |
+| $\mathbf{A}$ | $H$ | convolution by $\mathbf{h}$, cropped to the image | $\mathbb{R}^{\lvert\Omega\rvert\times Q}$, one per group |
 | $\hat{\mathbf{h}} = \mathrm{DFT}(\mathbf{h})$ | $F$ | OTF | one value per frequency, one per group |
 
 The paper's $f$ is the PSF, not the flat field of optix.
@@ -102,7 +102,7 @@ boosting the noise outside the band.
 |---|---|---|---|
 | $\mathbf{x}_k$ | $e^{(k)}$ | estimate after $k$ iterations | $\mathbb{R}^Q$, per image |
 | $\mathbf{h}_b$ | $b$ | back-projector kernel, unit sum | kernel, one per group |
-| $\mathbf{B}$ | $B$ | convolution by $\mathbf{h}_b$ | $\mathbb{R}^{Q\times P}$, one per group |
+| $\mathbf{B}$ | $B$ | convolution by $\mathbf{h}_b$ | $\mathbb{R}^{Q\times \lvert\Omega\rvert}$, one per group |
 | $\hat{\mathbf{h}}$ | $F$ | OTF | one value per frequency, one per group |
 | $\alpha$ | $\alpha$ | Wiener parameter | scalar, whole stack |
 | $\beta$ | $\beta$ | Butterworth gain at the cutoff | scalar, whole stack |
@@ -126,7 +126,7 @@ PSF), which is plain Richardson–Lucy.
 
 ## Algorithm
 
-**Input:** images $\mathbf{y} \in \mathbb{R}^P$; PSF $\mathbf{h}$;
+**Input:** images $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$; PSF $\mathbf{h}$;
 `back_projector = "wiener-butterworth"`; $\alpha = 0.001$; $\beta = 0.001$;
 $n = 8$; `n_iter = 1`; `start = "data"` \
 **Output:** the deconvolved images, cropped to the observed region.
