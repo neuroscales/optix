@@ -1,6 +1,8 @@
 """Variational stripe removal (Rottmayer, Redenbach and Fahrbach 2025)."""
 
 import math
+import os
+import warnings
 
 import numpy as np
 import pytest
@@ -17,6 +19,9 @@ from optix.io import Layout, labeled
 from optix.models import random_shading
 
 F64 = torch.float64
+FIXTURES = os.path.join(
+    os.path.dirname(__file__), "data", "rottmayer_fixtures.npz"
+)
 
 
 def make_frames(n=2, shape=(48, 40), *, seed=0, dtype=F64):
@@ -577,3 +582,105 @@ def test_integer_input():
     )
     out = general_stripe_remover(data, max_iter=20)
     assert out.is_floating_point() and out.shape == data.shape
+
+
+# -- reference: the authors' code (General-Stripe-Removal, f1972aa) ---------
+# The authors' PDHGMp iterations are the same as optix's (initialisation,
+# step sizes, differences, projections), so the results agree to rounding
+# at any number of iterations, not only at convergence.
+REF_CASES = (
+    "default",
+    "recommended",
+    "noproj",
+    "oblique",
+    "steep",
+    "stack",
+    "volume",
+)
+
+
+@pytest.fixture(scope="module")
+def ref():
+    return np.load(FIXTURES)
+
+
+def ref_case(ref, name):
+    """Input and keyword arguments of a fixture case, for optix."""
+    g = {k[len(name) + 1 :]: ref[k] for k in ref if k.startswith(name + "_")}
+    data = ref[str(g["input"])] * float(g["scale"]) + float(g["offset"])
+    d = g["direction"]
+    kw = dict(
+        mu1=float(g["mu1"]),
+        mu2=float(g["mu2"]),
+        max_iter=int(g["iterations"]),
+        box=bool(g["proj"]),
+        normalize=bool(g["normalize"]),
+        angle=math.degrees(math.atan2(d[1], d[0])),
+    )
+    if float(g["resz"]) > 0:
+        kw.update(ndim=3, rho_z=float(g["resz"]))
+    return torch.as_tensor(data), kw, g["u"]
+
+
+def to_unit(u, data):
+    """The authors' normalisation does not map back: compare in [0, 1]."""
+    return (u - data.min()) / (data.max() - data.min())
+
+
+def test_fixture_provenance(ref):
+    assert str(ref["gsr_commit"]).startswith("f1972aa")
+
+
+@pytest.mark.parametrize("name", REF_CASES)
+def test_matches_authors_code(ref, name):
+    data, kw, expected = ref_case(ref, name)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        u = general_stripe_remover(data, **kw)
+    if kw["normalize"]:
+        u = to_unit(u, data)
+    np.testing.assert_allclose(u.numpy(), expected, rtol=0, atol=1e-12)
+    # and the case is not trivial
+    assert np.abs(expected - ref[str(ref[name + "_input"])]).max() > 0.1
+
+
+def test_matches_authors_code_float32(ref):
+    data, kw, expected = ref_case(ref, "default")
+    u = general_stripe_remover(data.float(), **kw).double()
+    np.testing.assert_allclose(u.numpy(), expected, rtol=0, atol=1e-6)
+
+
+def test_estimator_matches_authors_code(ref):
+    # faithful defaults; the input already spans [0, 1]
+    data, _, expected = ref_case(ref, "default")
+    est = GeneralStripeRemover(dtype=F64)
+    assert est.is_faithful
+    np.testing.assert_allclose(
+        est.apply(data[None]).numpy()[0], expected, rtol=0, atol=1e-12
+    )
+    # (Z, H, W) volumes along a labelled layout, ρ_z = 1
+    data, kw, expected = ref_case(ref, "volume")
+    est = GeneralStripeRemover(
+        layout=Layout("zyx", spatial="zyx"),
+        dtype=F64,
+        **{k: kw[k] for k in ("mu1", "mu2", "max_iter", "rho_z")},
+    )
+    out = est.apply(data.numpy())
+    np.testing.assert_allclose(out, expected, rtol=0, atol=1e-12)
+
+
+def test_negative_angles_mirror_the_authors_code(ref):
+    # The authors' code handles a negative angle by mirroring the frame
+    # across the stripe axis and using the positive angle. The stripe term
+    # is invariant to the mirroring, but the forward-difference total
+    # variation is not (it becomes a backward difference across the
+    # stripes), so optix's result at -45° differs from theirs; mirroring
+    # the input reproduces theirs exactly.
+    data, kw, expected = ref_case(ref, "diag_neg")
+    assert kw["angle"] == -45
+    mirrored = dict(kw, angle=45.0)
+    u = general_stripe_remover(data.flip(-1), **mirrored).flip(-1)
+    np.testing.assert_allclose(u.numpy(), expected, rtol=0, atol=1e-12)
+    u = general_stripe_remover(data, **kw)
+    diff = float((u - torch.as_tensor(expected)).abs().max())
+    assert 1e-3 < diff < 0.05
