@@ -219,6 +219,18 @@ precision of a Normal; the context tells which is meant.
 | $H(\cdot)$ | Shannon entropy of a histogram, in nats; an operator name in upright type, not a set | `meta["entropy"]` |
 | $\mathbf{a}$, $\mathbf{m}$ | coefficients of the polynomial dark and flat fields: the paper's notation, not to be confused with the mean $m$ of a Normal | `meta["coefficients"]` |
 
+## Stripes
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{s}$ | stripe component of a frame, $\mathbf{y} = \mathbf{x} + \mathbf{s}$ | |
+| $\theta$ | direction of the stripes, from the stripe axis towards the other in-plane axis | `angle` |
+| $\nabla$, $\nabla_\theta$ | forward differences along the axes; along the stripe direction $\theta$ | `lattice_diff` |
+| $\lVert \nabla \mathbf{x} \rVert_{2,1}$ | isotropic total variation: sum over pixels of the Euclidean norm of the gradient | |
+| $\mu_1$, $\mu_2$ | weights of the total variation and of the sparsity of $\mathbf{s}$ (the Gamma mean $\mu$ is unrelated) | `mu1`, `mu2` |
+| $\rho_z$ | weight of the differences along $z$ | `rho_z` |
+| $\iota_{S}$ | indicator of a set $S$: $0$ inside, $\infty$ outside | |
+
 ## Distributions
 
 These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/).
