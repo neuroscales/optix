@@ -16,6 +16,7 @@ from optix.optim import (
     Hessian,
     Identity,
     LinearOperator,
+    Schatten,
     ShiftedPoisson,
     SquaredL2,
     Term,
@@ -26,8 +27,10 @@ from optix.optim import (
     prox_box,
     prox_conjugate,
     prox_group_l2,
+    prox_schatten,
     prox_shifted_poisson,
     prox_squared_l2,
+    schatten_norm,
 )
 
 F64 = torch.float64
@@ -236,6 +239,171 @@ def test_stencil_option():
     assert Hessian(2, stencil="forward").stencil == "forward"
     with pytest.raises(ValueError):
         Hessian(2, stencil="central")
+
+
+# -- Schatten norms ---------------------------------------------------------
+SQ2 = math.sqrt(2)
+
+
+def unpack2(v):
+    """Packed (a, d, √2·b) → 2 × 2 matrices `(..., 2, 2)`."""
+    a, d, c = v.unbind(0)
+    b = c / SQ2
+    return torch.stack([torch.stack([a, b], -1), torch.stack([b, d], -1)], -2)
+
+
+def pack2(x):
+    return torch.stack([x[..., 0, 0], x[..., 1, 1], SQ2 * x[..., 0, 1]])
+
+
+def project_l1_ball(s, radius):
+    """Sort-based projection of each row of s ≥ 0 onto the ℓ1 ball."""
+    u = torch.sort(s, dim=-1, descending=True).values
+    cs = u.cumsum(-1)
+    k = torch.arange(1, s.shape[-1] + 1, dtype=s.dtype)
+    rank = (u - (cs - radius) / k > 0).sum(-1, keepdim=True).clamp(min=1)
+    theta = (cs.gather(-1, rank - 1) - radius) / rank
+    inside = s.sum(-1, keepdim=True) <= radius
+    return torch.where(inside, s, (s - theta).clamp(min=0))
+
+
+def prox_schatten_svd(v, t, p):
+    """Reference: SVD, ℓ_p prox of the singular values, reconstruction.
+
+    ℓ∞ by Moreau: prox_{t‖·‖∞}(σ) = σ − proj_{t·ℓ1 ball}(σ).
+    """
+    u, s, vh = torch.linalg.svd(unpack2(v))
+    if p == 1:
+        s = (s - t).clamp(min=0)
+    elif p == 2:
+        n = s.norm(dim=-1, keepdim=True)
+        s = s * (1 - t / n.clamp(min=1e-300)).clamp(min=0)
+    else:
+        s = s - project_l1_ball(s, t)
+    return pack2(u @ torch.diag_embed(s) @ vh)
+
+
+def symmetric_fields(n=3000, seed=11):
+    """Random packed 2 × 2 fields with the edge cases of the closed form."""
+    v = 2 * torch.randn(3, n, generator=gen(seed), dtype=F64)
+    v[:, :50] = 0  # zero matrices
+    v[1, 50:150] = v[0, 50:150]  # equal eigenvalues: a = d, b = 0
+    v[2, 50:150] = 0
+    v[1, 150:250] = -v[0, 150:250]  # λ₋ = −λ₊ (trace 0)
+    v[2, 150:250] = 0
+    v[1, 250:350] = v[0, 250:350] + 1e-9  # nearly equal eigenvalues
+    v[0, 350:450] = v[0, 350:450].abs() + 3  # positive definite
+    v[1, 350:450] = v[0, 350:450]
+    v[2, 350:450] *= 0.1
+    return v
+
+
+@pytest.mark.parametrize("p", [1, 2, math.inf])
+def test_prox_schatten_matches_svd(p):
+    v = symmetric_fields()
+    for t in (0.0, 0.05, 1.0, 4.0):
+        z = prox_schatten(v, t, p)
+        torch.testing.assert_close(
+            z, prox_schatten_svd(v, t, p), rtol=0, atol=1e-12
+        )
+    # tensor threshold broadcasting over voxels
+    t = torch.rand(1, v.shape[1], generator=gen(2), dtype=F64)
+    ref = torch.stack(
+        [
+            prox_schatten_svd(v[:, i : i + 1], float(t[0, i]), p)[:, 0]
+            for i in range(0, v.shape[1], 97)
+        ],
+        1,
+    )
+    torch.testing.assert_close(
+        prox_schatten(v, t, p)[:, ::97], ref, rtol=0, atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("p", [1, 2, math.inf])
+def test_schatten_norm_and_function(p):
+    v = symmetric_fields(500, seed=12)
+    s = torch.linalg.svdvals(unpack2(v))
+    ref = {1: s.sum(-1), 2: s.norm(dim=-1), math.inf: s.amax(-1)}[p]
+    torch.testing.assert_close(schatten_norm(v, p), ref)
+    f = Schatten(0.7, p)
+    assert float(f.value(v)) == pytest.approx(0.7 * float(ref.sum()))
+    torch.testing.assert_close(f.prox(v, 2.0), prox_schatten(v, 1.4, p))
+    # optimality: the prox beats random perturbations of itself
+    y, t = v[:, :200], 0.9
+    z = prox_schatten(y, t, p)
+
+    def obj(x):
+        return 0.5 * (x - y).square().sum(0) + t * schatten_norm(x, p)
+
+    best = obj(z)
+    g = gen(13)
+    for scale in (1e-3, 1e-1):
+        dz = scale * torch.randn(20, *z.shape, generator=g, dtype=F64)
+        assert bool((obj_batch(obj, z + dz) >= best - 1e-12).all())
+
+
+def obj_batch(obj, xs):
+    return torch.stack([obj(x) for x in xs])
+
+
+def test_prox_schatten_special_cases():
+    g = gen(14)
+    # p = 2 is the block soft threshold, in any dimension
+    for c in (1, 3, 6):
+        v = torch.randn(c, 30, 30, generator=g, dtype=F64)
+        torch.testing.assert_close(
+            prox_schatten(v, 0.8, 2), prox_group_l2(v, 0.8)
+        )
+    # 1 × 1 matrices: soft threshold for every p
+    v = torch.randn(1, 50, generator=g, dtype=F64)
+    soft = torch.sign(v) * (v.abs() - 0.3).clamp(min=0)
+    for p in (1, math.inf):
+        torch.testing.assert_close(prox_schatten(v, 0.3, p), soft)
+        torch.testing.assert_close(schatten_norm(v, p), v.abs()[0])
+    # components along another dim
+    v = torch.randn(8, 3, generator=g, dtype=F64)
+    torch.testing.assert_close(
+        prox_schatten(v, 0.5, 1, dim=1), prox_schatten(v.T, 0.5, 1).T
+    )
+    # 3 × 3 with p in {1, inf}: not implemented; bad p and C rejected
+    v6 = torch.randn(6, 4, generator=g, dtype=F64)
+    for p in (1, math.inf):
+        with pytest.raises(NotImplementedError):
+            prox_schatten(v6, 0.1, p)
+        with pytest.raises(NotImplementedError):
+            schatten_norm(v6, p)
+        with pytest.raises(NotImplementedError):
+            Schatten(1.0, p, ndim=3)
+    assert Schatten(1.0, "inf").p == math.inf
+    with pytest.raises(ValueError, match="p must be"):
+        prox_schatten(v6, 0.1, 3)
+    with pytest.raises(ValueError, match="symmetric"):
+        prox_schatten(torch.zeros(4, 2, dtype=F64), 0.1, 2)
+
+
+@pytest.mark.parametrize("p", [1, math.inf])
+def test_prox_schatten_float32(p):
+    v = symmetric_fields(2000, seed=15)
+    for t in (0.01, 1.0):
+        z = prox_schatten(v.float(), t, p).double()
+        ref = prox_schatten(v, t, p)
+        err = float((z - ref).abs().max())
+        assert err < 1e-5 * (1 + float(v.abs().max())), err
+
+
+def test_hessian_schatten_of_quadratic():
+    """On x = ½ uᵀ A u (periodic interior), ‖H x‖_{S_p} = ‖A‖_{S_p}."""
+    a = torch.tensor([[2.0, -1.5], [-1.5, 0.5]], dtype=F64)
+    u = torch.stack(
+        torch.meshgrid(*[torch.arange(12, dtype=F64)] * 2, indexing="ij")
+    )
+    x = 0.5 * torch.einsum("i...,ij,j...->...", u, a, u)
+    h = Hessian(2, boundary="neumann").forward(x)[:, :8, :8]
+    s = torch.linalg.svdvals(a)
+    for p, ref in ((1, s.sum()), (2, s.norm()), (math.inf, s.max())):
+        norm = schatten_norm(h, p)
+        torch.testing.assert_close(norm, torch.full_like(norm, float(ref)))
 
 
 # -- ADMM -------------------------------------------------------------------

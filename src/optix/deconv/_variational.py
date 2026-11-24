@@ -1,6 +1,7 @@
 """Shared machinery of the regularised (variational) deconvolutions."""
 
 import math
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -8,7 +9,9 @@ import torch
 from torch import Tensor
 
 from .._config import get_config
+from ..estimates import SensorEstimate, ShadingEstimate
 from ..io import ArrayLike, Chunk, Chunks, Labeled, blocks, chunks_of
+from ..stats import Reservoir
 from ._block import _BlockDeconvolution
 from ._fft import next_fast_len
 
@@ -16,6 +19,9 @@ __all__: list[str] = []
 
 #: Quantile of the prepared data stored as `robust_peak` by `fit`.
 _PEAK_QUANTILE = 0.999
+#: Size of the uniform sample of each image from which `fit` computes
+#: its median (exact for images of at most this many voxels).
+_MEDIAN_SAMPLE = 8192
 #: Working buffers per loaded voxel besides the grid (data, read noise).
 _LOADED_BUFFERS = 4.0
 #: Smallest fraction of a loaded block kept as its core, when the
@@ -74,7 +80,9 @@ class _Variational(_BlockDeconvolution):
 
     `fit` makes one pass over the prepared data and stores, per image
     `(*group, *sample)`, its maximum (`peak`), its 99.9th percentile
-    (`robust_peak`) and the mean read-noise variance (`noise`);
+    (`robust_peak`), its median (`median`, from a uniform sample of
+    8192 voxels, exact for smaller images) and the mean read-noise
+    variance (`noise`);
     subclasses derive their per-image parameters from them in
     `_setup_images`. `apply` solves each block with `_solve(blk, op,
     index, trace)`, where `index` selects the image in those per-image
@@ -94,6 +102,87 @@ class _Variational(_BlockDeconvolution):
     def _grid_buffers(self) -> float:
         """Working buffers of the solver per voxel of the FFT grid."""
         raise NotImplementedError
+
+    def _grid_shape(
+        self, loaded: Sequence[int], kernel: Sequence[int]
+    ) -> tuple[int, ...]:
+        """FFT grid of a loaded block (default: the padded grid)."""
+        return tuple(
+            next_fast_len(n + k - 1)
+            for n, k in zip(loaded, kernel, strict=True)
+        )
+
+    # -- camera units ------------------------------------------------------
+    def _init_from(self, init: object, shape: tuple, like: object) -> None:
+        """Camera estimates from `fit(init=...)` (sensor, shading)."""
+        self.sensor = self._pick(init, SensorEstimate, shape=shape, like=like)
+        self.shading = self._pick(
+            init, ShadingEstimate, shape=shape, like=like
+        )
+        self._warn_unused(init, SensorEstimate, ShadingEstimate)
+        if self.shading is not None and self.shading.baseline is not None:
+            warnings.warn(
+                f"{type(self).__name__} ignores the per-frame baseline of the "
+                "shading estimate",
+                RuntimeWarning,
+                stacklevel=4,
+            )
+        self.is_faithful = self._faithful_options
+
+    def _maps(self, data: Labeled, backend: dict) -> dict[str, Tensor | None]:
+        """Camera maps (data units), broadcast to `(*group, *spatial)`."""
+        shape = data.layout.map_shape(data.array)
+
+        def full(value: object) -> Tensor | None:
+            if value is None:
+                return None
+            return torch.broadcast_to(
+                torch.as_tensor(value).to(**backend), shape
+            )
+
+        sensor, shading = self.sensor, self.shading
+        out = {
+            name: full(None if sensor is None else getattr(sensor, name))
+            for name in ("offset", "gain", "variance")
+        }
+        flat = None if shading is None else shading.flat
+        if flat is not None:
+            flat = flat.to(**backend)
+            if (flat <= 0).any() or not flat.isfinite().all():
+                raise ValueError("The flat field must be finite and positive")
+            flat = flat / flat.median()
+        out["flat"] = full(flat)
+        out["dark"] = full(None if shading is None else shading.dark)
+        return out
+
+    def _prepare(self, chunk: Chunk, maps: dict) -> _Problem:
+        """Electrons ỹ (clipped at −σ̃²) and read noise σ̃²."""
+        index = chunk.group + self._region(chunk)
+
+        def at(name: str) -> Tensor | None:
+            value = maps[name]
+            return None if value is None else value[index]
+
+        y = chunk.data
+        dark = at("dark")
+        if dark is None:
+            dark = at("offset")
+        if dark is not None:
+            y = y - dark
+        flat = at("flat")
+        if flat is not None:
+            y = y / flat
+        gain = at("gain")
+        if gain is not None:
+            y = y / gain
+        var: Tensor | float = 0.0
+        v = at("variance")
+        if v is not None:
+            var = v if gain is None else v / gain.square()
+            if flat is not None:
+                var = var / flat.square()
+        y = torch.maximum(y, -torch.as_tensor(var).to(y))
+        return _Problem(y, variance=var)
 
     # -- hooks of _BlockDeconvolution --------------------------------------
     def _fitted_images(self) -> tuple[int, ...] | None:
@@ -117,10 +206,7 @@ class _Variational(_BlockDeconvolution):
             min(c + 2 * h, e)
             for c, e, h in zip(core, extents, halo, strict=True)
         ]
-        grid = math.prod(
-            next_fast_len(n + k - 1)
-            for n, k in zip(loaded, psf.shape, strict=True)
-        )
+        grid = math.prod(self._grid_shape(loaded, tuple(psf.shape)))
         return itemsize * (
             self._grid_buffers() * grid + _LOADED_BUFFERS * math.prod(loaded)
         )
@@ -240,6 +326,7 @@ class _Variational(_BlockDeconvolution):
         noise = torch.zeros(group + sample, dtype=f64)
         # keyed by (start, stop) pairs: slices are unhashable before 3.12
         upper: dict[tuple, tuple[tuple, _UpperQuantile]] = {}
+        reservoirs: dict[tuple, tuple[tuple, Reservoir]] = {}
         n = math.prod(spatial)
         maps = self._maps(data, backend)
         for chunk in blocks(data, None, 0, **backend):
@@ -253,6 +340,9 @@ class _Variational(_BlockDeconvolution):
             if key not in upper:
                 upper[key] = (index, _UpperQuantile(n, _PEAK_QUANTILE))
             upper[key][1].update(blk.data)
+            if key not in reservoirs:
+                reservoirs[key] = (index, Reservoir(_MEDIAN_SAMPLE, seed=0))
+            reservoirs[key][1].update(blk.data)
             var = torch.as_tensor(blk.variance)
             noise[index] += float(var.sum(dtype=f64)) * (
                 blk.data.numel() / max(var.numel(), 1)
@@ -260,9 +350,14 @@ class _Variational(_BlockDeconvolution):
         robust = torch.full(group + sample, -torch.inf, dtype=f64)
         for index, q in upper.values():
             robust[index] = q.value()
+        median = torch.full(group + sample, math.nan, dtype=f64)
+        for index, res in reservoirs.values():
+            values = res.values.to(dtype=f64, device="cpu")
+            median[index] = float(torch.quantile(values, 0.5))
         tiny = torch.finfo(f64).tiny
         self.peak = peak
         self.robust_peak = robust
+        self.median = median
         self.noise = noise / count.clamp(min=tiny)
         self._setup_images(psf)
         self.history.extras["iterations"] = []
@@ -274,11 +369,23 @@ class _Variational(_BlockDeconvolution):
         state = super()._extra_state()
         state["peak"] = getattr(self, "peak", None)
         state["robust_peak"] = getattr(self, "robust_peak", None)
+        state["median"] = getattr(self, "median", None)
         state["noise"] = getattr(self, "noise", None)
+        sensor = getattr(self, "sensor", None)
+        shading = getattr(self, "shading", None)
+        state["sensor"] = None if sensor is None else sensor._payload()
+        state["shading"] = None if shading is None else shading._payload()
         return state
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
         super()._load_extra_state(state)
         self.peak = state.get("peak")
         self.robust_peak = state.get("robust_peak")
+        self.median = state.get("median")
         self.noise = state.get("noise")
+        sensor = state.get("sensor")
+        if sensor is not None:
+            self.sensor = SensorEstimate._from_payload(sensor)
+        shading = state.get("shading")
+        if shading is not None:
+            self.shading = ShadingEstimate._from_payload(shading)

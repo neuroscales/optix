@@ -359,14 +359,21 @@ shared with the other destriping pages.
 | $\nabla$, $\mathbf{H}$ | stacked first differences; Hessian, its distinct second differences with $\sqrt{2}$ on the off-diagonal ones | `Gradient`, `Hessian` |
 | $\mathcal{C}$, $\Omega$ | observed voxels, where the data term applies; voxels where the regulariser applies | `Term.region` |
 | $\tilde{\mathbf{y}}$, $\tilde\sigma^2$ | data in electrons, $(\mathbf{y} - \mathbf{d}) / (\mathbf{f}\,g)$; shifted-Poisson read-noise variance, $\sigma^2 / (g\,f)^2$ (pixel-wise, $f \equiv 1$ without a flat field) | `variance` of `ShiftedPoisson` |
-| $\kappa$ | constant of the default weight, $\nu = \kappa \sum\mathbf{h} / q_{99.9}(\tilde{y})$ (a scalar; unrelated to the eigenvalues $\kappa_j$ of the basis) | `Ikoma` default of `nu` |
+| $\kappa$ | constant of the default weight, $\nu = \kappa \sum\mathbf{h} / q_{99.9}(\tilde{y})$ for `Ikoma`, $\tau = \kappa / q_{99.9}(\tilde{y})$ for `HSPIRAL` (a scalar; unrelated to the eigenvalues $\kappa_j$ of the basis) | default of `nu`, `tau` |
 | $\xi_a$ | frequency along axis $a$, $k_a / N_a$ | `rfft_frequencies` |
+| $\tau$ | weight of the Schatten penalty, $\tau\sum_j\lVert\mathbf{X}_j\rVert_{S_p}$ (the role of $\nu$ for `HSPIRAL`) | `HSPIRAL.tau` |
+| $\mathbf{X}_j$ | symmetric Hessian matrix of the image at voxel $j$, packed in $(\mathbf{H}\mathbf{x})_j$ | |
+| $\lVert\cdot\rVert_{S_p}$ | Schatten norm of order $p \in \{1, 2, \infty\}$: the $\ell_p$ norm of the singular values; nuclear, Frobenius and spectral norm | `schatten_norm`, `Schatten` |
+| $\mu_\pm$, $m$, $r$ | eigenvalues of a symmetric $2 \times 2$ matrix, $\mu_\pm = m \pm r$, with $m$ the mean of the diagonal and $r \ge 0$ half the gap | `prox_schatten` |
 
 The shifted Poisson law of $\tilde{\mathbf{y}}$ is $\tilde{y} + \tilde\sigma^2 \sim
 \mathrm{Poisson}(\lambda + \tilde\sigma^2)$, which has the mean and variance of the
 Poisson-Gaussian model. The letters $\rho$ and $\nu$ have other meanings in the
 sections on morphology and distributions (the radius of a ball, the shape of a
-Gamma); the context always tells which is meant. $\mathbf{H}$ in bold is the
+Gamma); the context always tells which is meant. $\mu_\pm$ are eigenvalues of a
+Hessian matrix, not a mean; $m$ and $r$ there are the centre and half-gap of the
+eigenvalues, not the mean of a Normal; and $\tau$, here the weight of a penalty, is also
+the truncation level of Nagy and O'Leary and the precision of a Normal. $\mathbf{H}$ in bold is the
 Hessian operator, $H$ in plain type a count of rows.
 
 ## Indices and layouts

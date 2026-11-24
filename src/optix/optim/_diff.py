@@ -254,7 +254,11 @@ class Hessian(_Differences):
 
     The second differences are compositions of forward differences,
     D_ab = D_a D_b (so D_aa xᵢ = xᵢ₊₂ − 2xᵢ₊₁ + xᵢ), as in Ikoma et al.
-    (2018, Eq. S5). The components are packed as in their Eq. (S7): the
+    (2018, Eq. S5). In 2-D this is also the stencil of Lefkimmiatis,
+    Bourquard & Unser (2012, Eq. 21), used by Lefkimmiatis & Unser
+    (2013): f_xx[i, j] = f[i, j] − 2f[i+1, j] + f[i+2, j] and
+    f_xy[i, j] = f[i, j] − f[i+1, j] − f[i, j+1] + f[i+1, j+1], with
+    periodic boundaries. The components are packed as in their Eq. (S7): the
     d diagonal terms D_aa, then the off-diagonal terms √2·D_ab for
     a < b, C = d(d + 1)/2 in all, stacked along dim `-(d + 1)`. Then
     ‖(Hx)ⱼ‖₂ is the Frobenius norm of the d × d Hessian matrix at voxel
@@ -282,7 +286,7 @@ class Hessian(_Differences):
         stencil : {"forward"}
             Second-difference stencil. `"forward"`: D_ab = D_a D_b, the
             composition of two forward differences (Ikoma et al. 2018,
-            Eq. S5).
+            Eq. S5; Lefkimmiatis et al. 2012, Eq. 21).
         """
         super().__init__(ndim, weights=weights, boundary=boundary)
         if stencil not in _STENCIL:

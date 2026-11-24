@@ -7,16 +7,21 @@ import torch
 from torch import Tensor
 
 from ._prox import (
+    _packed_ndim,
+    _schatten_p,
     prox_box,
     prox_group_l2,
+    prox_schatten,
     prox_shifted_poisson,
     prox_squared_l2,
+    schatten_norm,
 )
 
 __all__ = [
     "Box",
     "Function",
     "GroupL2",
+    "Schatten",
     "ShiftedPoisson",
     "SquaredL2",
 ]
@@ -101,6 +106,75 @@ class GroupL2:
     def prox(self, v: Tensor, t: float) -> Tensor:
         """Block soft threshold at t·w."""
         return prox_group_l2(v, t * self.weight, dim=self.dim)
+
+
+class Schatten:
+    """Mixed Schatten norm w·∑ⱼ ‖Zⱼ‖_{S_p} of a field of symmetric matrices.
+
+    zⱼ packs a symmetric d × d matrix Zⱼ along `dim`, as the output of
+    [`Hessian`][optix.optim.Hessian]. With z = H x this is the Hessian
+    Schatten-norm regulariser ‖H x‖₁,ₚ of Lefkimmiatis & Unser (2013,
+    Eq. 11): the nuclear norm (p = 1, the sum of the absolute
+    eigenvalues), the Frobenius norm (p = 2, equal to
+    [`GroupL2`][optix.optim.GroupL2]) or the spectral norm (p = ∞, the
+    largest absolute eigenvalue). See
+    [`prox_schatten`][optix.optim.prox_schatten] for the prox; p ∈ {1, ∞}
+    is available for 2 × 2 matrices (2-D images) only.
+    """
+
+    def __init__(
+        self,
+        weight: float | Tensor,
+        p: float | str = 1,
+        *,
+        ndim: int | None = None,
+        dim: int = 0,
+    ) -> None:
+        """Set the weight and the order.
+
+        Parameters
+        ----------
+        weight : float or Tensor
+            w ≥ 0; a tensor broadcasts against the voxels.
+        p : {1, 2, inf}
+            Order of the Schatten norm.
+        ndim : int, optional
+            Matrix size d, checked against p (p ∈ {1, ∞} needs d ≤ 2).
+            Default: taken from the number of components.
+        dim : int
+            Component dim.
+
+        Raises
+        ------
+        NotImplementedError
+            For p ∈ {1, ∞} with d > 2.
+        """
+        self.weight = weight
+        self.p = _schatten_p(p)
+        self.ndim = ndim
+        self.dim = dim
+        if ndim is not None:
+            self._check(int(ndim))
+
+    def _check(self, d: int) -> None:
+        if self.p != 2 and d > 2:
+            raise NotImplementedError(
+                "Schatten norms with p in {1, inf} are implemented for 2-D "
+                "images (2 × 2 Hessians) only; use p=2"
+            )
+
+    def value(self, z: Tensor) -> Tensor:
+        """w·∑ⱼ ‖Zⱼ‖_{S_p} in float64."""
+        self._check(_packed_ndim(z.shape[self.dim]))
+        norm = schatten_norm(z.double(), self.p, dim=self.dim)
+        w = self.weight
+        if isinstance(w, Tensor):
+            w = w.double()
+        return (w * norm).sum()
+
+    def prox(self, v: Tensor, t: float) -> Tensor:
+        """Prox of t·w·∑ⱼ ‖·‖_{S_p} (see `prox_schatten`)."""
+        return prox_schatten(v, t * self.weight, self.p, dim=self.dim)
 
 
 class SquaredL2:

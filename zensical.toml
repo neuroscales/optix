@@ -51,6 +51,7 @@ nav = [
       "algorithms/deconv/wiener-butterworth.md",
       "algorithms/deconv/multiview.md",
       "algorithms/deconv/ikoma.md",
+      "algorithms/deconv/hspiral.md",
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
