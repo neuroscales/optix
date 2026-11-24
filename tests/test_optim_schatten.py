@@ -140,7 +140,10 @@ def test_eigenvalues_match_eigh(c, dtype):
     ref = torch.linalg.eigvalsh(unpack(v.double()))
     err = (mu - ref).abs().amax(-1) / scale_of(v).clamp(min=1e-300)
     eps = torch.finfo(dtype).eps
-    assert float(err.max()) < 8 * eps, float(err.max())
+    # In float64 the reference is float64 `eigh`, whose own error is of the
+    # same order (8.8 ulps seen with the newest PyTorch on CI).
+    bound = 8 * eps if dtype == F32 else 16 * eps
+    assert float(err.max()) < bound, float(err.max())
     # zero matrices: exactly zero; m·I: exactly m
     assert bool((_spectral.eigenvalues(v[:, :300]) == 0).all())
 

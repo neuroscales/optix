@@ -355,8 +355,8 @@ def prox_schatten(
         with batched `torch.linalg.eigh` and the reconstruction
         U diag(ĝ) Uᵀ (2·10⁵ matrices, one CPU thread), it is about 3
         times faster in float32 (1.6 times in float64), at least as
-        accurate (within 5 ulps of a float64 reference in both
-        precisions; float32 `eigh`: 16), element-wise (processed in
+        accurate (within 5 ulps of a float64 reference in float32 and
+        about 10 in float64; float32 `eigh`: 16), element-wise (processed in
         chunks of voxels to bound memory), and differentiable without
         NaN, where the derivatives of `eigh` are NaN at repeated
         eigenvalues. Smith OK, *Eigenvalues of a symmetric 3 × 3

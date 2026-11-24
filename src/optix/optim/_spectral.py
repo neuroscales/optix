@@ -65,10 +65,12 @@ Two cases map X to g(m)·I:
     closed form computes the soft-threshold map about 3 times faster
     than batched `eigh` with the reconstruction U diag(g) Uᵀ in float32
     (1.6 times in float64). Its eigenvalues and maps are within 5 ulps
-    of the matrix scale of a float64 `eigh` reference in both precisions
-    (float32 `eigh`: 16 ulps). It is element-wise, processed in chunks
-    of voxels to bound its temporaries, and has finite derivatives
-    everywhere, where those of `eigh` are NaN at repeated eigenvalues.
+    of the matrix scale of a float64 `eigh` reference in float32, and
+    within about 10 ulps in float64, where the reference's own error is of
+    the same order (float32 `eigh`: 16 ulps). It is element-wise,
+    processed in chunks of voxels to bound its temporaries, and has
+    finite derivatives everywhere, where those of `eigh` are NaN at
+    repeated eigenvalues.
 
 !!! references "References"
     1. Smith OK. *Eigenvalues of a symmetric 3 × 3 matrix.* Commun ACM
