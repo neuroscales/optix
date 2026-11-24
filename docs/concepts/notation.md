@@ -157,6 +157,10 @@ Lengths share one unit; the Gibson–Lanni defaults are in µm.
 | $\mathrm{OPD}$ | optical path difference between the actual and the design ray | length | `gibson_lanni_opd` | Gibson–Lanni |
 | $\psi$ | phase aberration of the pupil; $\psi = k_0\,\mathrm{OPD}$ | rad | `pupil_phase` | both |
 | $\mathbf{e}$ | electric field near the focus | | `richards_wolf_field` | Richards–Wolf |
+| $I_0$, $I_1$, $I_2$ | the diffraction integrals of the focal field | | `richards_wolf_integrals` | Richards–Wolf |
+| $u$, $v$ | optical coordinates, $u = kz\sin^2\alpha$, $v = k r \sin\alpha$ | | | Richards–Wolf |
+| $\varphi_0$ | azimuth of the electric vector of the incident wave, from the $x$ axis | rad | `polarization` | Richards–Wolf |
+| $\mathbf{p}$ | orientation of an emitting dipole (unit vector) | | `emitter` | Richards–Wolf |
 | $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
 | $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
 | $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
@@ -164,8 +168,9 @@ Lengths share one unit; the Gibson–Lanni defaults are in µm.
 Some letters have another meaning elsewhere on this page: here $n$ is a
 refractive index, not a number of photoelectrons; $\lambda_0$ is a wavelength,
 where $\lambda$ alone is the expected number of photoelectrons; $\theta$,
-$\rho$ and $\psi$ are not the basis coefficients, the Stirling residual and the
-digamma function. A paper that writes the wavelength $\lambda$ and the vacuum
+$\rho$, $\psi$, $\varphi$ and $\alpha$ are not the basis coefficients, the Stirling
+residual, the digamma function, the function $\varphi(u)$ and the Dirichlet
+concentration. A paper that writes the wavelength $\lambda$ and the vacuum
 wave number $k$ is mapped to $\lambda_0$ and $k_0$ on its page. Docstrings
 write `λ₀`, `k₀`.
 

@@ -22,6 +22,7 @@
         - bead_psf
         - lightsheet_psf
         - gaussian_sheet
+        - richards_wolf
         - phase_retrieval
         - pupil_psf
         - zernike_psf
@@ -50,6 +51,8 @@
         - rayleigh_range
         - beam_radius
         - sheet_intensity
+        - richards_wolf_field
+        - richards_wolf_integrals
         - zernike
         - noll_index
         - zernike_fit

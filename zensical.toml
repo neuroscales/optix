@@ -56,6 +56,7 @@ nav = [
     ]},
     {"Point-spread function" = [
       "algorithms/psf/bead-psf.md",
+      "algorithms/psf/richards-wolf.md",
       "algorithms/psf/phase-retrieval.md",
       "algorithms/psf/gibson-lanni.md",
     ]},

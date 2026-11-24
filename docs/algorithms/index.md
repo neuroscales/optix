@@ -39,6 +39,7 @@ example. The sections follow the modules of the
 | | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |
 | | [VSNR](destripe/vsnr.md) (`VSNR`) | stripe-free image, variational |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
+| | [Richards–Wolf](psf/richards-wolf.md) (`richards_wolf`) | vectorial point-spread function of a high-aperture objective, from theory |
 | | [Phase retrieval](psf/phase-retrieval.md) (`PhaseRetrieval`) | pupil function and Zernike aberrations from a bead z-stack |
 | | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |
 | [`optix.fusion`](../reference/fusion.md) | [Intensity adjustment](fusion/intensity-adjustment.md) (`IntensityAdjustment`) | gain and offset of each tile of a mosaic |

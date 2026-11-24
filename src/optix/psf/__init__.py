@@ -5,6 +5,8 @@
 - [`lightsheet_psf`][optix.psf.lightsheet_psf]: effective PSF of
   light-sheet imaging, a detection PSF times the sheet profile
   ([`gaussian_sheet`][optix.psf.gaussian_sheet]).
+- [`richards_wolf`][optix.psf.richards_wolf]: vectorial PSF of an
+  aplanatic system of high aperture (Richards & Wolf, 1959).
 - [`PhaseRetrieval`][optix.psf.PhaseRetrieval] /
   [`phase_retrieval`][optix.psf.phase_retrieval]: pupil function
   retrieved from a bead z-stack, with its Zernike expansion (Hanser et
@@ -31,6 +33,7 @@ from ._pupil import (
     pupil_psf,
     zernike_psf,
 )
+from ._richards_wolf import richards_wolf
 
 __all__ = [
     # estimators
@@ -41,6 +44,7 @@ __all__ = [
     "gaussian_sheet",
     "gibson_lanni",
     "lightsheet_psf",
+    "richards_wolf",
     "phase_retrieval",
     "pupil_psf",
     "zernike_psf",
