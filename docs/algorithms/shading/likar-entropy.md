@@ -1,11 +1,11 @@
 # Likar (entropy minimisation)
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat`, `dark`) \
-    **Noise model:** none \
-    **Streaming:** per-pixel-stats \
-    **Needs many frames:** no \
-    **Reference:** Likar et al., Journal of Microscopy, 2000, [doi:10.1046/j.1365-2818.2000.00669.x](https://doi.org/10.1046/j.1365-2818.2000.00669.x)
+    - **Estimates:** `ShadingEstimate` (`flat`, `dark`)
+    - **Noise model:** none
+    - **Streaming:** per-pixel-stats
+    - **Needs many frames:** no
+    - **Reference:** Likar et al., Journal of Microscopy, 2000, [doi:10.1046/j.1365-2818.2000.00669.x](https://doi.org/10.1046/j.1365-2818.2000.00669.x)
 
 ## Overview
 
@@ -39,9 +39,10 @@ baseline, as [CIDRE](cidre.md) does:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d},
+    \mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \mathbf{d},
     \qquad
-    \hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \hat{\mathbf{d}}}{\hat{\mathbf{f}}}
+    \hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \hat{\mathbf{d}}}{\hat{\mathbf{f}}},
+    \qquad n = 1, \ldots, N
     $$
 
 === "Likar et al. 2000"
@@ -54,15 +55,20 @@ baseline, as [CIDRE](cidre.md) does:
     \hat{U}(x, y) = \frac{N(x, y) - \hat{S}_A(x, y)}{\hat{S}_M(x, y)} \tag{5}
     $$
 
-| optix | [Likar et al. 2000](https://doi.org/10.1046/j.1365-2818.2000.00669.x) | Meaning |
-|---|---|---|
-| $\mathbf{y}_i$ | $N$ | recorded image |
-| $\mathbf{x}_i$ | $U$ | latent image |
-| $\mathbf{f}$ | $S_M$ | multiplicative shading (flat field) |
-| $\mathbf{d}$ | $S_A$ | additive shading (dark field) |
-| $\mathbf{r} = (x, y)$ | $(x, y)$ | pixel position, origin at the image centre |
-| $H \times W$ | $H \times W$ | image height and width |
-| $G$ | $G$ | number of grey levels (`levels`) |
+Frames have $\lvert\Omega\rvert = HW$ pixels, flattened into vectors; a group
+has $N$ frames (often $N = 1$).
+
+| optix | [Likar et al. 2000](https://doi.org/10.1046/j.1365-2818.2000.00669.x) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_n$ | $N$ | recorded image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{x}_n$ | $U$ | latent (shading-free) image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{f}$ | $S_M$ | multiplicative shading (flat field) | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\mathbf{d}$ | $S_A$ | additive shading (dark field) | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\mathbf{r} = (x, y)$ | $(x, y)$ | pixel position, origin at the image centre | 2 coordinates, per pixel |
+| $H \times W$ | $H \times W$ | image height and width | integers, one for the stack |
+| $G$ | $G$ | number of grey levels (`levels`) | integer, one for the stack |
+| $\mathbf{a}$, $\mathbf{m}$ | $\mathbf{a}$, $\mathbf{m}$ | coefficients of $\mathbf{d}$ and $\mathbf{f}$ | $\mathbb{R}^5$ each, per group |
+| $p_k$ | $p(n)$ | normalised, blurred histogram at grey level $k$ | $\mathbb{R}^{3G}$ over $k$, per group |
 
 $\mathbf{d}$ is the additive part of the shading only: it has zero mean over the
 image (below), so a constant offset is not estimated and stays in the corrected
@@ -91,7 +97,7 @@ $\mathbf{r} = (x, y)$ measured from the image centre:
     \end{aligned}
     $$
 
-    so that $\sum_p d_p \approx 0$ and $\bar{f} \approx 1$.
+    so that $\sum_{i \in \Omega} d_i \approx 0$, with $\Omega$ the pixels, and $\bar{f} \approx 1$.
 
 === "Likar et al. 2000"
 
@@ -112,16 +118,17 @@ pixel$^2$. The flat field has no unit: $m_1$ and $m_2$ are per pixel, and
 $m_3$, $m_4$ and $m_5$ per pixel$^2$. (They are not the parameters that the
 optimiser works with, which are rescaled; see [Algorithm](#algorithm).)
 
-The objective is the entropy of the corrected image. With $h(n)$ the
-histogram of the grey levels $n = 1 \ldots G$ and $p(n)$ its normalisation:
+The objective is the entropy of the corrected image. With $h_k$ the
+histogram of the grey levels $k = 1 \ldots G$ and $p_k$ its normalisation
+(the paper's $h(n)$, $n$ and $p(n)$; $n$ indexes frames in optix):
 
 === "optix"
 
     $$
     \{\mathbf{a}, \mathbf{m}\} = \arg\min_{\mathbf{a},\, \mathbf{m}}
-    \; \mathcal{H}\!\left(\frac{\mathbf{y} - \mathbf{d}(\mathbf{a})}{\mathbf{f}(\mathbf{m})}\right),
+    \; \mathcal{H}\!\left(\frac{\mathbf{y}_n - \mathbf{d}(\mathbf{a})}{\mathbf{f}(\mathbf{m})}\right),
     \qquad
-    \mathcal{H} = -\sum_{n} p(n) \log p(n)
+    \mathcal{H} = -\sum_{k} p_k \log p_k
     $$
 
 === "Likar et al. 2000"
@@ -145,25 +152,29 @@ parameters (Eqs. 19–20, text):
   histogram covers $[-G, 2G]$.
 - **Blur.** The histogram is convolved with a triangular window,
 
-  $$
-  {}^{*}h(n) = \sum_{i=-t}^{t} h(n + i)\,(t + 1 - |i|), \qquad t = 2, \tag{20}
-  $$
+    $$
+    {}^{*}h(n) = \sum_{i=-t}^{t} h(n + i)\,(t + 1 - \lvert i \rvert), \qquad t = 2, \tag{20}
+    $$
 
-  and normalised afterwards, which gives $p(n)$.
+    and normalised afterwards, which gives $p(n)$, that is $p_k$.
 - **Marginal grey values.** The pixels of the input image at the grey values 1
   and $G$ are ignored, since they may be saturated.
 
 ## Inference / derivation
 
 The entropy has no closed-form minimiser, so the ten parameters are found by
-direct search: Powell's direction-set method, which minimises along one
+direct search. Statistically, $\mathcal{H}$ is the negative mean
+log-likelihood of the corrected pixels under their own smoothed histogram, so
+the fit is a nonparametric maximum-likelihood criterion: it chooses the
+correction under which the pixel values are most concentrated. The search is
+Powell's direction-set method, which minimises along one
 direction at a time with Brent's one-dimensional method
 ([Press et al. 1992](https://numerical.recipes/)), as in the paper. No gradient is used.
 
 The neutralisation conditions (Eqs. 14–15) are essential, and the two
 constants they fix are not alike. A constant added to $\mathbf{d}$ translates
 the histogram and leaves its entropy unchanged: it is a gauge freedom, fixed
-by $\sum_p d_p = 0$. A constant factor in $\mathbf{f}$ is different: scaling
+by $\sum_{i \in \Omega} d_i = 0$. A constant factor in $\mathbf{f}$ is different: scaling
 the image compresses the histogram and lowers its entropy, so with a free
 factor the minimiser would shrink every value into a few bins (entropy
 towards 0). Setting the constant term of $\mathbf{f}$ to 1 removes this
@@ -177,24 +188,33 @@ retrospective method).
 
 ## Algorithm
 
-```text
-Input: image Y (H × W), G = 256, t = 2, tol = 10⁻⁶, max_iterations = 200
-Grey level of each pixel:  g = round((y − lo) / δ) + 1,  δ = (hi − lo) / (G − 1)
-Discard the pixels at g = 1 and g = G
-θ = 0 (no shading); Powell directions = the 10 unit vectors of the rescaled parameters
-Repeat until the relative change of the entropy is below tol:
-    for each direction: minimise H along it (Brent, tolerance 2·10⁻⁴)
-    update the directions (Powell)
-    # H(θ): corrected values u = (y − d) / f  (rejected if f ≤ 0 anywhere)
-    #       histogram of u on [−G, 2G] with partial interpolation,
-    #       blur by the triangular window, normalise, entropy in nats
-Return f = 1 + θ̃_M · B,  d = (hi − lo) · θ̃_A · B
-    with x̃ = 2x/W, ỹ = 2y/H and B = (x̃, ỹ, x̃ỹ, x̃² − 1/3, ỹ² − 1/3),
-    the neutralised terms of Eqs. 16–17 in scaled coordinates
-    (the five parameters of each of θ̃_A, θ̃_M)
-meta["coefficients"] holds the paper's a and m, converted from θ̃ back to
-    pixel coordinates and data units
-```
+**Input:** image(s) $\mathbf{y}_n \in \mathbb{R}^{\lvert\Omega\rvert}$ of one group
+($H \times W$ pixels); $G = 256$ grey levels, blur half-width $t = 2$,
+`tol` $= 10^{-6}$, `max_iterations` $= 200$. \
+**Output:** $\hat{\mathbf{f}}$, $\hat{\mathbf{d}}$, and the paper's
+coefficients $\mathbf{a}$, $\mathbf{m}$ in `meta["coefficients"]`.
+
+1. **Quantise.** Give each pixel the grey level
+   $\mathrm{round}\bigl((y_{ni} - lo)/\delta\bigr) + 1$, with
+   $\delta = (hi - lo)/(G - 1)$; discard the pixels at levels 1 and $G$.
+2. **Initialise** the ten rescaled parameters
+   $\boldsymbol{\theta} = (\tilde{\boldsymbol{\theta}}_A, \tilde{\boldsymbol{\theta}}_M) = \mathbf{0}$
+   (no shading), and Powell's directions to the ten unit vectors.
+3. **Repeat** until the relative change of the entropy is below `tol`:
+    1. for each direction, minimise $\mathcal{H}(\boldsymbol{\theta})$ along it
+       with Brent's method (tolerance $2 \cdot 10^{-4}$), where evaluating
+       $\mathcal{H}$ means: correct $\mathbf{u}_n = (\mathbf{y}_n - \mathbf{d}) / \mathbf{f}$
+       (rejected if $\mathbf{f} \le 0$ anywhere), build the histogram of
+       $\mathbf{u}_n$ on $[-G, 2G]$ with partial interpolation, blur it with the
+       triangular window, normalise it and take its entropy in nats;
+    2. update the directions (Powell).
+4. **Return** $\hat{\mathbf{f}} = 1 + \tilde{\boldsymbol{\theta}}_M^\top \mathbf{B}$ and
+   $\hat{\mathbf{d}} = (hi - lo)\, \tilde{\boldsymbol{\theta}}_A^\top \mathbf{B}$, with
+   $\tilde{x} = 2x/W$, $\tilde{y} = 2y/H$ and
+   $\mathbf{B} = (\tilde{x}, \tilde{y}, \tilde{x}\tilde{y}, \tilde{x}^2 - \tfrac13, \tilde{y}^2 - \tfrac13)$
+   the neutralised terms of Eqs. 16–17 in scaled coordinates; convert
+   $\tilde{\boldsymbol{\theta}}_A, \tilde{\boldsymbol{\theta}}_M \in \mathbb{R}^5$
+   back to $\mathbf{a}$, $\mathbf{m}$ in pixel coordinates and data units.
 
 ## Faithful mode and extensions
 

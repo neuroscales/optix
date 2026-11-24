@@ -423,6 +423,7 @@ class Multiview:
         mu: Tensor | None = None,
         flat: Tensor | None = None,
         back: Callable[[Tensor], Tensor] | None = None,
+        penalty: Callable[[Tensor], Tensor] | None = None,
     ) -> Tensor:
         """One multiview iteration: every view contributes once.
 
@@ -459,6 +460,11 @@ class Multiview:
             (Hᵥ f + b)ᵥ at `f` if already computed.
         flat, back
             Not supported (must be None).
+        penalty : callable, optional
+            Not implemented (must be None): a one-step-late penalty
+            such as total variation would divide the combined
+            correction, which the sequential update has no single
+            place for.
 
         Returns
         -------
@@ -467,6 +473,10 @@ class Multiview:
         """
         if flat is not None or back is not None:
             raise ValueError("Multiview.step supports neither flat nor back")
+        if penalty is not None:
+            raise NotImplementedError(
+                "Multiview.step does not support a penalty (e.g. RL-TV)"
+            )
         n = len(self.ops)
         bg = torch.as_tensor(background, dtype=f.dtype, device=f.device)
         bg = bg.expand(self.shape) if bg.ndim else None
@@ -609,8 +619,8 @@ class MultiviewRL(Estimator):
           iterations by the test of
           [Lucy (1974)](https://doi.org/10.1086/111605) on all views:
           stop once P(χ² > χ²_obs) ≥ `alpha`, with χ²_obs =
-          ∑ᵥ ∑ᵢ (yᵥᵢ − μᵥᵢ)²/μᵥᵢ, μᵥ = Hᵥ f, and ν = N n − 1 degrees of
-          freedom (n pixels per view), capped at `max_iter`. The test
+          ∑ᵥ ∑ᵢ (yᵥᵢ − μᵥᵢ)²/μᵥᵢ, μᵥ = Hᵥ f, and ν = N |Ω| − 1 degrees
+          of freedom (|Ω| pixels per view), capped at `max_iter`. The test
           assumes counts.
 
     !!! warning "Approximations"

@@ -1,11 +1,11 @@
 # Gibson–Lanni PSF
 
 !!! info "At a glance"
-    **Estimates:** `PSFEstimate` (`psf`, `fwhm`, `meta`) with `return_estimate=True`; otherwise the PSF tensor \
-    **Noise model:** none (a deterministic optical model) \
-    **Streaming:** none: a PSF is computed from the optical parameters, not from data \
-    **Needs many frames:** no \
-    **Reference:** Gibson and Lanni, J Opt Soc Am A, 1991, [doi:10.1364/JOSAA.8.001601](https://doi.org/10.1364/JOSAA.8.001601); fast evaluation: Li, Xue and Blu, J Opt Soc Am A, 2017, [doi:10.1364/JOSAA.34.001029](https://doi.org/10.1364/JOSAA.34.001029)
+    - **Estimates:** `PSFEstimate` (`psf`, `fwhm`, `meta`) with `return_estimate=True`; otherwise the PSF tensor
+    - **Noise model:** none (a deterministic optical model)
+    - **Streaming:** none: a PSF is computed from the optical parameters, not from data
+    - **Needs many frames:** no
+    - **Reference:** Gibson and Lanni, J Opt Soc Am A, 1991, [doi:10.1364/JOSAA.8.001601](https://doi.org/10.1364/JOSAA.8.001601); fast evaluation: Li, Xue and Blu, J Opt Soc Am A, 2017, [doi:10.1364/JOSAA.34.001029](https://doi.org/10.1364/JOSAA.34.001029)
 
 ## Overview
 
@@ -88,16 +88,16 @@ design distance,
     with $\Delta z / n_{\mathrm{oil}} = t_s/n_s + t_g/n_g + t_{\mathrm{oil}}/n_{\mathrm{oil}} - t_{g^*}/n_{g^*} - t_{\mathrm{oil}^*}/n_{\mathrm{oil}^*}$
     (Eq. 3), and each remaining brace of the same form as the $n_s t_s$ one.
 
-| optix | Gibson and Lanni 1991 |
-|---|---|
-| $\mathrm{NA}$ | NA |
-| $\lambda_0$, $k_0 = 2\pi/\lambda_0$ | $\lambda$, $k = 2\pi/\lambda$ |
-| $n_s$, $t_s$ | $n_s$, $t_s$ |
-| $n_g$, $t_g$; $n_g^*$, $t_g^*$ | $n_g$, $t_g$; $n_{g^*}$, $t_{g^*}$ |
-| $n_i$, $t_i$; $n_i^*$, $t_i^*$ | $n_{\mathrm{oil}}$, $t_{\mathrm{oil}}$; $n_{\mathrm{oil}^*}$, $t_{\mathrm{oil}^*}$ |
-| $\Delta z$ | $\Delta z$ |
-| $\rho$ | $\rho$ |
-| $r$ | $r_d / M$ ($r_d$ the radius on the detector, $M$ the magnification) |
+| optix | Gibson and Lanni 1991 | Meaning | Shape |
+|---|---|---|---|
+| $\mathrm{NA}$ | NA | numerical aperture of the objective | scalar, one per PSF |
+| $\lambda_0$, $k_0 = 2\pi/\lambda_0$ | $\lambda$, $k = 2\pi/\lambda$ | wavelength in vacuum; wave number | scalars, one per PSF |
+| $n_s$, $t_s$ | $n_s$, $t_s$ | specimen index; depth of the source | scalars, one per PSF |
+| $n_g$, $t_g$; $n_g^*$, $t_g^*$ | $n_g$, $t_g$; $n_{g^*}$, $t_{g^*}$ | coverslip index and thickness, actual and design | scalars, one per PSF |
+| $n_i$, $t_i$; $n_i^*$, $t_i^*$ | $n_{\mathrm{oil}}$, $t_{\mathrm{oil}}$; $n_{\mathrm{oil}^*}$, $t_{\mathrm{oil}^*}$ | immersion index and thickness, actual and design | scalars, one per PSF |
+| $\Delta z$ | $\Delta z$ | defocus: stage displacement from the paraxial focus | scalar, one per axial slice |
+| $\rho$ | $\rho$ | normalised pupil radius | scalar, integration variable |
+| $r$ | $r_d / M$ ($r_d$ the radius on the detector, $M$ the magnification) | lateral distance from the axis, in object space | scalar, one per distinct lateral radius |
 
 The defocus $\Delta z$ is the distance the stage has moved from the position in
 which the source is at the paraxial focus. $\Delta z = 0$ is the best geometric
@@ -158,12 +158,12 @@ modulus of the Kirchhoff integral
     with $C$ a constant complex amplitude and $a$ the radius of the aperture
     projected on the back focal plane.
 
-| optix | Gibson and Lanni 1991 |
-|---|---|
-| $h(r, \Delta z)$ | $I(x_d, y_d, z_d)$ |
-| $k_0\,\mathrm{NA}\, r$ | $k a (x_d^2 + y_d^2)^{1/2} / z_d$ |
-| $e^{i k_0\,\mathrm{OPD}}$ | $e^{jW(\rho)}$ |
-| upper limit $a$ | upper limit 1 |
+| optix | Gibson and Lanni 1991 | Meaning | Shape |
+|---|---|---|---|
+| $h(r, \Delta z)$ | $I(x_d, y_d, z_d)$ | PSF intensity | scalar per (radius, defocus); $K_z \times K_y \times K_x$ on the grid, one per PSF |
+| $k_0\,\mathrm{NA}\, r$ | $k a (x_d^2 + y_d^2)^{1/2} / z_d$ | argument of the Bessel function, per unit $\rho$ | scalar, one per lateral radius |
+| $e^{i k_0\,\mathrm{OPD}}$ | $e^{jW(\rho)}$ | phase factor of the aberration | scalar per ($\rho$, defocus) |
+| upper limit $a$ | upper limit 1 | upper limit of the pupil integral | scalar, one per PSF |
 
 The letter $a$ has two meanings. In the Gibson and Lanni tab it is the radius of
 the aperture projected on the back focal plane, a length. In the optix tab it is
@@ -176,7 +176,7 @@ $k a \rho\, r_d / z_d$ equals $k_0\,\mathrm{NA}\,\rho\, r$ with $r = r_d/M$, up 
 factor $[1 - (\mathrm{NA}/M)^2]^{-1/2}$ that is close to 1 when $\mathrm{NA} \ll M$ (a few $10^{-4}$ away from 1 for NA 1.4 at
 60$\times$). The
 constant $C / z_d$ is dropped because the PSF is normalised to unit sum. Samples
-on the voxel grid are the intensity at $\Delta z = $ `defocus` $+ (k - K_z//2)\,d_z$
+on the voxel grid are the intensity at $\Delta z$ = `defocus` + $(k - K_z//2)\,d_z$
 and lateral offset $(j - K_y//2)\, d_y$, $(i - K_x//2)\, d_x$.
 
 ## Inference / derivation
@@ -184,8 +184,10 @@ and lateral offset $(j - K_y//2)\, d_y$, $(i - K_x//2)\, d_x$.
 There is nothing to infer: the PSF is the evaluation of the integral above on
 the voxel grid, one integral per distinct (lateral radius, axial position)
 pair. Because the PSF is radially symmetric, it is computed on the *distinct*
-radii of the grid only and looked up for every lateral voxel. Two evaluation
-methods are provided.
+radii of the grid only and looked up for every lateral voxel. There is no
+statistical estimation, except in the Bessel-series method, where the expansion
+coefficients are a linear least-squares fit of the phase factor (an
+interpolation problem, not a noise model). Two evaluation methods are provided.
 
 **Quadrature** (`method="quadrature"`, the default). The integral is computed
 by Gauss–Legendre quadrature, as in the paper, which says only that Bessel
@@ -238,15 +240,16 @@ phase factor on rescaled Bessel functions,
     \qquad \beta = k r\,\mathrm{NA} .
     $$
 
-| optix | Li et al. 2017 |
-|---|---|
-| $\lambda_0$ | $\lambda$ |
-| $\lambda_{\mathrm{ref}} = 0.436$ µm | $\lambda_0$ |
-| $\Delta z$ | $\Delta z = z + t_i^* + n_i\bigl(\tfrac{t_s}{n_s} + \tfrac{t_g}{n_g} - \tfrac{t_g^*}{n_g^*} - \tfrac{t_i^*}{n_i^*}\bigr)$, i.e. $z + n_i t_s/n_s$ for matched layers; $z$ is the stage displacement from the design position |
-| $a$, $M$ | $a$, $M$ |
-| $r$ | $r$ |
-| $n_s, n_g, n_g^*, n_i, n_i^*$ | $n_s, n_g, n_g^*, n_i, n_i^*$ |
-| $t_s$ | $z_p$ |
+| optix | Li et al. 2017 | Meaning | Shape |
+|---|---|---|---|
+| $\lambda_0$ | $\lambda$ | wavelength in vacuum | scalar, one per PSF |
+| $\lambda_{\mathrm{ref}} = 0.436$ µm | $\lambda_0$ | reference wavelength of the basis | scalar constant |
+| $\Delta z$ | $\Delta z = z + t_i^* + n_i\bigl(\tfrac{t_s}{n_s} + \tfrac{t_g}{n_g} - \tfrac{t_g^*}{n_g^*} - \tfrac{t_i^*}{n_i^*}\bigr)$, i.e. $z + n_i t_s/n_s$ for matched layers; $z$ is the stage displacement from the design position | defocus | scalar, one per axial slice |
+| $a$, $M$ | $a$, $M$ | upper limit of the pupil integral; number of basis functions | scalars, one per PSF |
+| $c_m$, $\sigma_m$ | $c_m$, $\sigma_m$ | coefficient and scale of basis function $m$ | $M$ values; $c_m$ one per axial slice, $\sigma_m$ one per PSF |
+| $r$ | $r$ | lateral distance from the axis | scalar, one per distinct lateral radius |
+| $n_s, n_g, n_g^*, n_i, n_i^*$ | $n_s, n_g, n_g^*, n_i, n_i^*$ | refractive indices of the layers | scalars, one per PSF |
+| $t_s$ | $z_p$ | depth of the source | scalar, one per PSF |
 
 The coefficients $c_m$ are fitted by least squares on $K$ samples $\rho_k$
 uniform in $[0, a]$, the same for all radii: the matrix of Bessel values is
@@ -271,27 +274,33 @@ quadrature.
 
 ## Algorithm
 
-```text
-Input: shape (K_z, K_y, K_x), spacing (d_z, d_y, d_x), wavelength λ₀, NA,
-       layers (depth, indices, thicknesses, design values), defocus,
-       method, rtol, oversample
-Radii:    the distinct values of √(Δy² + Δx²) over the lateral grid
-Defocus:  Δz_k = defocus + (k − K_z//2) d_z, for the K_z slices
-a = min(1, n_min / NA)   n_min = smallest index of the layers that have a thickness
-if method = "quadrature":
-    Q = nodes, or the smallest 32·2^j for which amplitudes with Q and 2Q nodes agree to rtol
-    nodes ρ_q, weights w_q: Gauss–Legendre on θ, ρ = (n_min/NA) sin θ
-    amplitude(r, Δz) = Σ_q w_q J_0(k₀ NA r ρ_q) exp(i k₀ OPD(ρ_q; Δz))
-else:
-    fit c_m(Δz) for m = 1..M on K samples ρ_k; amplitude = Σ_m c_m R_m(r)
-I(r, Δz) = |amplitude|²
-Look up I at each voxel (averaging oversample points per voxel axis if > 1)
-Return I / ΣI, centred at index K // 2
-```
+**Input:** grid shape $(K_z, K_y, K_x)$ and spacing $(d_z, d_y, d_x)$;
+wavelength $\lambda_0$; $\mathrm{NA}$; the layers (depth $t_s$, indices,
+thicknesses, design values); `defocus`; `method="quadrature"`, `rtol=1e-6`,
+`basis` $M = 100$ and `samples` $K = 1000$ (for `li2017`), `oversample=1`;
+`specimen_index=1.33`, design values $n_g^* = 1.522$, $t_g^* = 170$ µm,
+$n_i^* = 1.515$, $t_i^* = 150$ µm. \
+**Output:** the PSF $\mathbf{h} \in \mathbb{R}^{K_z \times K_y \times K_x}$,
+of unit sum, centred at index $K // 2$ along each axis.
 
-Defaults: `method="quadrature"`, `rtol=1e-6`, `basis` $M = 100$ and `samples`
-$K = 1000$ for `li2017`, `oversample=1`, `specimen_index=1.33`, design values
-$n_g^* = 1.522$, $t_g^* = 170$ µm, $n_i^* = 1.515$ and $t_i^* = 150$ µm.
+1. **Radii:** the distinct values of $r = \sqrt{\Delta y^2 + \Delta x^2}$ over
+   the lateral grid.
+2. **Defocus:** $\Delta z_k = \texttt{defocus} + (k - K_z // 2)\, d_z$ for the
+   $K_z$ slices.
+3. **Pupil limit:** $a = \min(1, n_{\min}/\mathrm{NA})$, with $n_{\min}$ the
+   smallest index of the layers that have a thickness.
+4. **Amplitude** at every (radius, defocus) pair:
+    1. with `method="quadrature"`: take $Q$ = `nodes`, or the smallest
+       $32 \cdot 2^j$ for which amplitudes with $Q$ and $2Q$ nodes agree to
+       `rtol`; Gauss–Legendre nodes $\rho_q$ and weights $w_q$ on $\theta$,
+       $\rho = (n_{\min}/\mathrm{NA}) \sin\theta$; amplitude
+       $\sum_q w_q\, J_0(k_0 \mathrm{NA}\, r \rho_q)\, e^{i k_0 \mathrm{OPD}(\rho_q; \Delta z)}$;
+    2. with `method="li2017"`: fit $c_m(\Delta z)$, $m = 1, \ldots, M$, by
+       least squares on $K$ samples $\rho_k$; amplitude $\sum_m c_m R_m(r)$.
+5. **Intensity:** $h(r, \Delta z) = \lvert \text{amplitude} \rvert^2$.
+6. **Look up** $h$ at each voxel (averaging `oversample` points per voxel axis
+   if greater than 1).
+7. **Normalise** to unit sum and return the PSF.
 
 ## Faithful mode and extensions
 

@@ -1,11 +1,11 @@
 # Nagy–O'Leary
 
 !!! info "At a glance"
-    **Estimates:** restored image (the latent image $\mathbf{x}$, same shape as the data), from an image blurred by a spatially variant PSF \
-    **Noise model:** Gaussian (least squares, regularised by early stopping) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Nagy and O'Leary, SIAM J Sci Comput, 1998, [doi:10.1137/S106482759528507X](https://doi.org/10.1137/S106482759528507X)
+    - **Estimates:** restored image (the latent image $\mathbf{x}$, same shape as the data), from an image blurred by a spatially variant PSF
+    - **Noise model:** Gaussian (least squares, regularised by early stopping)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Nagy and O'Leary, SIAM J Sci Comput, 1998, [doi:10.1137/S106482759528507X](https://doi.org/10.1137/S106482759528507X)
 
 ## Overview
 
@@ -59,7 +59,9 @@ underdetermined and early stopping selects the solution.
     \sum_s \mathbf{W}_s = \mathbf{I},
     $$
 
-    with $\mathbf{H}_s$ the convolution with $\mathbf{h}_s$, and
+    with $\mathbf{y}, \mathbf{x}, \boldsymbol{\varepsilon} \in \mathbb{R}^{\lvert\Omega\rvert}$
+    (one value per pixel $i \in \Omega$ of the image), $\mathbf{H}_s \in \mathbb{R}^{\lvert\Omega\rvert \times \lvert\Omega\rvert}$
+    the convolution with $\mathbf{h}_s$, and
     $\mathbf{W}_s = \operatorname{diag}(\mathbf{w}_s)$ a non-negative diagonal
     matrix of pixel weights applied to the *blurred* image.
 
@@ -74,17 +76,17 @@ underdetermined and early stopping selects the solution.
     with $\mathbf{K}_i$ the block-Toeplitz convolution matrix of the PSF $k_i$
     and $\mathbf{D}_i$ a diagonal matrix with $\sum_i \mathbf{D}_i = \mathbf{I}$.
 
-| optix | [Nagy and O'Leary 1998](https://doi.org/10.1137/S106482759528507X) |
-|---|---|
-| $\mathbf{y}$ | $\mathbf{g}$ |
-| $\mathbf{x}$ | $\mathbf{f}$ |
-| $\mathbf{A}$ | $\mathbf{K}$ |
-| $\mathbf{H}_s$, $\mathbf{h}_s$ | $\mathbf{K}_i$, $k_i$ |
-| $\mathbf{W}_s$, $\mathbf{w}_s$ | $\mathbf{D}_i$, $\delta_i$ |
-| $\mathbf{r}_s$ | $s_i$ |
-| $S$, $s$ | $p$, $i$ |
-| $\boldsymbol{\varepsilon}$ | $\boldsymbol{\eta}$ |
-| $\mathbf{C}_\tau$, $\tau$ | $C_\tau$, $\tau$ |
+| optix | [Nagy and O'Leary 1998](https://doi.org/10.1137/S106482759528507X) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$ | $\mathbf{g}$ | recorded (blurred, noisy) image | $\lvert\Omega\rvert$, one per image |
+| $\mathbf{x}$ | $\mathbf{f}$ | latent (restored) image | $\lvert\Omega\rvert$ (larger with `boundary="extended"`), one per image |
+| $\mathbf{A}$ | $\mathbf{K}$ | spatially variant blur operator | $\lvert\Omega\rvert \times \lvert\Omega\rvert$, one for the whole stack |
+| $\mathbf{H}_s$, $\mathbf{h}_s$ | $\mathbf{K}_i$, $k_i$ | convolution by the PSF of node $s$; that PSF | $\lvert\Omega\rvert \times \lvert\Omega\rvert$ and kernel size $K$, one per node |
+| $\mathbf{W}_s$, $\mathbf{w}_s$ | $\mathbf{D}_i$, $\delta_i$ | pixel weights of node $s$, as a diagonal matrix and as an image | $\lvert\Omega\rvert \times \lvert\Omega\rvert$ and $\lvert\Omega\rvert$, one per node |
+| $\mathbf{r}_s$ | $s_i$ | position of node $s$ in the field | 2 or 3 coordinates, one per node |
+| $S$, $s$ | $p$, $i$ | number of nodes; node index | scalars |
+| $\boldsymbol{\varepsilon}$ | $\boldsymbol{\eta}$ | additive noise | $\lvert\Omega\rvert$, one per image |
+| $\mathbf{C}_\tau$, $\tau$ | $C_\tau$, $\tau$ | truncated block-circulant preconditioner; its truncation level | $\lvert\Omega\rvert \times \lvert\Omega\rvert$ and scalar, one per image |
 
 The weights $\mathbf{w}_s$ are chosen by `interpolation`:
 
@@ -108,6 +110,11 @@ is ill-posed and the noise enters the iterates after a few iterations, so
 regularisation is by stopping early
 ([§1](https://doi.org/10.1137/S106482759528507X)): the paper uses no stopping
 rule and compares solutions after a fixed number of iterations.
+Statistically, the least-squares objective is the negative log-likelihood of
+i.i.d. Gaussian noise, so the converged solution would be the maximum-likelihood
+estimate; stopping CGLS early acts as a spectral filter on the small singular
+values of $\mathbf{A}$, much like Tikhonov (ridge, or Gaussian-prior MAP)
+regularisation.
 
 **Fast products** ([§3](https://doi.org/10.1137/S106482759528507X)). $\mathbf{A}\mathbf{x}$ is
 evaluated with FFTs on a padded grid, as a sum of $S$ circular convolutions
@@ -156,21 +163,33 @@ piecewise-constant partition the PSF of that region, one of the vertex kernels
 
 ## Algorithm
 
-```text
-Input: data y, PSFs h_s on a grid with node positions r_s,
-       interpolation = "constant", precondition = True, tau = 0, n_iter = 14
-For each block of the image (the whole image when it fits in memory):
-    Build A on the block from the weights at the global pixel positions
-    (zero boundary: the unknowns are the image pixels, zero outside)
-    If precondition: build C_tau, one circulant block per region of the block
-    x(0) = 0; e = y; s = P' A' e; p = s
-    Repeat n_iter times (or until s = 0 or q = 0):
-        t = P p;  q = A t;  alpha = |s|² / |q|²
-        x += alpha t;  e -= alpha q
-        s_new = P' A' e;  p = s_new + (|s_new|² / |s|²) p;  s = s_new
-    Keep the core of x, cropped to the observed region
-Return the restored image
-```
+**Input:** an image $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$; PSFs
+$\mathbf{h}_s$ at the $S$ nodes $\mathbf{r}_s$ of a grid; hyper-parameters
+`interpolation` $=$ `"constant"`, `precondition` $=$ `True`, `tau` $= 0$,
+`n_iter` $= 14$. \
+**Output:** the restored image $\hat{\mathbf{x}} \in \mathbb{R}^{\lvert\Omega\rvert}$.
+
+1. **For each block** of the image (the whole image when it fits in memory):
+    1. **Build** $\mathbf{A}$ on the block from the weights $\mathbf{w}_s$ at the
+       global pixel positions (zero boundary: the unknowns are the image pixels,
+       zero outside);
+    2. **Precondition** (if `precondition`): build $\mathbf{C}_\tau$, one
+       circulant block per region of the block, and set
+       $\mathbf{P} = \mathbf{C}_\tau^{-1}$ (else $\mathbf{P} = \mathbf{I}$);
+    3. **Initialise** $\mathbf{x}_0 = \mathbf{0}$, $\mathbf{e}_0 = \mathbf{y}$,
+       $\mathbf{s}_0 = \mathbf{P}^\top \mathbf{A}^\top \mathbf{e}_0$,
+       $\mathbf{p}_0 = \mathbf{s}_0$;
+    4. **Repeat** for $k = 0, \ldots,$ `n_iter` $- 1$ (or until
+       $\mathbf{s}_k = \mathbf{0}$ or $\mathbf{q}_k = \mathbf{0}$):
+        1. $\mathbf{t}_k = \mathbf{P}\mathbf{p}_k$,
+           $\mathbf{q}_k = \mathbf{A}\mathbf{t}_k$,
+           $\alpha_k = \lVert\mathbf{s}_k\rVert^2 / \lVert\mathbf{q}_k\rVert^2$;
+        2. $\mathbf{x}_{k+1} = \mathbf{x}_k + \alpha_k \mathbf{t}_k$,
+           $\mathbf{e}_{k+1} = \mathbf{e}_k - \alpha_k \mathbf{q}_k$;
+        3. $\mathbf{s}_{k+1} = \mathbf{P}^\top \mathbf{A}^\top \mathbf{e}_{k+1}$,
+           $\mathbf{p}_{k+1} = \mathbf{s}_{k+1} + \bigl(\lVert\mathbf{s}_{k+1}\rVert^2 / \lVert\mathbf{s}_k\rVert^2\bigr)\,\mathbf{p}_k$;
+    5. **Keep** the core of $\mathbf{x}$, cropped to the observed region.
+2. **Return** the restored image.
 
 The number of iterations made per block is recorded in
 `history.extras["iterations"]`.

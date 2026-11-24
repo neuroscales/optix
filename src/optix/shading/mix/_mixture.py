@@ -113,16 +113,16 @@ def _drop_groups(layout: Layout, ndim: int) -> Layout:
 class GammaMixture(Estimator):
     """Joint model of the sensor, the shading and the tissue classes.
 
-    Image formation. A pixel p of frame i records
+    Image formation. A pixel i of frame n records
 
-        yᵢₚ ~ N(cₚ + fₚ·uᵢₚ, vₚ + g·fₚ·uᵢₚ)
+        yₙᵢ ~ N(cᵢ + fᵢ·uₙᵢ, vᵢ + g·fᵢ·uₙᵢ)
 
     with the offset c (camera offset plus background, in ADU), the
     variance v of an empty pixel, the gain g (ADU per electron), the
     smooth modulation f (flat field) and the signal u ≥ 0 in ADU. It is
     the Gaussian limit of
 
-        yᵢₚ = oₚ + g·Poisson(fₚ·(sᵢₚ + bₚ) + d_{ep}) + read noise,
+        yₙᵢ = oᵢ + g·Poisson(fᵢ·(sₙᵢ + bᵢ) + d_{ei}) + read noise,
 
     with the dark signal dₑ, u = g·s, c = o + g·(f·b + dₑ) and
     v = σ² + g²·(f·b + dₑ).
@@ -130,9 +130,9 @@ class GammaMixture(Estimator):
     Probabilistic model. The signal is a mixture of K tissue classes
     and a background class, with proportions drawn per picture:
 
-        πᵢ ~ Dirichlet(α),  zᵢₚ ~ Categorical(πᵢ)
-        uᵢₚ | zᵢₚ = background ~ δ(0)
-        uᵢₚ | zᵢₚ = k ~ Gamma(νₖ, rate νₖ / μₖ)
+        πₙ ~ Dirichlet(α),  zₙᵢ ~ Categorical(πₙ)
+        uₙᵢ | zₙᵢ = background ~ δ(0)
+        uₙᵢ | zₙᵢ = k ~ Gamma(νₖ, rate νₖ / μₖ)
         f = exp(Φ·θ),  θ ~ N(0, (λ·diag(bending energy))⁻¹)
 
     with Φ the separable DCT-II basis without its DC term (geometric mean
@@ -141,12 +141,12 @@ class GammaMixture(Estimator):
 
     Inference. The variational posterior is
 
-        q = ∏ᵢ q(πᵢ) · ∏ᵢₚ q(zᵢₚ) q(uᵢₚ | zᵢₚ) · δ(c, v, θ, μ, ν, α)
+        q = ∏ₙ q(πₙ) · ∏ₙᵢ q(zₙᵢ) q(uₙᵢ | zₙᵢ) · δ(c, v, θ, μ, ν, α)
 
     - q(z, u) is exact given everything else: the integral over u is a
       Gauss-Hermite quadrature in t = log u centred on the mode of the
       integrand (the roots of a cubic for the "full" noise model).
-    - q(πᵢ) is Dirichlet (conjugate update).
+    - q(πₙ) is Dirichlet (conjugate update).
     - μ, ν are refitted to the aggregated posterior of u in each class,
       and α by
       [Minka's fixed-point Newton method](

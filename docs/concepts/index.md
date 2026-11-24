@@ -15,7 +15,7 @@ objects, and each example can be pasted into a Python session.
   do not fit in memory.
 - [Image formation and noise](image-formation.md) says what a pixel value
   means: the camera model, photon transfer, quantisation, and the shading model
-  $\mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d}$. It defines
+  $\mathbf{y}_n = \mathbf{f} \odot (\mathbf{x}_n + b_n) + \mathbf{d}$. It defines
   the conventions that results follow.
 - [Estimators](estimators.md) describes the `fit` / `apply` contract, faithful
   mode and extensions, starting one estimator from another, and the choice of

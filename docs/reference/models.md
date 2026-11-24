@@ -15,3 +15,4 @@ estimates. See [Image formation and noise](../concepts/image-formation.md).
         - simulate_sensor
         - random_shading
         - simulate_shading
+        - simulate_tiles

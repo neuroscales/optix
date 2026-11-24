@@ -1,11 +1,11 @@
 # Kask foreground/background flat field
 
 !!! info "At a glance"
-    **Estimates:** `ShadingEstimate` (`flat` = foreground profile, `dark` = background profile scaled to the mean background level) \
-    **Noise model:** Poisson (used to find the background) \
-    **Streaming:** per-frame \
-    **Needs many frames:** yes (tens for the background, hundreds for the foreground) \
-    **Reference:** Kask et al., Journal of Microscopy, 2016, [doi:10.1111/jmi.12404](https://doi.org/10.1111/jmi.12404)
+    - **Estimates:** `ShadingEstimate` (`flat` = foreground profile, `dark` = background profile scaled to the mean background level)
+    - **Noise model:** Poisson (used to find the background)
+    - **Streaming:** per-frame
+    - **Needs many frames:** yes (tens for the background, hundreds for the foreground)
+    - **Reference:** Kask et al., Journal of Microscopy, 2016, [doi:10.1111/jmi.12404](https://doi.org/10.1111/jmi.12404)
 
 ## Overview
 
@@ -42,7 +42,7 @@ signal is multiplicative and shaded by $\mathbf{f}$:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \beta_i\, \mathbf{s}_b
+    \mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \beta_n\, \mathbf{s}_b
     $$
 
 === "Kask et al. 2016"
@@ -54,13 +54,13 @@ signal is multiplicative and shaded by $\mathbf{f}$:
     with $S_A = B\,S_b$ and $S_M = S_f$ in the normalised form below.
 
 Both profiles are normalised to mean 1, $\bar{\mathbf{f}} = \bar{\mathbf{s}}_b = 1$,
-and $\beta_i$ is the mean background intensity of frame $i$, in ADU
+and $\beta_n$ is the mean background intensity of frame $n$, in ADU
 (camera offset included). The correction is
 
 === "optix"
 
     $$
-    \hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \hat\beta_i\, \mathbf{s}_b}{\mathbf{f}} + \hat\beta_i
+    \hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \hat\beta_n\, \mathbf{s}_b}{\mathbf{f}} + \hat\beta_n
     $$
 
 === "Kask et al. 2016"
@@ -73,26 +73,29 @@ and $\beta_i$ is the mean background intensity of frame $i$, in ADU
     profiles not normalised.)
 
 The background is corrected additively and the foreground multiplicatively.
-The constant $\hat\beta_i$ added back keeps the corrected image positive and
+The constant $\hat\beta_n$ added back keeps the corrected image positive and
 restores the original background level.
 
-| optix | [Kask et al. 2016](https://doi.org/10.1111/jmi.12404) | Meaning |
-|---|---|---|
-| $\mathbf{y}_i$ | $N$ | recorded image |
-| $\mathbf{x}_i$ | $U$, $\hat{U}$ | latent and corrected image |
-| $\mathbf{f}$ | $S_f$ (normalised $S_M$) | foreground profile, `flat` |
-| $\mathbf{s}_b$ | $S_b$ (normalised $S_A$) | background profile |
-| $\beta_i$, $\hat\beta_i$ | $B$, $\hat{B}$ | mean background intensity of frame $i$ |
-| $\bar\beta$ | | mean of $\beta_i$ over the images used in the background fit |
+Frames have $\lvert\Omega\rvert = HW$ pixels, flattened into vectors, and a
+group has $N$ frames.
+
+| optix | [Kask et al. 2016](https://doi.org/10.1111/jmi.12404) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_n$ | $N$ | recorded image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{x}_n$, $\hat{\mathbf{x}}_n$ | $U$, $\hat{U}$ | latent and corrected image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{f}$ | $S_f$ (normalised $S_M$) | foreground profile, `flat` | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\mathbf{s}_b$ | $S_b$ (normalised $S_A$) | background profile | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\beta_n$, $\hat\beta_n$ | $B$, $\hat{B}$ | mean background intensity of frame $n$ | scalar, one per frame |
+| $\bar\beta$ | | mean of $\beta_n$ over the images used in the background fit | scalar, per group |
 
 The estimate stores $\mathbf{f}$ in `flat` (`meta["flat_norm"] == "mean"`) and
 $\mathbf{d} = \bar\beta\,\mathbf{s}_b$ in `dark`, in ADU. Unlike the shading
 model of the other estimators, the background here is *not* lit through
 $\mathbf{f}$, and its amplitude changes per frame:
 `meta["dark_scaling"] == "per-frame"` records that `apply` re-estimates
-$\beta_i$ for every image, whereas
+$\beta_n$ for every image, whereas
 [`ShadingEstimate.correct`](../../reference/shading.md) subtracts `dark` as it
-is, that is, with $\beta_i = \bar\beta$.
+is, that is, with $\beta_n = \bar\beta$.
 
 ## Probabilistic model
 
@@ -111,13 +114,15 @@ The method has no likelihood. It rests on four assumptions:
 - **Background present.** A frame is useful for the background profile only
   if at least 15 % of its pixels are background.
 
+Profiles are fitted on a coarse grid $\mathcal{B}$ of $\lvert\mathcal{B}\rvert = hw$
+bins ($h \times w = 16 \times 17$ by default), indexed by $j \in \mathcal{B}$.
 Smoothing is the minimisation, over the binned grid, of
 
 === "optix"
 
     $$
-    F(\mathbf{t}) = \sum_{i,j} (e_{ij} - t_{ij})^2
-    + \lambda \sum_{i,j} \bigl[(\mathbf{L}_x \mathbf{t})_{ij}^2 + (\mathbf{L}_y \mathbf{t})_{ij}^2\bigr]
+    F(\mathbf{t}) = \sum_{j \in \mathcal{B}} (e_j - t_j)^2
+    + \lambda \sum_{j \in \mathcal{B}} \bigl[(\mathbf{L}_x \mathbf{t})_j^2 + (\mathbf{L}_y \mathbf{t})_j^2\bigr]
     $$
 
 === "Kask et al. 2016"
@@ -127,28 +132,29 @@ Smoothing is the minimisation, over the binned grid, of
     + R \sum_{i,j} \bigl(Lxx_{ij}^2 + Lyy_{ij}^2\bigr)\Bigr] \tag{5}
     $$
 
-| optix | [Kask et al. 2016](https://doi.org/10.1111/jmi.12404) | Meaning |
-|---|---|---|
-| $\mathbf{e}$ | $E$ | measured binned image |
-| $\mathbf{t}$ | $T$ | smooth solution |
-| $\lambda$ | $R$ | regularisation weight |
-| $\mathbf{L}_x$, $\mathbf{L}_y$ | $Lxx$, $Lyy$ (applied to $T$) | second-difference operators along $x$ and $y$ |
-| $\kappa_{\text{n}}$ | | noise constant of the channel, $\operatorname{var}/\text{mean}$ on the background (written $\kappa$ in the docstrings) |
-| $N$ (paper) | | number of pixels; $1/N$ does not change the minimiser |
-| $\bar{\mathbf{e}}$ | | mean over the images of $e_k/a_k$ |
-| $W_{ij}$ | | number of images that define bin $ij$ |
+| optix | [Kask et al. 2016](https://doi.org/10.1111/jmi.12404) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{e}$, $\mathbf{e}_n$ | $E$ | measured binned image (of frame $n$) | $\mathbb{R}^{\lvert\mathcal{B}\rvert}$, one per frame |
+| $\mathbf{t}$ | $T$ | smooth solution, the binned profile | $\mathbb{R}^{\lvert\mathcal{B}\rvert}$, per group and profile |
+| $a_n$ | | level of binned image $n$ in the fit | scalar, one per frame |
+| $\lambda$ | $R$ | regularisation weight | scalar, one per profile |
+| $\mathbf{L}_x$, $\mathbf{L}_y$ | $Lxx$, $Lyy$ (applied to $T$) | second-difference operators along $x$ and $y$ | $\mathbb{R}^{\lvert\mathcal{B}\rvert \times \lvert\mathcal{B}\rvert}$, fixed |
+| $\kappa_{\text{n}}$ | | noise constant of the channel, $\operatorname{var}/\text{mean}$ on the background (written $\kappa$ in the docstrings) | scalar, per group (per frame with `"per-frame"`) |
+| | $N$ | number of pixels; $1/N$ does not change the minimiser | integer |
+| $\bar{\mathbf{e}}$ | | mean over the images of $\mathbf{e}_n/a_n$ | $\mathbb{R}^{\lvert\mathcal{B}\rvert}$, per set of images |
+| $W_j$ | | number of images that define bin $j$ | integer, per bin |
 
 The paper writes Eq. 5 for one image $E$ ("a noisy image") and says that
 "a data set is usually an image of the size 17 × 16", which can be read as
 a single combined image. With many images, the code uses the **summed
 reading** instead: the deviation term is summed over the $K$ images of a
-set, each divided by its own level $a_k$ (scale differences between images
+set, each divided by its own level $a_n$ (scale differences between images
 are not roughness),
 
 $$
-F(\mathbf{t}, \mathbf{a}) = \sum_{k=1}^{K} \sum_{i,j}
-\bigl(e_{kij}/a_k - t_{ij}\bigr)^2
-+ \lambda \sum_{i,j} \bigl[(\mathbf{L}_x \mathbf{t})_{ij}^2 + (\mathbf{L}_y \mathbf{t})_{ij}^2\bigr]
+F(\mathbf{t}, \mathbf{a}) = \sum_{n=1}^{K} \sum_{j \in \mathcal{B}}
+\bigl(e_{nj}/a_n - t_j\bigr)^2
++ \lambda \sum_{j \in \mathcal{B}} \bigl[(\mathbf{L}_x \mathbf{t})_j^2 + (\mathbf{L}_y \mathbf{t})_j^2\bigr]
 \quad \text{s.t.}\ \bar{\mathbf{t}} = 1 ,
 $$
 
@@ -158,11 +164,11 @@ interpretation, stated again under
 [Faithful mode](#faithful-mode-and-extensions).
 
 **Why the summed reading.** Let $\bar{\mathbf{e}}$ be the mean of the
-$e_k/a_k$ and $W_{ij}$ the number of images that define bin $ij$. Then the
-deviation term equals $\sum_{ij} W_{ij} (\bar e_{ij} - t_{ij})^2$ plus a
+$\mathbf{e}_n/a_n$ and $W_j$ the number of images that define bin $j$. Then the
+deviation term equals $\sum_{j} W_j (\bar e_j - t_j)^2$ plus a
 constant, so the summed reading is a weighted fit of $\bar{\mathbf{e}}$ with
 weight $\lambda$ on the roughness. When every image defines every bin,
-$W_{ij} = K$ and this is the fit of $\bar{\mathbf{e}}$ with the coefficient
+$W_j = K$ and this is the fit of $\bar{\mathbf{e}}$ with the coefficient
 $\lambda/K$. The noise in $\bar{\mathbf{e}}$ has variance $\sigma^2/K$, so the
 best $\lambda$ of the summed reading depends on the noise $\sigma^2$ of one
 image and not on $K$. This agrees with the paper, which fixes one value per
@@ -201,14 +207,14 @@ Profiles are estimated in one pass in this order:
 2. **Bin** each segmented image by block averaging into $17 \times 16$
    images.
 3. **Background profile.** Discard frames with under 15 % background. Fit the
-   rest globally ($e_k \approx a_k \mathbf{t}$ with smoothing), characterise
+   rest globally ($\mathbf{e}_n \approx a_n \mathbf{t}$ with smoothing), characterise
    each frame by its mean square deviation from the fit, discard outliers
    and repeat until none remain.
 4. **Foreground profile.** Take consecutive sets of 16 binned foreground
    images, filter outliers in each and average it; subtract the background
    $\bar\beta\,\mathbf{s}_b$ from each average; fit the averages globally.
 5. **Quality control.** Split the data into subsets, fit each (with $\lambda$
-   scaled by the share $n_s/n$ of the images of the subset, so that it smooths
+   scaled by the share $N_s/N$ of the images of the subset, so that it smooths
    as much as the full fit), and take the spread of their profiles as the
    range of the random error. A profile
    above its limit is replaced by 1, with a warning, and the foreground
@@ -218,42 +224,61 @@ Each global fit alternates two steps until the profile changes by less than
 $10^{-9}$. It is not coordinate descent on one objective, and the paper does
 not give the objective of the global fit:
 
-- *Levels.* $a_k = \arg\min_{a} \sum_{ij} (e_{kij} - a\,t_{ij})^2$, by least
+- *Levels.* $a_n = \arg\min_{a} \sum_{j} (e_{nj} - a\,t_j)^2$, by least
   squares over the defined bins.
 - *Profile.* The Eq. 5 smooth fit $\mathbf{t}$ of $\bar{\mathbf{e}}$, with
-  weights $W_{ij}$, renormalised to mean 1. That fixes the scale ambiguity
-  between $a_k$ and $\mathbf{t}$.
- Profiles go from bins to pixels by
+  weights $W_j$, renormalised to mean 1. That fixes the scale ambiguity
+  between $a_n$ and $\mathbf{t}$.
+
+Statistically, each smooth fit is penalised least squares, that is the MAP
+estimate under Gaussian errors and a Gaussian smoothness prior on the second
+differences, and the global fit is alternating least squares on that model;
+the outlier filter makes it a crude robust estimator. Profiles go from bins to pixels by
 linear interpolation between bin centres (the polynomial is evaluated at the
 pixels).
 
-Applying the correction needs $\hat\beta_i$: the frame is segmented with the
-fitted background profile and $\hat\beta_i = \sum y / \sum s_b$ over its
+Applying the correction needs $\hat\beta_n$: the frame is segmented with the
+fitted background profile and $\hat\beta_n = \sum y / \sum s_b$ over its
 background pixels (the mean level of the fit if the frame has none).
 
 ## Algorithm
 
-```text
-Input: stack Y (frames of H × W), per group of frames
-Bins (16, 17); window 9; noise threshold 1.5 κn; intensity threshold 1.25
-κn: median over the frames of the mode of the noise image (running median)
-For each frame y, in storage order:
-    profile p = current background profile (or 1 - c ρ², c minimising noise)
-    noise image = p · var(y/p) / mean(y/p) over a 9 × 9 window; mode → κn
-    background mask = noise < 1.5 κn and local level < 1.25 × median level
-    foreground mask = y > block mean + 5 √(κn · block mean)
-    bin y over each mask into (16, 17) images; keep only these
-    if ≥ 15 % background: count the frame for the background profile
-    after 10, 20, 40, ... background frames: refit the provisional p
-Background: outlier-filtered global fit (λ = 0.2), repeated until no outlier
-    (outlier: mean square deviation > 3 × median over the images)
-Levels: β_i = Σ background / Σ (s_b over background bins), per frame
-    β̄ = mean of β_i over the images used in the background fit
-Foreground: for each set of 16 binned images: filter outliers, average,
-    subtract β̄ s_b; fit all averages globally (λ = 20)
-Random error: 4 contiguous subsets, λ scaled by n_s / n; background ≤ 2 %, foreground ≤ 4 %
-Return flat = f, dark = β̄ s_b, background_level_ = β_i, κn
-```
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$
+of one group; bins $16 \times 17$, window $9 \times 9$, noise threshold
+$1.5\,\kappa_{\text{n}}$, intensity threshold $1.25$,
+$\lambda = (0.2, 20)$, outlier factor 3, 4 subsets, error limits 2 % and 4 %. \
+**Output:** $\hat{\mathbf{f}}$ (`flat`), $\bar\beta\,\hat{\mathbf{s}}_b$ (`dark`),
+$\hat\beta_n$ (`background_level_`) and $\kappa_{\text{n}}$.
+
+1. **Segment and bin** each frame $\mathbf{y}_n$, in storage order:
+    1. take the reference profile $\mathbf{p}$ = the current background
+       profile, or $1 - c\rho^2$ with $c$ minimising the noise level;
+    2. compute the noise image
+       $\mathbf{p} \odot \operatorname{var}(\mathbf{y}_n/\mathbf{p}) / \operatorname{mean}(\mathbf{y}_n/\mathbf{p})$
+       over a $9 \times 9$ window; its mode updates the running median
+       $\kappa_{\text{n}}$;
+    3. mark background pixels (noise $< 1.5\,\kappa_{\text{n}}$ and local level
+       $< 1.25 \times$ median level) and foreground pixels
+       ($y_{ni} >$ block mean $+ 5\sqrt{\kappa_{\text{n}} \cdot \text{block mean}}$);
+    4. bin the frame over each mask into $16 \times 17$ images and keep only these;
+       count it for the background profile if at least 15 % of its pixels
+       are background;
+    5. after 10, 20, 40, ... background frames, refit the provisional
+       $\mathbf{p}$.
+2. **Background profile.** Fit globally with $\lambda = 0.2$; drop frames
+   whose mean square deviation exceeds $3\times$ the median over the images;
+   repeat until there is no outlier. This gives $\hat{\mathbf{s}}_b$.
+3. **Levels.** $\hat\beta_n = \sum \text{background} / \sum \hat{s}_b$ over the
+   background bins of frame $n$; $\bar\beta$ is their mean over the frames of
+   the background fit.
+4. **Foreground profile.** For each set of 16 binned images: filter outliers,
+   average, subtract $\bar\beta\,\hat{\mathbf{s}}_b$. Fit all averages globally
+   with $\lambda = 20$, giving $\hat{\mathbf{f}}$.
+5. **Random error.** Refit on 4 contiguous subsets with $\lambda$ scaled by
+   $N_s/N$; a profile whose error range exceeds 2 % (background) or 4 %
+   (foreground) is replaced by 1.
+6. **Return** $\hat{\mathbf{f}}$, $\bar\beta\,\hat{\mathbf{s}}_b$, $\hat\beta_n$ and
+   $\kappa_{\text{n}}$, interpolated from bins to pixels.
 
 ## Faithful mode and extensions
 
@@ -292,7 +317,7 @@ With `model="polynomial"`, `regularization` is not used.
 - **Eq. 5 with many images (summed reading).** Eq. 5 is written for one
   image. Here the deviation term is summed over the $K$ images of a set, each
   divided by its level, which is a weighted fit of $\bar{\mathbf{e}}$ (the
-  mean of $e_k/a_k$) with weights $W_{ij}$; it equals the fit with
+  mean of $\mathbf{e}_n/a_n$) with weights $W_j$; it equals the fit with
   coefficient $\lambda/K$ only when every image defines every bin. The other
   reading, fitting one combined image with the coefficient $\lambda$ itself,
   smooths $K$ times as strongly for the same $\lambda$. The reasons for the
@@ -348,7 +373,7 @@ global fits of the outlier filters.
 With a layout that has group axes, each group (for instance each channel) has
 its own pair of profiles, as the paper estimates a separate set per detection
 channel. [`apply`](../../reference/shading.md) works on frame batches and
-re-estimates $\beta_i$ per image.
+re-estimates $\beta_n$ per image.
 
 ## Usage
 
