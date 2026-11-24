@@ -19,5 +19,6 @@ order statistics computed over row tiles.
         - order_statistics
         - median_mad
         - tile_reduce
+        - otsu_threshold
         - pixel_stats
         - PixelStats
