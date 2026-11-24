@@ -379,13 +379,30 @@ class PoissonGaussian:
         return torch.where(zd >= 0, inside, outside).sum()
 
     def grad(self, z: Tensor) -> Tensor:
-        """∇φ(z) = 1 − ξ(z), with ξ(z) = ξ(0) − η(0)·z for z < 0."""
+        """∇φ(z) = 1 − ξ(z), with ξ(z) = ξ(0) − η(0)·z for z < 0.
+
+        1 − ξ is formed in float64 (float32 on MPS) and then cast to the
+        dtype of `z`. Raises a `ValueError` when the gradient is not
+        finite in that dtype (ξ overflows at large y/σ²).
+        """
+        wd = torch.float32 if z.device.type == "mps" else torch.float64
+        zw = z.to(wd)
+        data = torch.as_tensor(self.data).to(device=z.device, dtype=wd)
+        var = self.variance
+        if isinstance(var, Tensor):
+            var = var.to(device=z.device, dtype=wd)
         xi = poisson_normal_ratio(
-            self.data, z.clamp(min=0), self.variance, max_terms=self.max_terms
+            data, zw.clamp(min=0), var, max_terms=self.max_terms
         )
-        neg = z < 0
+        neg = zw < 0
         if bool(neg.any()):
-            xi0, eta0, _ = self._at_zero(z)
-            ext = (xi0 - eta0 * z.double()).to(xi.dtype)
-            xi = torch.where(neg, ext, xi)
-        return 1 - xi
+            xi0, eta0, _ = self._at_zero(zw)
+            xi = torch.where(neg, (xi0 - eta0 * zw).to(wd), xi)
+        out = (1 - xi).to(z.dtype)
+        if not bool(torch.isfinite(out).all()):
+            raise ValueError(
+                "PoissonGaussian: the gradient 1 − ξ is not finite in "
+                f"{z.dtype} (ξ overflows: max y/σ² is too large for the "
+                "exact likelihood); use ShiftedPoisson (Ikoma) instead"
+            )
+        return out

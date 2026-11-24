@@ -30,8 +30,10 @@ class PrimalDualResult(NamedTuple):
     change : float
         Last relative change ‖xₖ₊₁ − xₖ‖₂ / ‖xₖ‖₂ (inf if not measured).
     residual : float
-        Last ‖xₖ − p₁,ₖ‖₂ / γ, the norm of the forward–backward residual;
-        it tends to 0 at a solution.
+        Last (‖xₖ − p₁,ₖ‖₂² + ∑_r ‖v_r,ₖ − p₂,r,ₖ‖₂²)^½ / γ, the norm of
+        the full forward–backward–forward residual (primal and dual
+        parts). It does not depend on the step, and tends to 0 at a
+        solution: a γ-free diagnostic of convergence.
     """
 
     x: Tensor
@@ -129,6 +131,13 @@ def primal_dual(
     specified). The p₁ of the last iteration is returned: xₖ and p₁,ₖ
     have the same limit (Theorem 3.2), and p₁ lies in the domain of ψ₀.
 
+    !!! note "The stopping rule depends on the step"
+        Every term of xₖ₊₁ − xₖ is γ times a residual, so the relative
+        change accepts a residual of about `tol`·‖xₖ‖/γ: at a small step
+        the run can stop far from the minimiser. The recorded
+        `residual`, (‖xₖ − p₁‖² + ∑_r ‖v_r − p₂,r‖²)^½/γ, is free of γ;
+        read it when the minimiser is wanted.
+
     !!! references "References"
         1. Chouzenoux E, Jezierska A, Pesquet J-C, Talbot H. *A convex
            approach for image restoration with exact Poisson–Gaussian
@@ -193,8 +202,10 @@ def primal_dual(
         h, used for the `"objective"` of `trace` only.
     trace : dict, optional
         Filled with per-iteration lists: `"change"` (relative change of
-        x), `"residual"` (‖xₖ − p₁,ₖ‖/γ) and, with `value`, `"objective"`
-        (h + ψ₀ + ∑ψ_r(V_r ·) at p₁, in float64).
+        x), `"residual"` (the full residual
+        (‖xₖ − p₁,ₖ‖² + ∑_r ‖v_r,ₖ − p₂,r,ₖ‖²)^½/γ) and `"objective"`
+        (h + ψ₀ + ∑ψ_r(V_r ·) at p₁, in float64; empty without
+        `value`).
     callback : callable, optional
         `callback(k, p1)` after each iteration.
 
@@ -248,9 +259,11 @@ def primal_dual(
         del g, adj
         p1 = prox0(y1)
         p2s = []
+        dual_sq = 0.0
         for r, (op, fn) in enumerate(terms):
             y2 = v[r] + gamma * op.forward(x)
             p2 = prox_conjugate(fn.prox, y2, gamma)
+            dual_sq += _norm(v[r] - p2) ** 2
             q2 = p2 + gamma * op.forward(p1)
             v[r] = v[r] - y2 + q2
             p2s.append(p2)
@@ -267,7 +280,7 @@ def primal_dual(
         n += 1
         prev = _norm(x)
         change = _norm(x_new - x) / prev if prev > 0 else math.nan
-        residual = _norm(x - p1) / gamma
+        residual = math.sqrt(_norm(x - p1) ** 2 + dual_sq) / gamma
         x = x_new
         if trace is not None:
             trace["change"].append(change)

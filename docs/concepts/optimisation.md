@@ -398,7 +398,7 @@ inverts nothing.
 | `step` | $\gamma > 0$, from `primal_dual_step` |
 | `constraint` | $\psi_0$, a `Function`, for example `Box(0.0)`; none by default |
 | `max_iter`, `tol` | stop when $\lVert\mathbf{x}_{t+1} - \mathbf{x}_t\rVert \le \mathrm{tol}\,\lVert\mathbf{x}_t\rVert$, or after `max_iter` iterations (5000 and $10^{-5}$ by default; these defaults are not in the paper); `tol=None` runs them all |
-| `value`, `trace`, `callback` | $h$ for the `"objective"` of the trace; a dict filled with the per-iteration lists `"change"`, `"residual"` and, with `value`, `"objective"`; `callback(k, p1)` after each iteration |
+| `value`, `trace`, `callback` | $h$ for the `"objective"` of the trace; a dict filled with the per-iteration lists `"change"`, `"residual"` and `"objective"` (empty without `value`); `callback(k, p1)` after each iteration |
 
 `primal_dual_step(lipschitz, norms2)` returns the largest admissible step of
 [Chouzenoux et al. (2015)](https://doi.org/10.1137/15M1014395), Theorem 3.2 (iii):
@@ -412,8 +412,11 @@ $\epsilon = \min(10^{-3}, \tfrac{1}{2(\delta + 1)})$ (not in the paper), and `ep
 
 The result is a `PrimalDualResult`: `x`, the primal estimate $\mathbf{p}_1$ of the last
 iteration, which lies in the domain of $\psi_0$ and has the same limit as the iterates
-$\mathbf{x}_t$; the `duals`; `n_iter`; the last relative `change`; and the last `residual`
-$\lVert\mathbf{x}_t - \mathbf{p}_{1,t}\rVert/\gamma$, which tends to 0 at a solution.
+$\mathbf{x}_t$; the `duals`; `n_iter`; the last relative `change`; and the last `residual`, the norm of the full forward–backward–forward residual
+$\bigl(\lVert\mathbf{x}_t - \mathbf{p}_{1,t}\rVert^2 + \sum_r \lVert\mathbf{v}_{r,t} - \mathbf{p}_{2,r,t}\rVert^2\bigr)^{1/2}/\gamma$,
+which tends to 0 at a solution. The relative change is about $\gamma$ times a residual, so
+the stopping test depends on the step; the residual does not, and is the diagnostic to read
+when the minimiser is wanted.
 
 The smooth term is any object with `value`, `grad` and `lipschitz` (the protocol
 `Smooth`). `PoissonGaussian(data, variance)` is the exact Poisson–Gaussian negative

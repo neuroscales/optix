@@ -424,3 +424,18 @@ def test_poisson_normal_ratio_identities():
     r32 = poisson_normal_ratio(r.float(), mu.float(), var.float())
     assert r32.dtype == torch.float32
     torch.testing.assert_close(r32.double(), ratio, rtol=1e-5, atol=0)
+
+
+def test_poisson_normal_python_float_parameters():
+    """Python-float rate and variance are taken in float64, not rounded to
+    float32 before the float64 series."""
+    from optix.special import poisson_normal_ratio
+
+    data = torch.tensor([-3.0, 0.5, 4.0], dtype=torch.float64)
+    a = poisson_normal_ratio(data, 1e-12, 0.01)
+    b = poisson_normal_ratio(
+        data,
+        torch.tensor(1e-12, dtype=torch.float64),
+        torch.tensor(0.01, dtype=torch.float64),
+    )
+    torch.testing.assert_close(a, b, rtol=1e-14, atol=0)

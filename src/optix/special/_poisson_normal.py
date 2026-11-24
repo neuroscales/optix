@@ -207,8 +207,17 @@ def _broadcast(
     data: Tensor, rate: Tensor | float, variance: Tensor | float
 ) -> tuple[Tensor, Tensor, Tensor]:
     data = torch.as_tensor(data)
-    rate = torch.as_tensor(rate, device=data.device)
-    variance = torch.as_tensor(variance, device=data.device)
+    # Python scalars in the working dtype of the series (not rounded to
+    # the default float32 before the float64 sums)
+    wd = _work_dtype(data)
+
+    def scalar_or_tensor(v: Tensor | float) -> Tensor:
+        if isinstance(v, Tensor):
+            return v.to(device=data.device)
+        return torch.as_tensor(v, dtype=wd, device=data.device)
+
+    rate = scalar_or_tensor(rate)
+    variance = scalar_or_tensor(variance)
     data, rate, variance = torch.broadcast_tensors(data, rate, variance)
     if (variance < 0).any():
         raise ValueError("variance must be non-negative")

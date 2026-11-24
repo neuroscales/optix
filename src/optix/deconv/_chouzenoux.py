@@ -2,6 +2,7 @@
 likelihood, solved by primal–dual splitting."""
 
 import math
+import warnings
 from collections.abc import Sequence
 
 import torch
@@ -28,14 +29,20 @@ __all__ = ["Chouzenoux", "chouzenoux"]
 #: the paper).
 _KAPPA_TV = 0.2
 _KAPPA_HESSIAN = 0.5
-#: Largest admitted (max y + σ²)/γ (not in the paper): beyond it the
-#: step is too small for the iterations to get anywhere.
+#: Largest (max y + σ²)/γ without a warning (not in the paper): beyond
+#: it the step is too small for the iterations to get anywhere in the
+#: default number of iterations.
 _MAX_CONDITION = 1e4
-#: Working buffers of `primal_dual` per voxel of the FFT grid (measured
-#: peak, series included), per number of regulariser components C:
-#: base + per_component·C.
+#: Working buffers of `primal_dual` per voxel of the FFT grid, in the
+#: working dtype, per number of regulariser components C:
+#: base + per_component·C (measured peak in float64).
 _GRID_BASE = 16.0
 _GRID_COMPONENT = 5.5
+#: Bytes of the float64 series temporaries (ξ in `PoissonGaussian.grad`)
+#: per voxel of the loaded block, whatever the working dtype: 20 float64
+#: buffers. With the grid term, this bounds the measured peak of `apply`
+#: in float32 and float64, in 2-D and 3-D.
+_SERIES_BYTES = 20 * 8.0
 
 
 class Chouzenoux(_Variational):
@@ -76,16 +83,20 @@ class Chouzenoux(_Variational):
     step).
 
     **The step collapses at high counts.** μ grows like e^{2 max y/σ²}:
-    the method is usable for low counts with high read noise (the paper
-    uses peaks of 12 to 60 electrons with σ² = 9 to 36). Iterations
+    the method is suited to low counts with high read noise. Iterations
     advance x by about γ per unit of gradient, so the number needed
-    grows with (max y + σ²)/γ; when this exceeds 10⁴ (not in the paper),
-    `fit` raises a `ValueError` that points to
-    [`Ikoma`][optix.deconv.Ikoma], whose shifted-Poisson approximation of
-    the same noise model has no such limit. Below it, with the default
-    stopping rule, the result can still be stopped before convergence
-    when the step is small (see `history.extras["change"]` and
-    `"residual"`).
+    grows with (max y + σ²)/γ. When this exceeds 10⁴ (a limit not in
+    the paper), `fit` issues a `RuntimeWarning` (Eq. 2.13) that warns
+    about early stopping and points to [`Ikoma`][optix.deconv.Ikoma],
+    whose shifted-Poisson approximation of the same noise model has no
+    such limit; the run then goes ahead as in the paper.
+    `on_step_collapse="raise"` turns the warning into a `ValueError`.
+    The paper's settings x̄₁ (peak 12, σ² = 9) and x̄₄ (peak 60,
+    σ² = 36) are below the limit; x̄₂ (peak 30, σ² = 12) and x̄₃ (peak
+    20, σ² = 9) are above it (about 5·10⁴) and give the warning. Below
+    the limit too, with the default stopping rule, the result can be
+    stopped before convergence when the step is small (see
+    `history.extras["change"]` and the γ-free `"residual"`).
 
     **Series.** ξ and φ are evaluated with
     [`poisson_normal_ratio`][optix.special.poisson_normal_ratio] and
@@ -102,8 +113,12 @@ class Chouzenoux(_Variational):
       0, and ε = min(10⁻³, ½/(δ + 1)) in the step.
     - Stopping: ‖xₖ₊₁ − xₖ‖₂ ≤ 10⁻⁵ ‖xₖ‖₂ or 5000 iterations (the paper
       stops "when the difference in norm between two consecutive
-      iterates becomes small" and reports 2000 to 9000 iterations). The
-      result is p₁ of the last iteration, which lies in C.
+      iterates becomes small"; its one iteration count for the exact
+      likelihood is 5500, for x̄₁ with the TVH prior, Figure 3). The
+      result is p₁ of the last iteration, which lies in C. The relative
+      change depends on the step; the full forward–backward–forward
+      residual (‖xₖ − p₁‖² + ∑_r ‖v_r − p₂,r‖²)^½/γ, recorded in
+      `history.extras["residual"]`, does not.
     - Boundary: the blur is computed on a grid larger than the block
       (the block plus the PSF, rounded up to a fast FFT size), the
       likelihood sums over the observed pixels only, and the
@@ -127,11 +142,12 @@ class Chouzenoux(_Variational):
       default stopping rule on simulated images (Gaussian PSF,
       σ_b = 1.6, 9 × 9, blurred on a larger field and cropped): cells,
       filaments and their mixture; peak 12 (σ² = 9), 30 (σ² = 16) and
-      60 (σ² = 36) electrons with a smooth background of 0, 1/3 or 1/2
-      of the peak; 32 × 32 (two seeds) and 64 × 64 (one seed) pixels;
-      47 cases inside the usable range ((max y + σ²)/γ from 215 to
-      about 10⁴), against seven scales of the weights from 1/4 to 4
-      times the default. There, the default SNR is on average 0.23 dB
+      60 (σ² = 36) electrons on a smooth background (0 or 1/2 of the
+      peak at peaks 12 and 60, 0 or 1/3 at peak 30); 32 × 32 (two
+      seeds) and 64 × 64 (one seed) pixels; the 47 of the 54 cases
+      below the limit of 10⁴ ((max y + σ²)/γ from 215 to about 10⁴),
+      against seven scales of the weights from 1/4 to 4 times the
+      default. There, the default SNR is on average 0.23 dB
       below that of the best scale (at most 1.5 dB) and 2.4 to 11 dB
       (6.6 dB on average) above that of the data. In two thirds of
       these runs the 5000 iterations end before the tolerance is met;
@@ -158,7 +174,13 @@ class Chouzenoux(_Variational):
 
     **Cost.** Each iteration evaluates the series twice over every
     pixel, and thousands of iterations are typical: the method is slow
-    on large images and in 3-D.
+    on large images and in 3-D (about 16 minutes for 5000 iterations on
+    a 48³ volume on four CPU threads).
+
+    **Other data in `apply`.** The step is admissible for the data seen
+    by `fit`. `apply` compares the log μ of each block with that of the
+    fitted image and issues a `RuntimeWarning` when it is larger: the
+    step is then no longer admissible; fit on these data.
 
     Paper notation: H the blur (A here); Δʰ, Δᵛ the first and Δʰʰ, Δʰᵛ,
     Δᵛᵛ the second differences (∇ and H here); μ, γ, ε, δ, ξ, η, λ_TV,
@@ -261,13 +283,25 @@ class Chouzenoux(_Variational):
         "tol": 1e-5,
         "halo": None,
         "block": None,
+        "on_step_collapse": "warn",
     }
     recommended = dict(paper)
     #: Options that do not make an estimate unfaithful: the weights are
     #: tuned per image in the paper (TV alone and TV + Hessian are both
     #: its method), the upper bound x₊ of C is the paper's when known,
     #: and `halo` and `block` are memory settings.
-    _free = ("tv", "hessian", "upper", "halo", "block")
+    #: `max_iter` and `tol` are not in the paper either, and
+    #: `on_step_collapse` only chooses between a warning and an error.
+    _free = (
+        "tv",
+        "hessian",
+        "upper",
+        "max_iter",
+        "tol",
+        "halo",
+        "block",
+        "on_step_collapse",
+    )
     _clip_data = False
 
     def __init__(
@@ -282,6 +316,7 @@ class Chouzenoux(_Variational):
         tol: float | None = None,
         halo: int | Sequence[int] | None = None,
         block: Sequence[int | None] | None = None,
+        on_step_collapse: str | None = None,
         faithful: bool = True,
         dtype: object = None,
         device: object = None,
@@ -308,13 +343,16 @@ class Chouzenoux(_Variational):
             none, C = [0, +∞) (the paper's choice when x₊ is unknown).
         step : float, optional
             Step γ > 0. Default (paper): the largest step of Theorem 3.2
-            (see above). A given step skips the high-count check.
+            (see above). A given step skips the high-count check and the
+            check of `apply`, and makes the estimate not faithful.
         max_iter : int
             Maximum number of iterations. Default: 5000 (not in the
-            paper).
+            paper, whose one count for the exact likelihood is 5500).
+            Does not change `is_faithful`.
         tol : float
             Relative-change tolerance (0 runs `max_iter` iterations).
-            Default: 10⁻⁵ (not in the paper).
+            Default: 10⁻⁵ (not in the paper). Does not change
+            `is_faithful`.
         halo : int or sequence of int, optional
             Halo width per spatial axis, at least the PSF size along that
             axis. Default: twice the PSF size (not specified in the
@@ -324,6 +362,11 @@ class Chouzenoux(_Variational):
             extent). Default: chosen from the memory budget, the whole
             image when it fits. A memory setting: does not change
             `is_faithful`.
+        on_step_collapse : {"warn", "raise"}
+            What `fit` does when (max y + σ²)/γ > 10⁴: issue a
+            `RuntimeWarning` and run as the paper does (`"warn"`, the
+            default), or raise a `ValueError` (`"raise"`). Does not
+            change `is_faithful`.
         faithful, dtype, device, layout
             See [`Estimator`][optix.Estimator].
         """
@@ -372,6 +415,8 @@ class Chouzenoux(_Variational):
             raise ValueError("max_iter must be positive")
         if opts["tol"] is not None and not float(opts["tol"]) >= 0:
             raise ValueError("tol must be non-negative")
+        if opts["on_step_collapse"] not in ("warn", "raise"):
+            raise ValueError('on_step_collapse must be "warn" or "raise"')
 
     # -- hooks -----------------------------------------------------------
     def _fit(self, data: ArrayLike, **kwargs: object) -> None:
@@ -450,17 +495,24 @@ class Chouzenoux(_Variational):
                     var_max.reshape(-1)[i]
                 )
                 if not gamma > 0 or scale / gamma > _MAX_CONDITION:
-                    raise ValueError(
+                    msg = (
                         "Chouzenoux: the exact Poisson–Gaussian likelihood "
                         "has a gradient of Lipschitz constant "
                         f"μ = e^{float(log_eta.reshape(-1)[i]):.1f} "
                         "(Eq. 2.13: μ grows like e^(2·max y/σ²)), so the "
                         f"admissible step γ = {gamma:.3g} is too small for "
-                        "the iterations to converge. The method is usable "
-                        "for low counts with high read noise only (max y/σ² "
+                        "the iterations to converge: (max y + σ²)/γ = "
+                        f"{scale / gamma if gamma > 0 else math.inf:.3g} "
+                        f"> {_MAX_CONDITION:g}, and the run is likely to "
+                        "stop early, far from the minimiser. The method "
+                        "suits low counts with high read noise (max y/σ² "
                         "of a few units). Use Ikoma (shifted-Poisson "
                         "approximation of the same noise model) instead."
                     )
+                    # no step at all (μ overflows): nothing to run
+                    if not gamma > 0 or opts["on_step_collapse"] == "raise":
+                        raise ValueError(msg)
+                    warnings.warn(msg, RuntimeWarning, stacklevel=4)
             step.reshape(-1)[i] = gamma
         self.tv = weights["tv"]
         self.hessian = weights["hessian"]
@@ -472,6 +524,23 @@ class Chouzenoux(_Variational):
         ndim = 2 if psf is None else torch.as_tensor(psf).ndim
         return _GRID_BASE + _GRID_COMPONENT * (ndim + ndim * (ndim + 1) // 2)
 
+    def _block_bytes(
+        self,
+        core: Sequence[int],
+        extents: Sequence[int],
+        halo: Sequence[int],
+        psf: Tensor,
+        itemsize: int,
+    ) -> float:
+        """Solver buffers on the grid (working dtype), plus the float64
+        series temporaries per voxel of the loaded block."""
+        loaded = [
+            min(c + 2 * h, e)
+            for c, e, h in zip(core, extents, halo, strict=True)
+        ]
+        solver = super()._block_bytes(core, extents, halo, psf, itemsize)
+        return solver + _SERIES_BYTES * math.prod(loaded)
+
     def _solve(
         self,
         blk: _Problem,
@@ -481,6 +550,8 @@ class Chouzenoux(_Variational):
     ) -> tuple[Tensor, int]:
         data = blk.data
         fidelity = PoissonGaussian(data, blk.variance)
+        if self.options["step"] is None:
+            self._check_admissible(fidelity, index)
 
         def grad(x: Tensor) -> Tensor:
             return op.adjoint(fidelity.grad(op.forward(x)))
@@ -515,6 +586,27 @@ class Chouzenoux(_Variational):
         extras.setdefault("change", []).append(change)
         extras.setdefault("residual", []).append(res.residual)
         return res.x, res.n_iter
+
+    def _check_admissible(
+        self, fidelity: PoissonGaussian, index: tuple
+    ) -> None:
+        """Warn when the block's μ is above the fitted one."""
+        fitted = float(self.lipschitz[index].squeeze())
+        if not 0 < fitted < math.inf:
+            return
+        stored = math.log(fitted)
+        log_mu = fidelity.log_lipschitz
+        if log_mu > stored + 1e-9 * max(1.0, abs(stored)):
+            warnings.warn(
+                "Chouzenoux.apply: these data have a Lipschitz constant "
+                f"μ = e^{log_mu:.2f} above that of the data of fit "
+                f"(e^{stored:.2f}, Eq. 2.13), so the step "
+                f"γ = {float(self.step[index].squeeze()):.3g} is no longer "
+                "admissible (Theorem 3.2) and the iterations may diverge. "
+                "Fit on these data.",
+                RuntimeWarning,
+                stacklevel=5,
+            )
 
     def _extra_state(self) -> dict[str, object]:
         state = super()._extra_state()

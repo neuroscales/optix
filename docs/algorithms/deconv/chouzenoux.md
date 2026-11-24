@@ -277,7 +277,8 @@ upper bound $x_+$ and the step $\gamma$. \
    $\delta = \mu + \sqrt{\sum_r \lVert\mathbf{V}_r\rVert^2}$ with $\lVert\nabla\rVert^2 \le 4d$,
    $\lVert\mathbf{H}\rVert^2 \le (4d)^2$ in $d$ dimensions (a penalty with a weight of 0 is left
    out); $\epsilon = \min(10^{-3}, \tfrac{1}{2(\delta + 1)})$ and $\gamma = (1 - \epsilon)/\delta$ unless
-   given. Stop with an error if $(\max\tilde{y} + \max\tilde\sigma^2)/\gamma > 10^4$.
+   given. Warn if $(\max\tilde{y} + \max\tilde\sigma^2)/\gamma > 10^4$ (stop with an error with
+   `on_step_collapse="raise"`, or when $\mu$ overflows and no step is left).
 4. **Initialise.** $\mathbf{x}_0 = \bar{y}\,\mathbf{1}$ on the grid of the block, and all dual
    variables $\mathbf{v}_r = \mathbf{0}$.
 5. **Repeat** for $t = 0, \ldots, 4999$:
@@ -287,9 +288,11 @@ upper bound $x_+$ and the step $\gamma$. \
 6. **Return** $\mathbf{p}_1$ of the last iteration, restricted to the observed region. It lies in $C$.
 
 The number of iterations, the last relative change $\lVert\mathbf{x}_{t+1} - \mathbf{x}_t\rVert / \lVert\mathbf{x}_t\rVert$
-and the last norm of the forward–backward residual $\lVert\mathbf{x}_t - \mathbf{p}_{1,t}\rVert/\gamma$ of every
-block are recorded in `history.extras["iterations"]`, `["change"]` and `["residual"]`. The
-residual tends to 0 at a solution. The weights, the Lipschitz constant, the step and the
+and the last norm of the full forward–backward–forward residual
+$\bigl(\lVert\mathbf{x}_t - \mathbf{p}_{1,t}\rVert^2 + \sum_r \lVert\mathbf{v}_{r,t} - \mathbf{p}_{2,r,t}\rVert^2\bigr)^{1/2}/\gamma$
+of every block are recorded in `history.extras["iterations"]`, `["change"]` and
+`["residual"]`. The residual tends to 0 at a solution and, unlike the relative change, does
+not depend on the step: it is the diagnostic of convergence. The weights, the Lipschitz constant, the step and the
 scalars of the scan are the attributes `tv`, `hessian`, `lipschitz`, `step`, `peak`,
 `robust_peak`, `median` and `mean` after `fit`.
 
@@ -300,18 +303,21 @@ quadratic continuation, the TV and TVH penalties, the algorithm of Theorem 3.2 w
 largest admissible step, and the result in $C$. The defaults of `faithful=False` are
 the same. The weights `tv` and `hessian` are tuned per image in the paper, and both TV
 alone (`hessian=0`) and TVH are its method, so any values keep the estimate faithful.
-The upper bound `upper` ($x_+$) is the paper's when it is known. `halo` and `block` are
-memory settings and keep it faithful too, even when they split an image. Any other
-option marks the estimate as not faithful.
+The upper bound `upper` ($x_+$) is the paper's when it is known. `max_iter` and `tol`
+are not given in the paper, so any values keep the estimate faithful;
+`on_step_collapse` only chooses between a warning and an error. `halo` and `block` are
+memory settings and keep it faithful too, even when they split an image. A given `step`
+marks the estimate as not faithful.
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
 | `tv` | weight $\lambda_{\mathrm{TV}} \ge 0$ (any value is faithful; 0 removes the penalty) | `None` (rule below, not in the paper) | `None` |
 | `hessian` | weight $\lambda_{\mathrm{H}} \ge 0$ (any value is faithful; 0 gives the TV prior) | `None` (rule below, not in the paper) | `None` |
 | `upper` | upper bound $x_+ > 0$ of $C$, in electrons (faithful) | `None` ($C = [0, +\infty)$) | `None` |
-| `step` | step $\gamma > 0$; a given step skips the high-count check | `None` (largest of Theorem 3.2 iii) | `None` |
-| `max_iter` | iteration cap | 5000 (not in the paper) | 5000 |
-| `tol` | relative-change tolerance; `0` runs `max_iter` iterations, `None` also | $10^{-5}$ (not in the paper) | $10^{-5}$ |
+| `step` | step $\gamma > 0$; a given step skips the high-count check and the check of `apply`, and is not faithful | `None` (largest of Theorem 3.2 iii) | `None` |
+| `max_iter` | iteration cap (any value is faithful) | 5000 (not in the paper, whose count is 5500) | 5000 |
+| `tol` | relative-change tolerance; `0` runs `max_iter` iterations (any value is faithful) | $10^{-5}$ (not in the paper) | $10^{-5}$ |
+| `on_step_collapse` | `"warn"`: a `RuntimeWarning` when $(\max\tilde{y} + \tilde\sigma^2)/\gamma > 10^4$, then the run as in the paper; `"raise"`: a `ValueError` (faithful) | `"warn"` | `"warn"` |
 | `halo` | halo width per spatial axis, at least the PSF size (memory setting, faithful) | `None` (twice the PSF size) | `None` |
 | `block` | core block size per spatial axis (memory setting, faithful) | `None` (memory budget) | `None` |
 
@@ -324,9 +330,11 @@ in the docstrings:
   $\epsilon = \min(10^{-3}, \tfrac{1}{2(\delta + 1)})$, which lies in $(0, 1/(\delta + 1))$. The
   paper takes "the maximum possible value" without giving $\epsilon$.
 - **Stopping rule.** The paper stops "when the difference in norm between two
-  consecutive iterates becomes small" and reports 2000 to 9000 iterations
-  (Figure 3). Here the run stops when $\lVert\mathbf{x}_{t+1} - \mathbf{x}_t\rVert_2 \le 10^{-5}\lVert\mathbf{x}_t\rVert_2$,
-  or after 5000 iterations. The result is $\mathbf{p}_1$ of the last iteration.
+  consecutive iterates becomes small". Its one iteration count for the exact likelihood
+  is 5500, for $\bar{x}_1$ with the TVH prior (Figure 3). Here the run stops when
+  $\lVert\mathbf{x}_{t+1} - \mathbf{x}_t\rVert_2 \le 10^{-5}\lVert\mathbf{x}_t\rVert_2$, or after 5000
+  iterations, a cap below the paper's count. The result is $\mathbf{p}_1$ of the last
+  iteration.
 - **Boundary.** The paper does not say how the borders are treated. The blur is computed on
   a grid larger than the block (the block plus the PSF size, rounded up to a fast FFT
   size, as for [Ikoma](ikoma.md#probabilistic-model)), the likelihood sums over the
@@ -366,21 +374,32 @@ in the docstrings:
   grid of both weights, and the scale was calibrated for the stopping rule above on
   simulated images (a Gaussian PSF of standard deviation 1.6 on $9 \times 9$ pixels, blurred
   on a larger field and cropped): cells, filaments and their mixture; peaks of 12 ($\sigma^2 = 9$),
-  30 ($\sigma^2 = 16$) and 60 ($\sigma^2 = 36$) electrons on a smooth background of 0, 1/3 or
-  1/2 of the peak; $32 \times 32$ (two seeds) and $64 \times 64$ (one seed) pixels; 47 cases inside the
-  usable range, against seven scales of the weights from 1/4 to 4 times the default. The
+  30 ($\sigma^2 = 16$) and 60 ($\sigma^2 = 36$) electrons on a smooth background (0 or 1/2 of
+  the peak at peaks 12 and 60, 0 or 1/3 at peak 30); $32 \times 32$ (two seeds) and
+  $64 \times 64$ (one seed) pixels; the 47 of the 54 cases below the limit of $10^4$ (all 18 at
+  peaks 12 and 60, 11 of 18 at peak 30), against seven scales of the weights from 1/4 to 4
+  times the default. The
   default SNR is on average 0.23 dB below that of the best scale (at most 1.5 dB) and 2.4 to
   11 dB (6.6 dB on average) above that of the data. In two thirds of these runs the 5000
   iterations end before the tolerance is met, which the calibration includes.
 - **Step collapse.** The step $\gamma \le 1/\mu$ and $\mu$ grows like
   $e^{2 \max\tilde{y} / \tilde\sigma^2}$, so that at high counts the step is tiny: an iteration
   moves $\mathbf{x}$ by about $\gamma$ per unit of gradient, and the number of iterations
-  needed grows with $(\max\tilde{y} + \tilde\sigma^2)/\gamma$. The method is usable at low
-  counts with a high read noise (the paper uses peaks of 12 to 60 electrons with
-  $\sigma^2 = 9$ to 36). When $(\max\tilde{y} + \tilde\sigma^2)/\gamma$ exceeds $10^4$ (a limit
-  that is not in the paper), `fit` raises a `ValueError` that names $\mu$ and $\gamma$ and
-  points to [Ikoma](ikoma.md), whose shifted-Poisson approximation of the same noise model
-  has no such limit. Passing `step` skips the check.
+  needed grows with $(\max\tilde{y} + \tilde\sigma^2)/\gamma$. The method suits low counts
+  with a high read noise. When $(\max\tilde{y} + \tilde\sigma^2)/\gamma$ exceeds $10^4$ (a
+  limit that is not in the paper), `fit` issues a `RuntimeWarning` that names $\mu$ (Eq. 2.13)
+  and $\gamma$, warns that the run is likely to stop early, far from the minimiser, and points
+  to [Ikoma](ikoma.md), whose shifted-Poisson approximation of the same noise model has no
+  such limit; the run then goes ahead as in the paper. `on_step_collapse="raise"` makes it a
+  `ValueError`. When $\mu$ overflows float64 there is no step left and `fit` raises in both
+  modes. Of the paper's four settings, $\bar{x}_1$ (peak 12, $\sigma^2 = 9$, about
+  $6 \cdot 10^3$) and $\bar{x}_4$ (peak 60, $\sigma^2 = 36$, about $2 \cdot 10^3$) are below the
+  limit; $\bar{x}_2$ (peak 30, $\sigma^2 = 12$) and $\bar{x}_3$ (peak 20, $\sigma^2 = 9$) are
+  above it, at about $5 \cdot 10^4$, and give the warning. Passing `step` skips the check.
+- **Other data in `apply`.** The step is admissible for the data seen by `fit`. `apply`
+  compares $\max_i \log\eta_i(0)$ of each block with that of the fitted image and issues a
+  `RuntimeWarning` when it is larger, since the step is then no longer admissible; fit on
+  those data instead.
 - **Camera.** The conversion to electrons with the sensor and shading estimates is not in the
   paper. The dark field replaces the offset when a shading estimate is given, and a per-frame
   baseline of the shading estimate is ignored, with a warning.
@@ -392,11 +411,12 @@ in the docstrings:
     intensity scales $\gamma$ is small, so a run can stop on the tolerance while still far
     from the minimiser; and below the limit of $10^4$ it can still end after 5000 iterations
     before the tolerance is met (as in two thirds of the calibration runs). Read
-    `history.extras["change"]` and `["residual"]`, and set `tol=0` with a larger `max_iter` when the
-    minimiser is wanted. The method is also slow: thousands of iterations are typical, each
-    evaluating the series twice per pixel, about 10 to 15 ms per iteration for a
-    $48 \times 48$ image and about 0.2 s for a $48^3$ volume on four CPU threads, so a 3-D
-    stack needs minutes.
+    `history.extras["residual"]`, which does not depend on the step, and set `tol=0` with a
+    larger `max_iter` when the minimiser is wanted. The method is also slow: thousands of
+    iterations are typical, each evaluating the series twice per pixel, about 10 to 15 ms per
+    iteration for a $48 \times 48$ image and about 0.2 s for a $48^3$ volume on four CPU
+    threads, so that 5000 iterations take about a minute in 2-D and about 16 minutes for a
+    $48^3$ volume.
 
 ## Memory and streaming
 
@@ -409,10 +429,13 @@ of its values), the median (from a uniform sample of 8192 pixels) and
 $\max_i \log\eta_i(0)$, from which the weights, $\mu$ and $\gamma$ follow, so that every
 block of an image shares them. `apply` makes a second pass.
 
-The solver holds about $16 + 5.5C$ buffers per voxel of the FFT grid, with $C = d + d(d+1)/2$
-the components of the two penalties (43.5 for 2-D, $C = 5$; 65.5 for 3-D, $C = 9$),
-measured on the peak use of the solver, series included. The grid of a block is the loaded
-block (core and halo) plus the PSF, rounded up. The block size is chosen from the memory
+The memory budget of a block counts two parts. The solver holds about $16 + 5.5C$ buffers of
+the working dtype per voxel of the FFT grid, with $C = d + d(d+1)/2$ the components of the
+two penalties (43.5 for 2-D, $C = 5$; 65.5 for 3-D, $C = 9$). The series are evaluated in
+float64 whatever the dtype, and their temporaries take about 20 float64 buffers (160 bytes)
+per voxel of the loaded block. With the 4 buffers of the loaded data, the sum bounds the
+measured peak of `apply` in float32 and float64, in 2-D and 3-D. The grid of a block is the
+loaded block (core and halo) plus the PSF, rounded up. The block size is chosen from the memory
 budget (`optix.config(memory=...)`), or set with `block`; the rules of
 [Ikoma](ikoma.md#memory-and-streaming) for a budget that leaves a small core apply. Each
 iteration evaluates the series twice, over every pixel, in float64 whatever the dtype.
@@ -426,8 +449,8 @@ says when an image is split.
 The example blurs a test pattern with a Gaussian PSF from
 [`optix.models`](../../reference/models.md), adds Poisson counts and Gaussian read noise
 of variance 9, and deconvolves them with the TVH and TV priors; [Ikoma](ikoma.md) is run for
-comparison. The iterations are capped at 1000 to keep the example short, which makes the
-estimate not faithful; the default is 5000.
+comparison. The iterations are capped at 1000 to keep the example short; the default is
+5000. The cap is not in the paper, so the estimate stays faithful.
 
 ```pycon
 >>> import torch
@@ -463,14 +486,20 @@ estimate not faithful; the default is 5000.
 >>> mae = lambda e: round(float((e - x).abs().mean()), 2)
 >>> [mae(e) for e in (data, x_tvh, x_tv, x_ik)]  # data, TVH, TV, Ikoma
 [2.82, 0.95, 1.05, 1.13]
->>> float(x_tvh.min()) >= 0
-True
+>>> float(x_tvh.min()) >= 0, est.is_faithful  # max_iter keeps it faithful
+(True, True)
 
->>> # 4. The high-count guard: the same scene at 20 times the counts raises an
->>> # error that points to Ikoma.
+>>> # 4. The high-count guard: the same scene at 20 times the counts gives a
+>>> # warning that points to Ikoma, or an error with on_step_collapse="raise".
+>>> import warnings
 >>> big = torch.poisson(simulate_blur(20 * x, psf)) + 3 * torch.randn(32, 32)
+>>> with warnings.catch_warnings(record=True) as caught:
+...     warnings.simplefilter("always")
+...     _ = Chouzenoux(psf).fit(big, init=sensor)
+>>> ["Use Ikoma" in str(w.message) for w in caught]
+[True]
 >>> try:
-...     Chouzenoux(psf).fit(big, init=sensor)
+...     Chouzenoux(psf, on_step_collapse="raise").fit(big, init=sensor)
 ... except ValueError as e:
 ...     print("Use Ikoma" in str(e))
 True

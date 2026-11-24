@@ -232,19 +232,65 @@ def test_recovery_and_constraint():
     assert Chouzenoux(psf, upper=8.0).is_faithful
 
 
-def test_step_collapse_raises():
+def test_step_collapse_warns():
     """μ ∝ e^{(2 max y − 1)/σ²} (Eq. 2.13): high counts with low read noise
-    leave no usable step; the error points to Ikoma."""
+    leave a tiny step. By default `fit` warns (pointing to Ikoma) and the
+    run goes ahead as in the paper; `on_step_collapse="raise"` raises."""
     psf = gaussian2d()
     _, y = simulate((24, 24), psf, 100.0, 1.0, seed=6)
+    with pytest.warns(RuntimeWarning, match="Ikoma"):
+        est = Chouzenoux(psf, max_iter=2).fit(y, init=sensor(1.0))
+    assert est.is_faithful and float(est.step) > 0
+    strict = Chouzenoux(psf, on_step_collapse="raise")
+    assert strict.is_faithful
     with pytest.raises(ValueError, match="Ikoma"):
-        Chouzenoux(psf).fit(y, init=sensor(1.0))
-    # also when μ overflows float64
+        strict.fit(y, init=sensor(1.0))
+    # μ overflows float64: no step at all, an error in both modes
     with pytest.raises(ValueError, match="Ikoma"):
         Chouzenoux(psf).fit(y * 10, init=sensor(1.0))
     # a given step skips the check (not the paper's method)
-    est = Chouzenoux(psf, step=1e-3, max_iter=2).fit(y, init=sensor(1.0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        est = Chouzenoux(psf, step=1e-3, max_iter=2).fit(y, init=sensor(1.0))
     assert not est.is_faithful and float(est.step) == 1e-3
+
+
+def test_paper_settings_below_and_above_the_limit():
+    """Images like the paper's (Figure 2: 30 % of the pixels at x⁺, the rest
+    at x⁺/4, no blur): x̄₁ (x⁺ = 12, σ² = 9) is below the limit of 10⁴;
+    x̄₂ (x⁺ = 30, σ² = 12) is above it and warns, and still runs."""
+    psf = gaussian2d()
+    gen = torch.Generator().manual_seed(5)
+    mask = torch.rand(64, 64, generator=gen, dtype=F64) < 0.3
+
+    def image(peak, var):
+        x = torch.where(mask, peak, peak / 4)
+        noise = math.sqrt(var) * torch.randn(x.shape, generator=gen, dtype=F64)
+        return torch.poisson(x, generator=gen) + noise
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        Chouzenoux(psf, max_iter=1).fit(image(12.0, 9.0), init=sensor(9.0))
+    y2 = image(30.0, 12.0)
+    est = Chouzenoux(psf, max_iter=1)
+    with pytest.warns(RuntimeWarning, match="early"):
+        est.fit(y2, init=sensor(12.0))
+    assert (float(est.peak) + 12.0) / float(est.step) > 1e4
+    assert est.apply(y2).shape == y2.shape
+
+
+def test_apply_on_other_data_warns():
+    """The step is admissible for the data of `fit` only: `apply` on data
+    with a larger μ warns."""
+    psf = gaussian2d(5, 1.2)
+    _, low = simulate((16, 16), psf, 5.0, 4.0, seed=4)
+    _, high = simulate((16, 16), psf, 40.0, 4.0, seed=4)
+    est = Chouzenoux(psf, max_iter=2, dtype=F64).fit(low, init=sensor(4.0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        est.apply(low)
+    with pytest.warns(RuntimeWarning, match="no longer admissible"):
+        est.apply(high)
 
 
 def test_needs_read_noise():
@@ -321,6 +367,83 @@ def test_blocks():
     assert Chouzenoux(psf, block=(20, 18), halo=10).is_faithful
 
 
+def test_3d():
+    """A 12³ volume with a 3³ PSF: the 3-D step (‖∇‖² ≤ 12, ‖H‖² ≤ 144),
+    shape, non-negativity and Algorithm 1 written out."""
+    r = torch.arange(3, dtype=F64) - 1
+    g = torch.exp(-(r[:, None, None] ** 2 + r[None, :, None] ** 2 + r**2))
+    psf = g / g.sum()
+    var = 9.0
+    gen = torch.Generator().manual_seed(12)
+    x = 6.0 * scene((12, 12, 12), seed=12)
+    y = torch.poisson(x, generator=gen) + 3 * torch.randn(
+        x.shape, generator=gen, dtype=F64
+    )
+    est = Chouzenoux(psf, max_iter=20, tol=0.0, dtype=F64)
+    out = est.fit(y, init=sensor(var)).apply(y)
+    ymax = float(y.max())
+    mu = (1 - math.exp(-1 / var)) * math.exp((2 * ymax - 1) / var)
+    assert float(est.lipschitz) == pytest.approx(mu, rel=1e-12)
+    assert float(est.step) == pytest.approx(
+        primal_dual_step(mu, [12.0, 144.0])
+    )
+    assert out.shape == y.shape and float(out.min()) >= 0
+    # Algorithm 1, written out
+    op = PaddedConvolution(psf, y.shape)
+    fid = PoissonGaussian(y, var)
+    ops = [Gradient(3), Hessian(3)]
+    lams = [float(est.tv), float(est.hessian)]
+    gamma = float(est.step)
+    xk = torch.full(op.grid, float(y.mean()), dtype=F64)
+    v = [o.forward(xk) * 0 for o in ops]
+
+    def grad_h(z):
+        return op.adjoint(fid.grad(op.forward(z)))
+
+    for _ in range(20):
+        y1 = xk - gamma * (
+            grad_h(xk) + sum(o.adjoint(w) for o, w in zip(ops, v, strict=True))
+        )
+        p1 = y1.clamp(min=0)
+        p2 = []
+        for r_, (o, lam) in enumerate(zip(ops, lams, strict=True)):
+            y2 = v[r_] + gamma * o.forward(xk)
+            p2.append(y2 - gamma * GroupL2(lam).prox(y2 / gamma, 1 / gamma))
+            v[r_] = v[r_] - y2 + p2[r_] + gamma * o.forward(p1)
+        back = sum(o.adjoint(w) for o, w in zip(ops, p2, strict=True))
+        xk = xk - y1 + p1 - gamma * (grad_h(p1) + back)
+    torch.testing.assert_close(out, op.crop(p1), rtol=1e-10, atol=1e-10)
+
+
+def test_block_budget_counts_float64_series():
+    """The budget counts the solver's buffers on the grid in the working
+    dtype and the float64 series per loaded voxel in any dtype."""
+    from optix.deconv import _chouzenoux as mod
+
+    for psf in (gaussian2d(5, 1.0), torch.ones(3, 3, 3)):
+        est = Chouzenoux(psf)
+        nd = psf.ndim
+        core, extents, halo = [40] * nd, [100] * nd, [6] * nd
+        loaded = [
+            min(c + 2 * h, e)
+            for c, e, h in zip(core, extents, halo, strict=True)
+        ]
+        grid = math.prod(est._grid_shape(loaded, tuple(psf.shape)))
+        comps = nd + nd * (nd + 1) // 2
+        for item in (4, 8):
+            expected = (
+                item * (mod._GRID_BASE + mod._GRID_COMPONENT * comps) * grid
+                + item * 4.0 * math.prod(loaded)
+                + mod._SERIES_BYTES * math.prod(loaded)
+            )
+            got = est._block_bytes(core, extents, halo, psf, item)
+            assert got == pytest.approx(expected)
+        # the series term does not shrink with the item size
+        f32 = est._block_bytes(core, extents, halo, psf, 4)
+        f64 = est._block_bytes(core, extents, halo, psf, 8)
+        assert f32 > f64 / 2 + mod._SERIES_BYTES * math.prod(loaded) / 2 - 1
+
+
 def test_float32_matches_float64():
     psf = gaussian2d(5, 1.2)
     var = 9.0
@@ -363,12 +486,14 @@ def test_options_and_faithfulness():
         dict(tv=0.01),
         dict(hessian=0.0),
         dict(upper=50.0),
+        dict(max_iter=10),
+        dict(tol=1e-3),
         dict(halo=12),
         dict(block=(8, None)),
+        dict(on_step_collapse="raise"),
     ):
         assert Chouzenoux(psf, **opts).is_faithful, opts
-    for opts in (dict(step=0.1), dict(max_iter=10), dict(tol=1e-3)):
-        assert not Chouzenoux(psf, **opts).is_faithful, opts
+    assert not Chouzenoux(psf, step=0.1).is_faithful
     for bad in (
         dict(tv=-1.0),
         dict(hessian=-1.0),
@@ -377,6 +502,7 @@ def test_options_and_faithfulness():
         dict(step=math.inf),
         dict(max_iter=0),
         dict(tol=-1.0),
+        dict(on_step_collapse="ignore"),
     ):
         with pytest.raises(ValueError):
             Chouzenoux(psf, **bad)

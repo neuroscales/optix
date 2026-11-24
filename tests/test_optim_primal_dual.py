@@ -261,3 +261,60 @@ def test_options():
     for bad in (0.0, -1.0, math.inf):
         with pytest.raises(ValueError, match="step"):
             primal_dual(grad, [], y, step=bad)
+
+
+def test_full_residual_and_empty_objective():
+    """The recorded residual is (‖x − p₁‖² + ∑‖v − p₂‖²)^½/γ, and
+    trace["objective"] is an empty list without `value`."""
+    n = (12, 10)
+    gen = torch.Generator().manual_seed(3)
+    y = torch.rand(n, generator=gen, dtype=F64) * 5
+    op = Gradient(2)
+    fn = GroupL2(0.5)
+    step = primal_dual_step(1.0, [op.norm2])
+    x0 = y.clone()  # ∇h(x₀) = 0: the primal part of the residual is 0
+    trace = {}
+    res = primal_dual(
+        lambda z: z - y,
+        [(op, fn)],
+        x0,
+        step=step,
+        constraint=Box(0.0),
+        max_iter=1,
+        tol=None,
+        trace=trace,
+    )
+    assert trace["objective"] == []
+    # first iteration by hand, duals from 0
+    v = op.forward(x0) * 0
+    p1 = (x0 - step * (x0 - y)).clamp(min=0)
+    y2 = v + step * op.forward(x0)
+    p2 = y2 - step * fn.prox(y2 / step, 1 / step)
+    full = math.sqrt(
+        float((x0 - p1).square().sum()) + float((v - p2).square().sum())
+    )
+    assert res.residual == pytest.approx(full / step, rel=1e-12)
+    assert trace["residual"] == [res.residual]
+    # the dual part is counted: the primal part alone is 0 here
+    assert float((x0 - p1).norm()) == 0 and res.residual > 1
+
+
+def test_poisson_gaussian_grad_float32():
+    """1 − ξ is formed in float64 and cast: float32 matches float64 to a
+    relative 1e-6 even where the gradient is small; a gradient that
+    overflows float32 raises."""
+    gen = torch.Generator().manual_seed(4)
+    y = torch.poisson(torch.full((200,), 5000.0, dtype=F64), generator=gen)
+    y = y + 2 * torch.randn(200, generator=gen, dtype=F64)
+    z = y + torch.randn(200, generator=gen, dtype=F64)
+    y, z = y.float(), z.float()
+    g32 = PoissonGaussian(y, torch.tensor(4.0)).grad(z)
+    g64 = PoissonGaussian(y.double(), torch.tensor(4.0, dtype=F64))
+    g64 = g64.grad(z.double())
+    assert g32.dtype == torch.float32
+    # only the final rounding to float32: no absolute error of 6e-8
+    err = (g32.double() - g64).abs()
+    assert bool((err <= 1e-7 * g64.abs()).all()), float(err.max())
+    big = torch.full((4,), 400.0)
+    with pytest.raises(ValueError, match="not finite"):
+        PoissonGaussian(big, torch.tensor(1.0)).grad(torch.zeros(4))
