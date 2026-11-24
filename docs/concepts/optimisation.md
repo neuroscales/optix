@@ -7,13 +7,14 @@ that choose terms, and the numerical care is written once. It has three layers.
 
 | Layer | Names | What it is |
 |---|---|---|
-| Proximity operators and functions | `prox_box`, `prox_group_l2`, `project_group_l2`, `prox_squared_l2`, `prox_shifted_poisson`, `prox_conjugate`; `Box`, `GroupL2`, `SquaredL2`, `ShiftedPoisson` | the building blocks of splitting algorithms |
+| Proximity operators and functions | `prox_box`, `prox_group_l2`, `project_group_l2`, `prox_squared_l2`, `prox_shifted_poisson`, `prox_schatten`, `schatten_norm`, `prox_conjugate`; `Box`, `GroupL2`, `SquaredL2`, `ShiftedPoisson`, `Schatten` | the building blocks of splitting algorithms |
 | Linear operators | `LinearOperator`, `Circulant`; `Identity`, `Convolution`, `as_circulant`; `diff`, `diff_adjoint`, `Gradient`, `Hessian` | the operator protocols, a transfer function as an operator, and finite differences with their Fourier symbols |
 | Solver | `Term`, `admm_fft`, `AdmmResult` | ADMM for circulant operators, solved in the Fourier domain |
 
 The module is semi-public: it is documented in the
 [API reference](../reference/optim.md) and may change without notice. It does not
-depend on `optix.deconv`; [Ikoma](../algorithms/deconv/ikoma.md) is its first user.
+depend on `optix.deconv`; [Ikoma](../algorithms/deconv/ikoma.md) is its first user, and
+[HSPIRAL](../algorithms/deconv/hspiral.md) uses it too.
 
 ```pycon
 >>> import torch
@@ -49,6 +50,7 @@ the terms of imaging it has a closed form. The module provides the following.
 | indicator of the $\ell_2$ ball of radius $r$ | $\mathbf{v}_j \min(1, r / \lVert\mathbf{v}_j\rVert_2)$ | `project_group_l2` |
 | $\tfrac{w}{2}\lVert \mathbf{z} - \mathbf{y} \rVert^2$ | $(\mathbf{v} + tw\mathbf{y}) / (1 + tw)$ | `prox_squared_l2`, `SquaredL2` |
 | $\sum_j z_j - (y_j + \tilde\sigma^2)\log(z_j + \tilde\sigma^2)$ | root of a quadratic, see below | `prox_shifted_poisson`, `ShiftedPoisson` |
+| $w\sum_j \lVert \mathbf{X}_j \rVert_{S_p}$ (Schatten norm of a field of symmetric matrices), $p \in \{1, 2, \infty\}$ | soft threshold of the singular values, see below | `prox_schatten`, `Schatten` |
 
 In the group norm, $\mathbf{z}_j$ collects the components of $\mathbf{z}$ along one
 axis (`dim`) at voxel $j$: the gradient for isotropic total variation, the packed
@@ -108,6 +110,73 @@ The two branches are equal in exact arithmetic, and each adds numbers of the
 same sign. `ShiftedPoisson(data, variance)` also provides `grad` and the
 Lipschitz constant `lipschitz` of the gradient, $\max_j (y_j + \sigma_j^2) / \sigma_j^4$ (infinite for
 the Poisson case), which first-order methods need to choose a step.
+
+### Schatten norms
+
+The Schatten norm of order $p$ of a matrix is the $\ell_p$ norm of its singular
+values $\boldsymbol\sigma$, $\lVert\mathbf{X}\rVert_{S_p} = \lVert\boldsymbol\sigma\rVert_p$:
+the nuclear norm for $p = 1$, the Frobenius norm for $p = 2$ and the spectral norm for
+$p = \infty$. Applied to the Hessian matrix $\mathbf{X}_j$ at every pixel, as in
+[HSPIRAL](../algorithms/deconv/hspiral.md), it penalises the principal curvatures of
+the image. The functions take $\mathbf{X}_j$ packed as the output of `Hessian`
+(diagonal entries, then $\sqrt{2}$ times the entries above the diagonal, $C = d(d+1)/2$
+components along `dim`), so that $\lVert\mathbf{v}_j\rVert_2$ is the Frobenius norm;
+`schatten_norm(v, p, dim=0)` returns $\lVert\mathbf{X}_j\rVert_{S_p}$ per voxel and
+`Schatten(weight, p)` is the function $w\sum_j \lVert\mathbf{X}_j\rVert_{S_p}$, with
+`value` and `prox`.
+
+The proximity operator of a Schatten norm acts on the singular values only
+([Lefkimmiatis and Unser 2013](https://doi.org/10.1109/TIP.2013.2271852),
+Proposition 1): if $\mathbf{Y} = \mathbf{U}\,\mathrm{diag}(\boldsymbol\sigma)\,\mathbf{V}^H$,
+
+$$
+\mathrm{prox}_{t\lVert\cdot\rVert_{S_p}}(\mathbf{Y})
+= \mathbf{U}\,\mathrm{diag}\bigl(\mathrm{prox}_{t\lVert\cdot\rVert_p}(\boldsymbol\sigma)\bigr)\,\mathbf{V}^H ,
+$$
+
+with the $\ell_p$ proxes of the paper (Eqs. 43–47):
+
+| $p$ | $\mathrm{prox}_{t\lVert\cdot\rVert_p}(\boldsymbol\sigma)$ |
+|---|---|
+| 1 | soft threshold, $\hat\sigma_i = \max(\sigma_i - t, 0)$ |
+| 2 | block soft threshold of the whole matrix, $\max(1 - t/\lVert\mathbf{Y}\rVert_F, 0)\,\mathbf{Y}$: `prox_group_l2` on the packed vector |
+| $\infty$ | $\hat\sigma_i = \min(\sigma_i, c)$, with $c = 0$ if $\sigma_1 + \sigma_2 \le t$, $c = (\sigma_1 + \sigma_2 - t)/2$ if $\lvert\sigma_1 - \sigma_2\rvert < t < \sigma_1 + \sigma_2$, and $c = \sigma_1 - t$ if $\sigma_1 - \sigma_2 \ge t$ ($\sigma_1 \ge \sigma_2$) |
+
+The paper states the case $p = \infty$ for a threshold of 1; the form above is the
+same with the threshold written out ($c = t\,\gamma(\boldsymbol\sigma/t)$).
+
+For a symmetric $2 \times 2$ matrix, which is the Hessian of a 2-D image, no
+decomposition is computed. Its eigenvalues are $\mu_\pm = m \pm r$, with $m$ the
+mean of the diagonal and $r \ge 0$ half the gap between them, and their absolute values
+are the singular values. The $\ell_p$ prox is applied to $\mu_\pm$ keeping their signs, to
+give $\hat\mu_\pm$, and
+
+$$
+\hat{\mathbf{X}} = \hat{m}\,\mathbf{I} + \frac{\hat{r}}{r}\,(\mathbf{X} - m\,\mathbf{I}),
+\qquad
+\hat{m} = \frac{\hat\mu_+ + \hat\mu_-}{2},
+\quad
+\hat{r} = \frac{\hat\mu_+ - \hat\mu_-}{2},
+$$
+
+which keeps the eigenvectors of $\mathbf{X}$ ($\hat{\mathbf{X}} = \hat{m}\mathbf{I}$ where
+$r = 0$). The packing is an isometry for the Frobenius inner product, so this is
+exactly the matrix prox. The norms $p = 1$ and $p = \infty$ are available for
+$2 \times 2$ matrices (and $1 \times 1$ ones) only; $p = 2$ for any size, and a
+`NotImplementedError` says so otherwise.
+
+```pycon
+>>> from optix.optim import Schatten, prox_schatten, schatten_norm
+>>> v = torch.tensor([[3.0], [-1.0], [0.0]])  # one voxel, diag(3, -1)
+>>> [round(float(schatten_norm(v, p)), 4) for p in (1, 2, float("inf"))]
+[4.0, 3.1623, 3.0]
+>>> prox_schatten(v, 0.5, 1).T  # eigenvalues 3 and -1 become 2.5 and -0.5
+tensor([[ 2.5000, -0.5000,  0.0000]])
+>>> prox_schatten(v, 0.5, float("inf")).T  # the larger one is capped at 2.5
+tensor([[ 2.5000, -1.0000,  0.0000]])
+>>> float(Schatten(0.5, 1).value(v))
+2.0
+```
 
 ## Linear operators
 
