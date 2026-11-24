@@ -164,6 +164,12 @@ Lengths share one unit; the Gibson–Lanni defaults are in µm.
 | $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
 | $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
 | $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
+| $W_0$, $W(z)$ | waist radius of a Gaussian beam ($1/e^2$ intensity half-width); beam radius at distance $z$ from the waist | length | `waist`; `beam_radius` | [Light sheet](../algorithms/psf/lightsheet.md) |
+| $z_R$, $\theta_0$ | Rayleigh range, $\pi W_0^2 / \lambda$ with $\lambda = \lambda_0 / n$; divergence half-angle, $\lambda / (\pi W_0)$ | length; rad | `rayleigh_range` | Light sheet |
+| $I(t, z)$ | intensity of the sheet at distance $t$ from its central plane and $z$ from the waist | | `sheet_intensity` | Light sheet |
+| $t_0$, $z_f$, $z_p$ | position of the central plane of the sheet; of the waist; of the point source along the propagation axis | length | `offset`; `focus`; `position` | Light sheet |
+| $\mathbf{n}$, $\mathbf{p}$, $\mathbf{R}$ | normal of the sheet and propagation direction (unit vectors, $\mathbf{n} = \mathbf{R}\mathbf{e}_{\mathrm{det}}$, $\mathbf{p} = \mathbf{R}\mathbf{e}_{\mathrm{prop}}$); rotation of the sheet frame on the grid. $\mathbf{p}$ is not the dipole of Richards–Wolf | | `rotation` | Light sheet |
+| $h_{\mathrm{det}}$, $h_{\mathrm{eff}}$ | detection PSF; effective PSF of light-sheet imaging, $h_{\mathrm{det}}\,I$ | | `psf`; the returned PSF | Light sheet |
 
 Some letters have another meaning elsewhere on this page: here $n$ is a
 refractive index, not a number of photoelectrons; $\lambda_0$ is a wavelength,
