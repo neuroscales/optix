@@ -12,7 +12,7 @@
 BaSiC estimates the shading of a microscope, a smooth flat field
 $\mathbf{f}$ and optionally a smooth dark field $\mathbf{d}$, from many images
 acquired under the same conditions, without calibration images. For time-lapse
-data it also estimates a per-frame baseline $b_i$, a uniform background that
+data it also estimates a per-frame baseline $b_n$, a uniform background that
 drifts over time (photobleaching of the medium, for instance).
 It treats the stack as a low-rank matrix (the shading shared by all frames)
 plus a sparse residual (the specimen), following
@@ -35,9 +35,9 @@ BaSiC uses the shading model of
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d},
+    \mathbf{y}_n = \mathbf{f} \odot (\mathbf{x}_n + b_n) + \mathbf{d},
     \qquad
-    \hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}} - b_i + b_{\text{norm}}
+    \hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \mathbf{d}}{\mathbf{f}} - b_n + b_{\text{norm}}
     $$
 
 === "Peng et al. 2017"
@@ -47,29 +47,29 @@ BaSiC uses the shading model of
     $$
 
 The flat field is smooth with mean 1, the dark field smooth, and the baseline
-$b_i$ constant over a frame. $b_{\text{norm}}$ (`baseline_norm`) is an
+$b_n$ constant over a frame. $b_{\text{norm}}$ (`baseline_norm`) is an
 arbitrary background added back after correction: 0 removes the background
 (fluorescence), $\bar{b}$ (`"mean"`) keeps the raw intensity range (bright
 field).
 
-Frames have $P$ pixels, flattened into vectors, and the stack (or group) has
+Frames have $\lvert\Omega\rvert$ pixels, flattened into vectors, and the stack (or group) has
 $N$ frames; products and divisions of vectors are pixel-wise.
 
 | optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}_i$ | $I_i^{\text{meas}}$ ($I$) | recorded frame $i$ | $\mathbb{R}^P$, one per frame |
-| $\mathbf{x}_i$ | $I_i^R$ ($F$) | latent (shading-free) image of frame $i$ | $\mathbb{R}^P$, one per frame |
-| $\mathbf{f}$ | $S^F$ ($S$) | flat field, multiplicative gain | $\mathbb{R}^P$, shared by all frames of a group |
-| $\mathbf{d}$ | $S^D$ ($D$) | dark field, additive offset | $\mathbb{R}^P$, shared by all frames of a group |
-| $b_i$ | $B_i$ | baseline (uniform background) of frame $i$ | scalar, one per frame |
+| $\mathbf{y}_n$ | $I_i^{\text{meas}}$ ($I$) | recorded frame $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{x}_n$ | $I_i^R$ ($F$) | latent (shading-free) image of frame $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{f}$ | $S^F$ ($S$) | flat field, multiplicative gain | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\mathbf{d}$ | $S^D$ ($D$) | dark field, additive offset | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $b_n$ | $B_i$ | baseline (uniform background) of frame $n$ | scalar, one per frame |
 | $b_{\text{norm}}$ | | background added back after correction | scalar, one for the whole stack |
 
 ## Probabilistic model
 
 BaSiC has no explicit noise model: it is a regularised decomposition. The
 $K \le N$ fitting frames, sorted at each pixel over the frames and resized to
-the working size (128 × 128, so $P = 128^2$ here), form the columns of the
-measurement matrix $\mathbf{Y} \in \mathbb{R}^{P \times K}$.
+the working size (128 × 128, so $\lvert\Omega\rvert = 128^2$ here), form the columns of the
+measurement matrix $\mathbf{Y} \in \mathbb{R}^{\lvert\Omega\rvert \times K}$.
 It is split into a low-rank part and a sparse residual,
 
 === "optix"
@@ -107,7 +107,7 @@ It is split into a low-rank part and a sparse residual,
 
 with $\mathbf{b} \in \mathbb{R}^K$ the baselines of the fitting frames,
 $\mathbf{1}$ a vector of ones, and
-$\boldsymbol{\Phi} \in \mathbb{R}^{P \times P}$ the orthonormal 2-D DCT basis, so that
+$\boldsymbol{\Phi} \in \mathbb{R}^{\lvert\Omega\rvert \times \lvert\Omega\rvert}$ the orthonormal 2-D DCT basis, so that
 $\boldsymbol{\Phi}^\top \mathbf{f}$ are the DCT coefficients of $\mathbf{f}$;
 the L1 norms on them make the fields smooth. The dark field is
 $\mathbf{d} = d_Z + \mathbf{d}_R$. The weights are reweighted-L1,
@@ -123,15 +123,15 @@ with $\bar{\mathbf{y}}$ the per-pixel mean frame divided by its mean.
 
 | optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{Y}$ | $I$ | measurement matrix, one fitting frame per column | $\mathbb{R}^{P \times K}$, per group |
-| $\mathbf{L}$ | $I_B$ | low-rank part, the shading of every frame | $\mathbb{R}^{P \times K}$, per group |
-| $\mathbf{E}$ | $I_R$ | sparse residual, the specimen | $\mathbb{R}^{P \times K}$, per group |
+| $\mathbf{Y}$ | $I$ | measurement matrix, one fitting frame per column | $\mathbb{R}^{\lvert\Omega\rvert \times K}$, per group |
+| $\mathbf{L}$ | $I_B$ | low-rank part, the shading of every frame | $\mathbb{R}^{\lvert\Omega\rvert \times K}$, per group |
+| $\mathbf{E}$ | $I_R$ | sparse residual, the specimen | $\mathbb{R}^{\lvert\Omega\rvert \times K}$, per group |
 | $\mathbf{b}$ | $B$ | baselines of the fitting frames | $\mathbb{R}^K$, one entry per frame |
-| $\boldsymbol{\Phi}^\top \cdot$ | $\mathcal{F}(\cdot)$ | DCT (described as a Fourier transform, a DCT in the authors' code) | $\mathbb{R}^{P \times P}$, fixed |
+| $\boldsymbol{\Phi}^\top \cdot$ | $\mathcal{F}(\cdot)$ | DCT (described as a Fourier transform, a DCT in the authors' code) | $\mathbb{R}^{\lvert\Omega\rvert \times \lvert\Omega\rvert}$, fixed |
 | $\lambda_f$, $\lambda_d$ | $\lambda_s$, $\lambda_d$ | smoothness weights of flat and dark fields | scalars, per group |
 | $d_Z$ | $D_Z$ | uniform part of the dark field | scalar, per group |
-| $\mathbf{d}_R$ | $D_R$ | spatially varying part of the dark field | $\mathbb{R}^P$, per group |
-| $\mathbf{W}$ | $W$ | reweighting of the residual | $\mathbb{R}^{P \times K}$, per group |
+| $\mathbf{d}_R$ | $D_R$ | spatially varying part of the dark field | $\mathbb{R}^{\lvert\Omega\rvert}$, per group |
+| $\mathbf{W}$ | $W$ | reweighting of the residual | $\mathbb{R}^{\lvert\Omega\rvert \times K}$, per group |
 | $\epsilon$ | $\varepsilon$ | floor of the reweighting | scalar |
 
 ## Inference / derivation
@@ -149,7 +149,7 @@ reweighting:
 - Sorting each pixel over the frames makes every column a quantile of the
   intensity distribution, which makes the low-rank model fit better when
   objects move from frame to frame.
-- The scale shared by $\mathbf{f}$ and $\mathbf{x}_i$ is fixed by normalising
+- The scale shared by $\mathbf{f}$ and $\mathbf{x}_n$ is fixed by normalising
   $\mathbf{f}$ to mean 1 (`meta["flat_norm"] == "mean"`); the fields are then
   resized back to the image size.
 
@@ -160,17 +160,17 @@ the fields. Reweighted L1 minimises a log-sum
 penalty by successive linear upper bounds; equivalently, EM for a Laplace scale mixture, each weight being the
 expected inverse scale of its residual (an IRLS-type robust M-estimator).
 
-**Baseline.** After sorting, the fitted $b_i$ belong to sorted frames, not to
-real ones. With `timelapse=True`, each $b_i$ is re-estimated on its own,
+**Baseline.** After sorting, the fitted $b_n$ belong to sorted frames, not to
+real ones. With `timelapse=True`, each $b_n$ is re-estimated on its own,
 unsorted frame with $\mathbf{f}$ and $\mathbf{d}$ fixed, by a reweighted
-$\min_b \lVert \mathbf{W} \odot (\mathbf{y}_i - b\,\mathbf{f} - \mathbf{d}) \rVert_1$
+$\min_b \lVert \mathbf{W} \odot (\mathbf{y}_n - b\,\mathbf{f} - \mathbf{d}) \rVert_1$
 (a weighted median, the maximum-likelihood location under a Laplace
 likelihood). It is in units of the flat-corrected signal
 (`meta["baseline_units"] == "signal"`).
 
 ## Algorithm
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$,
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$,
 optionally in groups. \
 **Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$, $\hat{\mathbf{d}}$ and,
 with `timelapse=True`, $\hat b_1, \ldots, \hat b_N$.
@@ -179,7 +179,7 @@ For each group:
 
 1. **Select** $K \le$ `max_frames` $= 512$ fitting frames, sort each pixel over
    them (`sort_intensity=True`) and resize them to 128 × 128, giving
-   $\mathbf{Y} \in \mathbb{R}^{P \times K}$.
+   $\mathbf{Y} \in \mathbb{R}^{\lvert\Omega\rvert \times K}$.
 2. **Initialise** $\lambda_f$, $\lambda_d$ from the mean frame (unless given)
    and $\mathbf{W} = \mathbf{1}$.
 3. **Reweight**, at most `max_reweight` $= 10$ times, until $\mathbf{f}$ and
@@ -191,7 +191,7 @@ For each group:
 4. **Normalise** $\mathbf{f}$ to mean 1 and resize $\mathbf{f}$, $\mathbf{d}$
    to the image size.
 5. **Baseline** (with `timelapse=True`): one pass over the stack, estimating
-   each $b_i$ by the weighted median above.
+   each $b_n$ by the weighted median above.
 
 ## Faithful mode and extensions
 
@@ -223,7 +223,7 @@ Extensions, off in both presets:
 
 | Keyword | Changes | Default |
 |---|---|---|
-| `variant="basicpy"` | the solver of [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0 (`fitting_mode="approximate"`): weights divided by the frame mean of $\mathbf{L}$, $b_i \ge 0$, $\mathbf{f}$ started at 1, dark field fitted on frames with $b_i < 1$, $\lambda_d = \lambda_f / 10$. With `sort_intensity=False` and `reweight_tol=1e-2` it reproduces BaSiCPy | `"paper"` |
+| `variant="basicpy"` | the solver of [BaSiCPy](https://github.com/peng-lab/BaSiCPy) 2.0.0 (`fitting_mode="approximate"`): weights divided by the frame mean of $\mathbf{L}$, $b_n \ge 0$, $\mathbf{f}$ started at 1, dark field fitted on frames with $b_n < 1$, $\lambda_d = \lambda_f / 10$. With `sort_intensity=False` and `reweight_tol=1e-2` it reproduces BaSiCPy | `"paper"` |
 | `baseline_method="basicpy"` | BaSiCPy's `fit_only_baseline`, a reweighted-L1 ALM on the pixels below each frame's 10 % quantile; biased low where the flat field varies (about −11 % for a flat of ±25 %) | `"paper"` |
 | `sampling="reservoir"` | random fitting frames, seeded by `seed` | `"stride"` |
 | `normalize_weights=False` | the weights of Eq. (9) without scaling | `True` |
@@ -234,8 +234,8 @@ BaSiC is tagged `per-frame`. The fit reads the `max_frames` fitting frames of
 each group, plus one pass over the whole stack with `timelapse=True`. Sorting
 needs all fitting frames of a strip of rows at once: the strips are sized to
 the memory budget, and each fitting frame is read once per strip. The
-decomposition itself works on a $P \times K$ matrix at the working size
-($P = 128^2$, $K \le 512$), so its cost does not grow with the image size or
+decomposition itself works on a $\lvert\Omega\rvert \times K$ matrix at the working size
+($\lvert\Omega\rvert = 128^2$, $K \le 512$), so its cost does not grow with the image size or
 the length of the stack. [`apply`](../../reference/shading.md) works on frame
 batches. To trade accuracy for speed, lower `working_size` or `max_frames`.
 

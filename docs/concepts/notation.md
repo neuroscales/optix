@@ -11,22 +11,25 @@ of its paper.
 
 | Kind | Style | Examples |
 |---|---|---|
-| scalar | italic, lowercase | $g$, $o$, $\sigma^2$, $\lambda$, $b_i$ |
-| vector: an image flattened over its pixels, or a set of per-frame values | bold lowercase | $\mathbf{y}_i$, $\mathbf{x}_i$, $\mathbf{f}$, $\mathbf{d}$, $\mathbf{b}$ |
+| scalar | italic, lowercase | $g$, $o$, $\sigma^2$, $\lambda$, $b_n$ |
+| vector: an image flattened over its pixels, or a set of per-frame values | bold lowercase | $\mathbf{y}_n$, $\mathbf{x}_n$, $\mathbf{f}$, $\mathbf{d}$, $\mathbf{b}$ |
 | matrix or linear operator | bold uppercase | $\mathbf{A}$, $\boldsymbol{\Phi}$, $\mathbf{W}$, $\mathbf{Y}$ |
-| count, size | plain uppercase | $N$, $K$, $P$, $H$, $W$ |
+| count, size | plain uppercase, or the size of a set | $N$, $K$, $H$, $W$, $\lvert\Omega\rvert$ |
 | Greek vector or matrix | bold Greek | $\boldsymbol{\alpha}$, $\boldsymbol{\pi}$, $\boldsymbol{\eta}$ |
 | set, distribution family | calligraphic or upright | $\mathcal{N}$, $\mathrm{Gamma}$, $\mathcal{D}$ |
 
-- Images are vectors. A picture of $H \times W$ pixels is a vector of
-  $P = HW$ values, and a stack of $N$ frames is the matrix
-  $\mathbf{Y} = [\mathbf{y}_1, \ldots, \mathbf{y}_N] \in \mathbb{R}^{P \times N}$,
-  one frame per column.
+- Images are vectors. The pixels of a picture form the grid $\Omega$, with
+  $\lvert\Omega\rvert = HW$ pixels in 2D ($DHW$ in 3D); pixel $i$ is
+  written $i \in \Omega$. A picture is a vector
+  $\mathbf{y}_n \in \mathbb{R}^{\lvert\Omega\rvert}$, and a stack of $N$ frames
+  is the matrix
+  $\mathbf{Y} = [\mathbf{y}_1, \ldots, \mathbf{y}_N] \in \mathbb{R}^{\lvert\Omega\rvert \times N}$,
+  one frame per column. Pixel $i$ of frame $n$ is $y_{ni}$.
 - Products of images are pixel-wise and written $\odot$; division of images
   is pixel-wise too. A scalar added to an image is broadcast:
-  $\mathbf{x}_i + b_i$ means $\mathbf{x}_i + b_i \mathbf{1}$.
+  $\mathbf{x}_n + b_n$ means $\mathbf{x}_n + b_n \mathbf{1}$.
 - The position of a pixel is rarely needed. When it is, it is written
-  $\mathbf{r}$, and a pixel of an image $\mathbf{f}(\mathbf{r})$ or $f_p$.
+  $\mathbf{r}$, and a pixel of an image $\mathbf{f}(\mathbf{r})$ or $f_i$.
 - Hats mark estimates ($\hat{\mathbf{f}}$), bars means ($\bar{x}$).
 - Probability distributions follow Bishop's [*Pattern Recognition and Machine
   Learning*](https://www.microsoft.com/en-us/research/publication/pattern-recognition-machine-learning/) (2006). Some letters therefore have a second meaning there (the rate $b$
@@ -37,14 +40,15 @@ of its paper.
 Docstrings write maths in UTF-8, not LaTeX, so that they read well in
 `help()`, in an editor and in the API reference alike (see the
 [style guide](../contributing/style.md)). Bold is not available there, so the
-case carries the meaning: `yᵢ = f ⊙ (xᵢ + bᵢ) + d`, `A x`, `Φ θ`. The
+case carries the meaning: `yₙ = f ⊙ (xₙ + bₙ) + d`, `A x`, `Φ θ`, and the
+number of pixels is `|Ω|`. The
 symbols are the same as on this page.
 
 Indices and exponents use Unicode subscripts and superscripts wherever they
-exist: `xᵢ`, `bᵢ`, `σ²`, `Φᵀ`, `τ⁻¹`, `x̂ᵢ`, `rₙₖ`, `α₀`, `10⁻⁶`. Superscripts
+exist: `xₙ`, `bₙ`, `fᵢ`, `σ²`, `Φᵀ`, `τ⁻¹`, `x̂ₙ`, `rₙₖ`, `α₀`, `10⁻⁶`. Superscripts
 cover the digits, `⁺ ⁻ ⁼ ⁽ ⁾`, almost every lowercase letter and `ᵀ`.
 Subscripts cover only the digits, `₊ ₋ ₌ ₍ ₎` and the letters
-`ₐ ₑ ₕ ᵢ ⱼ ₖ ₗ ₘ ₙ ₒ ₚ ᵣ ₛ ₜ ᵤ ᵥ ₓ`; for any other index (`y_{ig}`,
+`ₐ ₑ ₕ ᵢ ⱼ ₖ ₗ ₘ ₙ ₒ ₚ ᵣ ₛ ₜ ᵤ ᵥ ₓ`; for any other index (`y_{ng}`,
 `x_{max}`, `b_g`), fall back to `_` with braces when it spans several
 characters. Do not mix the two styles within one symbol: `r_{nk}` or `rₙₖ`,
 never `rₙ_k`.
@@ -53,16 +57,16 @@ never `rₙ_k`.
 
 | Symbol | Meaning | Unit | In code |
 |---|---|---|---|
-| $\mathbf{y}_i$, $\mathbf{Y}$ | recorded frame $i$; stack of frames | ADU | the data `Y` |
-| $\mathbf{x}_i$ | latent image: frame $i$ without shading | ADU | result of `apply` |
+| $\mathbf{y}_n$, $\mathbf{Y}$ | recorded frame $n$; stack of frames | ADU | the data `Y` |
+| $\mathbf{x}_n$ | latent image: frame $n$ without shading | ADU | result of `apply` |
 | $\mathbf{f}$ | flat field (multiplicative) | dimensionless | `ShadingEstimate.flat` |
 | $\mathbf{d}$ | dark field (additive, camera offset included) | ADU | `ShadingEstimate.dark` |
 | $\mathbf{s}_b$ | background profile, mean 1, when the background has its own profile | dimensionless | `ShadingEstimate.dark` ÷ its mean |
-| $\beta_i$, $\bar\beta$ | mean background intensity of frame $i$; its mean over frames | ADU | `KaskFlatField.background_level_` |
+| $\beta_n$, $\bar\beta$ | mean background intensity of frame $n$; its mean over frames | ADU | `KaskFlatField.background_level_` |
 | $\kappa_{\text{n}}$ | noise constant of a channel: local variance over local mean on the background; it equals the gain $g$ only when the offset $o$ is 0, and is $g\,(\bar y - o)/\bar y$ otherwise (written $\kappa$ in docstrings) | ADU | `meta["noise_constant"]` |
-| $b_i$, $\mathbf{b}$ | baseline of frame $i$; all baselines | ADU | `ShadingEstimate.baseline` |
+| $b_n$, $\mathbf{b}$ | baseline of frame $n$; all baselines | ADU | `ShadingEstimate.baseline` |
 | $\lambda$ | expected number of photoelectrons | e⁻ | `signal` of `simulate_sensor` |
-| $n$ | actual number of photoelectrons (Poisson) | e⁻ | |
+| $e$ | actual number of photoelectrons (Poisson) | e⁻ | |
 | $g$ | gain | ADU / e⁻ | `SensorEstimate.gain` |
 | $o$ | camera offset | ADU | `SensorEstimate.offset` |
 | $\sigma^2$ | read-noise variance | ADU² | `SensorEstimate.variance` |
@@ -75,15 +79,15 @@ camera parameters vectors: $\mathbf{g}$, $\mathbf{o}$, $\boldsymbol{\sigma}^2$.
 The two models are
 
 $$
-y = g\,n + o + \varepsilon, \quad n \sim \mathrm{Poisson}(\lambda)
+y = g\,e + o + \varepsilon, \quad e \sim \mathrm{Poisson}(\lambda)
 \qquad\text{and}\qquad
-\mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d},
+\mathbf{y}_n = \mathbf{f} \odot (\mathbf{x}_n + b_n) + \mathbf{d},
 $$
 
 and correcting a frame means
 
 $$
-\hat{\mathbf{x}}_i = \frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}} - b_i .
+\hat{\mathbf{x}}_n = \frac{\mathbf{y}_n - \mathbf{d}}{\mathbf{f}} - b_n .
 $$
 
 The baseline sits *inside* the flat field: it is a uniform background of the
@@ -95,29 +99,30 @@ uneven illumination as the signal.
 The flat field, the dark field and the baseline are defined statistically:
 the flat field is whatever multiplies every frame alike, the dark field
 whatever is added to every frame alike, the baseline whatever is constant over
-one frame. Written out, the expected recorded value of a pixel $p$ is
+one frame. Written out, the expected recorded value of pixel $i$ of frame $n$
+is
 
 $$
-\mathbb{E}[y_{ip}] =
-g_p \Bigl(
-\underbrace{e_p\, c_p\, \eta_p}_{\text{multiplicative}}\,(u_{ip} + a_{ip})
-+ \underbrace{\ell_p + j_p\, t}_{\text{additive}}
-\Bigr) + o_p ,
+\mathbb{E}[y_{ni}] =
+g_i \Bigl(
+\underbrace{s_i\, c_i\, \eta_i}_{\text{multiplicative}}\,(u_{ni} + a_{ni})
++ \underbrace{\ell_i + j_i\, t_{\text{exp}}}_{\text{additive}}
+\Bigr) + o_i ,
 $$
 
 and each physical quantity lands in one of the estimated terms:
 
 | Physical quantity | Symbol | Lands in |
 |---|---|---|
-| illumination profile | $e_p$ | flat $\mathbf{f}$ |
-| collection efficiency, vignetting | $c_p$ | flat $\mathbf{f}$ |
-| quantum efficiency and gain of each pixel (photo-response non-uniformity) | $\eta_p$, $g_p$ | flat $\mathbf{f}$ |
-| specimen signal | $u_{ip}$ | latent $\mathbf{x}_i$ |
-| autofluorescence, medium, out-of-focus haze | $a_{ip}$ | baseline $b_i$ where uniform, latent $\mathbf{x}_i$ otherwise |
-| stray or ambient light, outside the illumination path | $\ell_p$ | dark $\mathbf{d}$ |
-| dark current, over exposure time $t$ | $j_p\, t$ | dark $\mathbf{d}$ |
-| camera offset, including its fixed pattern | $o_p$ | dark $\mathbf{d}$ |
-| overall scale: lamp power, mean efficiency, mean gain | | shared by $\mathbf{f}$ and $\mathbf{x}_i$; fixed by `meta["flat_norm"]` |
+| illumination profile | $s_i$ | flat $\mathbf{f}$ |
+| collection efficiency, vignetting | $c_i$ | flat $\mathbf{f}$ |
+| quantum efficiency and gain of each pixel (photo-response non-uniformity) | $\eta_i$, $g_i$ | flat $\mathbf{f}$ |
+| specimen signal | $u_{ni}$ | latent $\mathbf{x}_n$ |
+| autofluorescence, medium, out-of-focus haze | $a_{ni}$ | baseline $b_n$ where uniform, latent $\mathbf{x}_n$ otherwise |
+| stray or ambient light, outside the illumination path | $\ell_i$ | dark $\mathbf{d}$ |
+| dark current, over exposure time $t_{\text{exp}}$ | $j_i\, t_{\text{exp}}$ | dark $\mathbf{d}$ |
+| camera offset, including its fixed pattern | $o_i$ | dark $\mathbf{d}$ |
+| overall scale: lamp power, mean efficiency, mean gain | | shared by $\mathbf{f}$ and $\mathbf{x}_n$; fixed by `meta["flat_norm"]` |
 
 So the flat field is not the illumination: it is illumination × collection ×
 pixel response, which is why it overlaps with the gain map of an sCMOS camera.
@@ -152,6 +157,10 @@ Lengths share one unit; the Gibson–Lanni defaults are in µm.
 | $\mathrm{OPD}$ | optical path difference between the actual and the design ray | length | `gibson_lanni_opd` | Gibson–Lanni |
 | $\psi$ | phase aberration of the pupil; $\psi = k_0\,\mathrm{OPD}$ | rad | `pupil_phase` | both |
 | $\mathbf{e}$ | electric field near the focus | | `richards_wolf_field` | Richards–Wolf |
+| $I_0$, $I_1$, $I_2$ | the diffraction integrals of the focal field | | `richards_wolf_integrals` | Richards–Wolf |
+| $u$, $v$ | optical coordinates, $u = kz\sin^2\alpha$, $v = k r \sin\alpha$ | | | Richards–Wolf |
+| $\varphi_0$ | azimuth of the electric vector of the incident wave, from the $x$ axis | rad | `polarization` | Richards–Wolf |
+| $\mathbf{p}$ | orientation of an emitting dipole (unit vector) | | `emitter` | Richards–Wolf |
 | $h$, $\mathbf{h}$ | the PSF as a function, $h(r, \varphi, z)$ or $h(r, \Delta z)$; the PSF sampled on the grid, centred at index `K // 2` | | the returned PSF | both |
 | $K_z$, $K_y$, $K_x$ | shape of the PSF grid | | `shape` | both |
 | $d_z$, $d_y$, $d_x$ | voxel size of the PSF grid | length | `spacing` | both |
@@ -159,8 +168,9 @@ Lengths share one unit; the Gibson–Lanni defaults are in µm.
 Some letters have another meaning elsewhere on this page: here $n$ is a
 refractive index, not a number of photoelectrons; $\lambda_0$ is a wavelength,
 where $\lambda$ alone is the expected number of photoelectrons; $\theta$,
-$\rho$ and $\psi$ are not the basis coefficients, the Stirling residual and the
-digamma function. A paper that writes the wavelength $\lambda$ and the vacuum
+$\rho$, $\psi$, $\varphi$ and $\alpha$ are not the basis coefficients, the Stirling
+residual, the digamma function, the function $\varphi(u)$ and the Dirichlet
+concentration. A paper that writes the wavelength $\lambda$ and the vacuum
 wave number $k$ is mapped to $\lambda_0$ and $k_0$ on its page. Docstrings
 write `λ₀`, `k₀`.
 
@@ -168,7 +178,7 @@ write `λ₀`, `k₀`.
 
 | Symbol | Meaning | In code |
 |---|---|---|
-| $P$ | number of samples along an axis | |
+| $L$ | number of samples along an axis | |
 | $\boldsymbol{\Phi}$ | DCT basis matrix, one function per column | `dct_basis` |
 | $\boldsymbol{\theta}$, $\boldsymbol{\Theta}$ | coefficients in the basis (1D, 2D) | `project`, `reconstruct` |
 | $\kappa_j$ | eigenvalue of the $j$-th basis function for the Laplacian | `dct_bending` |
@@ -180,6 +190,23 @@ write `λ₀`, `k₀`.
 | $\lambda$ | weight of a regulariser (a subscript tells several apart: $\lambda_f$, $\lambda_d$); distinct from the photoelectron count by context | `regularization` |
 | $\mathbf{L}_x$, $\mathbf{L}_y$ | second-difference operators along $x$ and $y$ | |
 
+## Shift-variant blur
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $S$, $s$ | number of terms of the blur, term index | |
+| $\mathbf{h}_s$, $\mathbf{H}_s$ | kernel of term $s$; convolution with it | `ShiftVariantPSF.kernels` |
+| $\mathbf{w}_s$, $\mathbf{W}_s$ | pixel weights of term $s$; $\operatorname{diag}(\mathbf{w}_s)$ | `ShiftVariantConvolution.weights` |
+| $\mathbf{r}_s$ | position of the grid node of term $s$ | `centres` |
+| $\mathbf{K}$ | matrix of the un-shifted PSFs, one column per source pixel | |
+| $\boldsymbol{\varphi}_s$ | (multi)linear interpolation weights of node $s$ | `interpolation_weights` |
+| $\mathbf{C}$ | matrix of the kernels $\mathbf{h}_s$ of the optimal local approximation, one per column | `DenisPSF.kernels` |
+| $\tau$, $\mathbf{C}_\tau$ | truncation level; block-circulant preconditioner of Nagy and O'Leary, not to be confused with $\mathbf{C}$ | `tau`, `RegionPreconditioner` |
+| $\mathbf{e}_k$ | residual of the conjugate-gradient iteration $k$ | |
+
+The letter $\tau$ has a second meaning in the distributions below, the
+precision of a Normal; the context tells which is meant.
+
 ## Morphology
 
 | Symbol | Meaning | In code |
@@ -189,6 +216,62 @@ write `λ₀`, `k₀`.
 | $B(\mathbf{u})$ | structuring element: its grey level at offset $\mathbf{u}$, $-\infty$ outside its support | `ball`, `footprint` |
 | $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
 | $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
+
+## Attenuation
+
+Along the propagation axis $z$ of the illumination, with the index $j$ of the
+pixels of a profile (here, and only here, $j$ counts depth pixels).
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $y(z)$, $y_j$ | signal at depth $z$; value of pixel $j$ of a profile | the data of `DepthResolved` |
+| $y^{\mathrm{c}}_j$ | compensated signal, $y_j\,\gamma_j$ | `DepthResolved.apply`, `compensate` |
+| $y^{\mathrm{r}}_j$ | signal after the restoration filter of Smith et al. | `smith_attenuation` |
+| $\mu(z)$, $\mu_j$ | attenuation coefficient, in the inverse of the length unit of $z$ | `DepthResolved.attenuation`, `depth_resolved` |
+| $\hat{\mu}_j$, $\tilde{\mu}_q$ | estimate of $\mu$ of Smith et al., before and after the lateral denoising | `smith_attenuation`, `weighted_tv` |
+| $s$ | number of times the light crosses the medium (2 for OCT, 1 for a light sheet); written $p$ in the docstrings | `passes` |
+| $\Delta$ | pixel size along $z$ (also the quantisation step above) | `pixel_size` |
+| $\xi$ | constant of the model: recorded fraction, conversion factor and incident irradiance | |
+| $T_j$ | sum of the intensities from pixel $j$ to the end of the profile | `tail_sums` |
+| $\gamma_j$ | compensation gain of pixel $j$ | `compensate` |
+| $q$, $Q$ | lateral position and number of positions of the total-variation term | `tv_axis` |
+| $w_q$ | weight of the difference between positions $q+1$ and $q$ in the total variation, $1/(y_q + \epsilon)$ | `weighted_tv` |
+| $\eta$, $\epsilon$ | weight of the total variation, and floor of its weights; $\eta$ is also the natural parameters of a distribution, and $\epsilon$ (this glyph) differs from the read noise $\varepsilon$ | `eta`, `epsilon` |
+| $\sigma^2$ | average noise power of the restoration filter (also the read-noise variance) | `noise_power` |
+## Tiles
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $I$ | number of tiles of a mosaic | `T` in docstrings |
+| $i$, $j$ | tile indices (frame indices elsewhere) | |
+| $\mathbf{y}_i$, $y_i(\mathbf{r})$ | tile $i$; its value at grid pixel $\mathbf{r}$ (the common pixel grid of the mosaic) | the tiles `data` |
+| $a_i$, $c_i$ | scale and shift of tile $i$, $\hat{\mathbf{x}}_i = a_i \mathbf{y}_i + c_i$ | `TileIntensityEstimate.scale`, `.shift` |
+| $\gamma_i$, $\omega_i$ | gain (dimensionless) and offset (ADU) of tile $i$ in a simulation, $\mathbf{y}_i = \gamma_i \mathbf{x} + \omega_i$; not the camera $g$, $o$ | `simulate_tiles(tile_gain=, tile_offset=)` |
+| $v$, $w$ | a value of tile $i$ and the transformed value of a neighbour at the same pixel | |
+| $a'_i$, $c'_i$, $c''_i$ | linear and additive sub-models of tile $i$ | |
+| $\lambda_1$, $\lambda_2$, $\lambda_3$ | weights of the linear, additive and identity sub-models (not the photoelectron rate $\lambda$) | `weights` |
+| $O_{ij}$ | overlap of tiles $i$ and $j$ | `overlap_box` |
+| $F$ | set of fixed tiles | `fixed` |
+## Intensity histograms
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $G$ | number of grey levels | `levels` |
+| $h(n)$, $p(n)$ | histogram of the grey levels $n = 1 \ldots G$, and its normalisation; $h$ is local to this section (it is the grid spacing elsewhere) | |
+| $H(\cdot)$ | Shannon entropy of a histogram, in nats; an operator name in upright type, not a set | `meta["entropy"]` |
+| $\mathbf{a}$, $\mathbf{m}$ | coefficients of the polynomial dark and flat fields: the paper's notation, not to be confused with the mean $m$ of a Normal | `meta["coefficients"]` |
+
+## Stripes
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{s}$ | stripe component of a frame, $\mathbf{y} = \mathbf{x} + \mathbf{s}$ | |
+| $\theta$ | direction of the stripes, from the stripe axis towards the other in-plane axis | `angle` |
+| $\nabla$, $\nabla_\theta$ | forward differences along the axes; along the stripe direction $\theta$ | `lattice_diff` |
+| $\lVert \nabla \mathbf{x} \rVert_{2,1}$ | isotropic total variation: sum over pixels of the Euclidean norm of the gradient | |
+| $\mu_1$, $\mu_2$ | weights of the total variation and of the sparsity of $\mathbf{s}$ (the Gamma mean $\mu$ is unrelated) | `mu1`, `mu2` |
+| $\rho_z$ | weight of the differences along $z$ | `rho_z` |
+| $\iota_{S}$ | indicator of a set $S$: $0$ inside, $\infty$ outside | |
 
 ## Distributions
 
@@ -210,6 +293,43 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
 
+## Pupil function
+
+Used by the [phase retrieval](../algorithms/psf/phase-retrieval.md) page, with the
+[optics symbols](#optics) above: the normalised pupil radius $\rho$, the pupil phase
+$\psi$, the PSF $h$, the angles $\theta$, $\varphi$, the voxel size $d_z, d_y, d_x$ and the
+indices $n$, $n_s$, $n_i$. The symbols below are specific to it.
+
+| Symbol | Meaning | Unit | In code |
+|---|---|---|---|
+| $\boldsymbol{\nu}$, $\nu_z$ | lateral spatial frequency $(\nu_x, \nu_y)$, and axial frequency $\sqrt{(n/\lambda_0)^2 - \lvert\boldsymbol{\nu}\rvert^2}$, in cycles (not the wave number $k$) | 1 / length | |
+| $h_{\mathrm A}$ | amplitude PSF (complex), $h = \lvert h_{\mathrm A}\rvert^2$ | | `pupil_psf` |
+| $p(\boldsymbol{\nu})$, $\mathbf{p}$ | complex pupil function, $p = A\,e^{i\psi}$, non-zero for $\lvert\boldsymbol{\nu}\rvert \le \mathrm{NA}/\lambda_0$; its samples | | `PupilEstimate.pupil` |
+| $A$ | magnitude of the pupil | | |
+| $\mathbf{u}_j$ | defocus phase function $e^{2\pi i \nu_z z_j}$ of the section $z_j$ | | |
+| $Z_j$ | Zernike polynomial of Noll index $j$, with radial order $q$ and azimuthal frequency $l$ | | `zernike` |
+| $a_j$, $b_j$ | Zernike coefficients of $A$ and of $\psi$ | rad (for $b_j$) | `zernike_magnitude`, `zernike_phase` |
+| $\delta$ | phase of the index-mismatch aberration, $k_0\,\mathrm{OPD}$ | rad | `index_mismatch_aberration` |
+| $D$ | bead diameter | length | `bead_diameter` |
+## Stationary noise
+
+Noise made of known patterns convolved with white noise, as in
+[VSNR](../algorithms/destripe/vsnr.md). The first rows are the stripe symbols
+shared with the other destriping pages.
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{s}$ | stripe or stationary noise component of a frame, $\mathbf{y} = \mathbf{x} + \mathbf{s}$ | |
+| $\theta$ | direction of the stripes (in degrees in code), not the difference of two means nor the coefficients $\boldsymbol{\Theta}$ | `angle` |
+| $\nabla$ | forward differences along the two axes of a frame | |
+| $\lVert \nabla \mathbf{x} \rVert_{2,1}$ | isotropic total variation: sum over pixels of the Euclidean norm of the gradient | |
+| $\iota_{S}$ | indicator of a set $S$: $0$ inside, $\infty$ outside | |
+| $\mathbf{k}_i$ | known pattern $i$ of the noise: a kernel centred on its middle pixel (unrelated to the digamma function $\psi$) | `filters` |
+| $\boldsymbol{\lambda}_i$ | white noise convolved with $\mathbf{k}_i$, so that $\mathbf{s} = \sum_i \boldsymbol{\lambda}_i * \mathbf{k}_i$ (unrelated to the photoelectrons $\lambda$) | `VSNRSolution.weights` |
+| $*$ | convolution with periodic boundaries | |
+| $\phi_i$, $\alpha_i$ | prior of $\boldsymbol{\lambda}_i$ and its weight | `prior`, `alpha` |
+| $\epsilon$, $h_\epsilon$ | Huber parameter and function; $\lVert \cdot \rVert_{2,1}^{\epsilon}$ is the total variation with $h_\epsilon$ in place of the norm (unrelated to the read noise $\varepsilon$) | `eps` |
+| $\vartheta$ | over-relaxation of a primal-dual scheme (unrelated to $\theta$) | |
 ## Views
 
 | Symbol | Meaning | In code |
@@ -227,9 +347,8 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 
 | Symbol | Ranges over |
 |---|---|
-| $i$ | frames (samples of a stack), $1 \ldots N$ |
-| $p$ | pixels, $1 \ldots P$ |
-| $n$ | observations fed to a distribution |
+| $i$ | pixels, $i \in \Omega$, $\lvert\Omega\rvert$ of them |
+| $n$ | frames (samples of a stack), $1 \ldots N$; more generally the observations fed to a distribution |
 | $k$ | classes, $1 \ldots K$ |
 | $j$ | basis functions |
 | $t$ | iterations; $L_t$ is the objective at iteration $t$ (`History.objective`) |
@@ -248,22 +367,22 @@ other. For BaSiC, for instance:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot (\mathbf{x}_i + b_i) + \mathbf{d}
+    \mathbf{y}_n = \mathbf{f} \odot (\mathbf{x}_n + b_n) + \mathbf{d}
     $$
 
 === "Peng et al. 2017"
 
     $$
-    I_i^{\text{meas}}(x) = S^F(x)\,\bigl(B_i + I_i^R(x)\bigr) + S^D(x)
+    I_n^{\text{meas}}(x) = S^F(x)\,\bigl(B_n + I_n^R(x)\bigr) + S^D(x)
     $$
 
 | optix | [Peng et al. 2017](https://doi.org/10.1038/ncomms14836) | CIDRE ([Smith et al. 2015](https://doi.org/10.1038/nmeth.3323)) |
 |---|---|---|
-| $\mathbf{y}_i$ | $I_i^{\text{meas}}$ | $I_o$ |
-| $\mathbf{x}_i$ | $I_i^R$ | $I$ |
+| $\mathbf{y}_n$ | $I_n^{\text{meas}}$ | $I_o$ |
+| $\mathbf{x}_n$ | $I_n^R$ | $I$ |
 | $\mathbf{f}$ | $S^F$ | $v$ |
 | $\mathbf{d}$ | $S^D$ | $z$ |
-| $b_i$ | $B_i$ | — |
+| $b_n$ | $B_n$ | — |
 
 !!! references "References"
 

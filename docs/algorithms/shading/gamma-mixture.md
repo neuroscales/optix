@@ -27,32 +27,32 @@ specimens, or when only a flat field is needed quickly, prefer
 ## Image formation (optics)
 
 The shading model of [Image formation and noise](../../concepts/image-formation.md)
-with the camera model of the same page: frame $i$ records
+with the camera model of the same page: frame $n$ records
 
 $$
-\mathbf{y}_i = \mathbf{o} + g\,\mathrm{Poisson}\bigl(\mathbf{f} \odot (\mathbf{s}_i + \mathbf{b}) + \mathbf{d}_e\bigr) + \boldsymbol{\varepsilon}_i ,
-\qquad \boldsymbol{\varepsilon}_i \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\sigma}^2),
+\mathbf{y}_n = \mathbf{o} + g\,\mathrm{Poisson}\bigl(\mathbf{f} \odot (\mathbf{s}_n + \mathbf{b}) + \mathbf{d}_e\bigr) + \boldsymbol{\varepsilon}_n ,
+\qquad \boldsymbol{\varepsilon}_n \sim \mathcal{N}(\mathbf{0}, \boldsymbol{\sigma}^2),
 $$
 
-with $\mathbf{s}_i$ the specimen signal in electrons, $\mathbf{b}$ a
+with $\mathbf{s}_n$ the specimen signal in electrons, $\mathbf{b}$ a
 background and $\mathbf{d}_e$ a dark signal, both constant over frames. In the
-Gaussian limit, and writing the signal in ADU, $\mathbf{u}_i = g\,\mathbf{s}_i$,
-each pixel $p$ is
+Gaussian limit, and writing the signal in ADU, $\mathbf{u}_n = g\,\mathbf{s}_n$,
+each pixel $i$ is
 
 $$
-y_{ip} \sim \mathcal{N}\bigl(c_p + f_p\,u_{ip},\; v_p + g\,f_p\,u_{ip}\bigr),
-\qquad u_{ip} \ge 0,
+y_{ni} \sim \mathcal{N}\bigl(c_i + f_i\,u_{ni},\; v_i + g\,f_i\,u_{ni}\bigr),
+\qquad u_{ni} \ge 0,
 $$
 
 with the offset $\mathbf{c} = \mathbf{o} + g(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$
 and the variance of an empty pixel $\mathbf{v} = \boldsymbol{\sigma}^2 + g^2(\mathbf{f}\odot\mathbf{b} + \mathbf{d}_e)$.
-Frames have $P$ pixels (index $p$), flattened into vectors, and the group has
-$N$ frames (index $i$); products are pixel-wise. In optix terms the dark field is the offset, $\hat{\mathbf{d}} = \mathbf{c}$
+Frames have $\lvert\Omega\rvert$ pixels (index $i \in \Omega$), flattened into vectors, and the group has
+$N$ frames (index $n$); products are pixel-wise. In optix terms the dark field is the offset, $\hat{\mathbf{d}} = \mathbf{c}$
 (`estimates["sensor"].offset` = `estimates["shading"].dark`), the flat field
 is $\mathbf{f}$ (`estimates["shading"].flat`, geometric mean 1), $\mathbf{v}$
 is `estimates["sensor"].variance`, and the baseline is absorbed in
 $\mathbf{c}$; the gain $g$ is held at its nominal value. With
-`noise="constant"` the variance is $v_p$ (no shot noise). The class
+`noise="constant"` the variance is $v_i$ (no shot noise). The class
 docstring uses the same notation.
 
 ## Probabilistic model
@@ -63,23 +63,23 @@ the log flat field is smooth, expanded in a DCT basis:
 
 $$
 \begin{aligned}
-\boldsymbol{\pi}_i &\sim \mathrm{Dirichlet}(\boldsymbol{\alpha}), &
-z_{ip} &\sim \mathrm{Categorical}(\boldsymbol{\pi}_i), \\
-u_{ip} \mid z_{ip} = 0 &\sim \delta(0), &
-u_{ip} \mid z_{ip} = k &\sim \mathrm{Gamma}(\nu_k,\ \nu_k/\mu_k), \\
+\boldsymbol{\pi}_n &\sim \mathrm{Dirichlet}(\boldsymbol{\alpha}), &
+z_{ni} &\sim \mathrm{Categorical}(\boldsymbol{\pi}_n), \\
+u_{ni} \mid z_{ni} = 0 &\sim \delta(0), &
+u_{ni} \mid z_{ni} = k &\sim \mathrm{Gamma}(\nu_k,\ \nu_k/\mu_k), \\
 \log \mathbf{f} &= \boldsymbol{\Phi}\boldsymbol{\theta}, &
 \boldsymbol{\theta} &\sim \mathcal{N}\bigl(\mathbf{0},\ (\lambda\,\operatorname{diag}\boldsymbol{\kappa})^{-1}\bigr),
 \end{aligned}
 $$
 
-with $\boldsymbol{\Phi} \in \mathbb{R}^{P \times M}$ the separable DCT-II
+with $\boldsymbol{\Phi} \in \mathbb{R}^{\lvert\Omega\rvert \times M}$ the separable DCT-II
 basis without its constant term ($M$ functions, set by `order`;
 $\boldsymbol{\theta}, \boldsymbol{\kappa} \in \mathbb{R}^M$)
 (so the geometric mean of $\mathbf{f}$ is 1), $\boldsymbol{\kappa}$ the
 bending energies of its functions, $\mu_k$, $\nu_k$ the mean and shape of
 class $k$ (Gamma in the $(\mu, \nu)$ form of the
 [notation](../../concepts/notation.md)), and a weak inverse-gamma-like prior
-on each $v_p$, $\log p(v_p) = -\tfrac12 \nu_v (\log v_p + v_0/v_p)$
+on each $v_i$, $\log p(v_i) = -\tfrac12 \nu_v (\log v_i + v_0/v_i)$
 (`v_dof` $=\nu_v$, `v_prior` $=v_0$).
 
 Assumptions: the frames are independent, every pixel is empty in a fair share
@@ -92,30 +92,30 @@ for pixels that repeat the same value.
 
 | Symbol | Meaning | Shape |
 |---|---|---|
-| $\mathbf{y}_i$ | recorded frame $i$ (ADU) | $\mathbb{R}^P$, one per frame |
-| $u_{ip}$ | specimen signal of pixel $p$ in frame $i$ (ADU) | scalar, per pixel and per frame |
-| $z_{ip}$ | class of pixel $p$ in frame $i$ (0 = background) | $\{0, \ldots, K\}$, per pixel and per frame |
-| $\boldsymbol{\pi}_i$ | class proportions of frame $i$ | $\mathbb{R}^{K+1}$, one per frame |
+| $\mathbf{y}_n$ | recorded frame $n$ (ADU) | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $u_{ni}$ | specimen signal of pixel $i$ in frame $n$ (ADU) | scalar, per pixel and per frame |
+| $z_{ni}$ | class of pixel $i$ in frame $n$ (0 = background) | $\{0, \ldots, K\}$, per pixel and per frame |
+| $\boldsymbol{\pi}_n$ | class proportions of frame $n$ | $\mathbb{R}^{K+1}$, one per frame |
 | $\boldsymbol{\alpha}$ | Dirichlet concentrations of the proportions | $\mathbb{R}^{K+1}$, per group |
 | $\mu_k$, $\nu_k$ | mean and shape of tissue class $k$ | scalars, per class, per group |
-| $\mathbf{c}$ | offset of an empty pixel (dark field) | $\mathbb{R}^P$, per pixel, shared by all frames |
-| $\mathbf{v}$ | variance of an empty pixel | $\mathbb{R}^P$, per pixel, shared by all frames |
-| $\mathbf{f}$ | flat field, $\exp(\boldsymbol{\Phi}\boldsymbol{\theta})$ | $\mathbb{R}^P$, shared by all frames |
+| $\mathbf{c}$ | offset of an empty pixel (dark field) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel, shared by all frames |
+| $\mathbf{v}$ | variance of an empty pixel | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel, shared by all frames |
+| $\mathbf{f}$ | flat field, $\exp(\boldsymbol{\Phi}\boldsymbol{\theta})$ | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames |
 | $\boldsymbol{\theta}$ | DCT coefficients of $\log \mathbf{f}$ | $\mathbb{R}^M$, per group |
 | $\boldsymbol{\kappa}$, $\lambda$ | bending energies of the basis and prior precision | $\mathbb{R}^M$ and scalar |
 | $g$ | camera gain (held at its nominal value) | scalar, for the whole stack |
-| $\nu_v$, $v_0$ | strength and value of the prior on $v_p$ | scalars |
+| $\nu_v$, $v_0$ | strength and value of the prior on $v_i$ | scalars |
 | $\Delta$ | quantisation bin width | scalar |
 
 After fitting, `concentration_` holds the concentrations
-$\boldsymbol{\alpha}_i$ of $q(\boldsymbol{\pi}_i)$ for every training frame,
+$\boldsymbol{\alpha}_n$ of $q(\boldsymbol{\pi}_n)$ for every training frame,
 and `apply(..., output="mean")` returns the posterior mean
 $\mathbb{E}[u \mid y]$ of the signal of each pixel (0 in the background).
 
 ## Inference / derivation
 
 The scheme is variational Bayes with a mean-field (factorised) posterior over
-the local latent variables $\boldsymbol{\pi}_i$, $z_{ip}$, $u_{ip}$, and point
+the local latent variables $\boldsymbol{\pi}_n$, $z_{ni}$, $u_{ni}$, and point
 estimates (Dirac factors) for the global parameters: a variational EM, whose
 E-step is a mean-field VB update and whose M-step is a MAP update of
 $\mathbf{c}, \mathbf{v}, \boldsymbol{\theta}$ (under their priors) and a
@@ -123,7 +123,7 @@ type-II maximum-likelihood (empirical Bayes) update of $\boldsymbol{\mu}$,
 $\boldsymbol{\nu}$, $\boldsymbol{\alpha}$. The posterior is approximated by
 
 $$
-q = \prod_i q(\boldsymbol{\pi}_i)\ \prod_{i,p} q(z_{ip})\, q(u_{ip} \mid z_{ip})
+q = \prod_n q(\boldsymbol{\pi}_n)\ \prod_{n,\,i} q(z_{ni})\, q(u_{ni} \mid z_{ni})
 \ \cdot\ \delta(\mathbf{c}, \mathbf{v}, \boldsymbol{\theta}, \boldsymbol{\mu}, \boldsymbol{\nu}, \boldsymbol{\alpha}),
 $$
 
@@ -131,7 +131,7 @@ and the evidence lower bound is raised by alternating:
 
 - **local step**: $q(z, u)$ is exact given the rest; the integral over $u$
   is a Gauss-Hermite quadrature in $\log u$, centred on the mode of the
-  integrand. $q(\boldsymbol{\pi}_i)$ is Dirichlet (conjugate update).
+  integrand. $q(\boldsymbol{\pi}_n)$ is Dirichlet (conjugate update).
 - **class step**: $\mu_k$, $\nu_k$ are refitted to the aggregated posterior
   of $u$ in each class, $\nu_k$ kept in `nu_bounds`; $\boldsymbol{\alpha}$ by
   [Minka's fixed-point Newton method](https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/).
@@ -150,7 +150,7 @@ flat field and a k-means of the classes on $\log y$.
 
 ## Algorithm
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$ (per
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$ (per
 group), gain $g$; defaults `nclass=1`, `order=(8, 8)`, `nodes=24`,
 `max_iterations=100`, `tol=1e-6`, `lam=1`. \
 **Output:** `SensorEstimate` $(\mathbf{c}, \mathbf{v}, g)$, `ShadingEstimate`
@@ -164,13 +164,13 @@ For each group of a layout:
 2. **Repeat** until the bound improves by less than `tol` per data point, or
    `max_iterations` is reached:
     1. **local step** (one pass over the frames): $q(z, u)$ by Gauss-Hermite
-       quadrature, $q(\boldsymbol{\pi}_i)$ Dirichlet;
+       quadrature, $q(\boldsymbol{\pi}_n)$ Dirichlet;
     2. **class step:** update $\mu_k$, $\nu_k$ of each class, and
        $\boldsymbol{\alpha}$ by Minka's method;
     3. **field step:** one Fisher-scoring step in
        $(\mathbf{c}, \mathbf{v}, \boldsymbol{\theta})$, halved if the bound drops.
 
-`apply` returns $\hat{\mathbf{x}}_i = (\mathbf{y}_i - \mathbf{c}) / \mathbf{f}$,
+`apply` returns $\hat{\mathbf{x}}_n = (\mathbf{y}_n - \mathbf{c}) / \mathbf{f}$,
 or the foreground or class probabilities, or $\mathbb{E}[u \mid y]$.
 
 ## Faithful mode and extensions

@@ -34,7 +34,7 @@ baseline:
 === "optix"
 
     $$
-    \mathbf{y}_i = \mathbf{f} \odot \mathbf{x}_i + \mathbf{d}
+    \mathbf{y}_n = \mathbf{f} \odot \mathbf{x}_n + \mathbf{d}
     $$
 
 === "Smith et al. 2015"
@@ -49,8 +49,8 @@ distribution (below) and is stored as produced (`meta["flat_norm"] == "none"`).
 rescales by the mean gain $\bar{f}$ ("dynamic range corrected"):
 
 $$
-\hat{\mathbf{x}}_i
-= \underbrace{\frac{\mathbf{y}_i - \mathbf{d}}{\mathbf{f}}}_{\text{direct}}
+\hat{\mathbf{x}}_n
+= \underbrace{\frac{\mathbf{y}_n - \mathbf{d}}{\mathbf{f}}}_{\text{direct}}
 \,\underbrace{\bar{f}}_{\text{dynamic range}}
 \;\underbrace{+\;\bar{d}}_{\text{zero light}} .
 $$
@@ -59,15 +59,15 @@ $$
 multiplies it by $\bar{f}$, and `"zero_light"` also adds $\bar{d}$, the mean
 dark field.
 
-Frames have $P$ pixels, flattened into vectors; products and divisions of
+Frames have $\lvert\Omega\rvert$ pixels, flattened into vectors; products and divisions of
 vectors are pixel-wise.
 
 | optix | [Smith et al. 2015](https://doi.org/10.1038/nmeth.3323) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}_i$ | $I_o$ | recorded image $i$ | $\mathbb{R}^P$, one per frame |
-| $\mathbf{x}_i$ | $I$ | latent (shading-free) image $i$ | $\mathbb{R}^P$, one per frame |
-| $\mathbf{f}$ | $v$ | illumination gain (flat field) | $\mathbb{R}^P$, shared by all frames of a group |
-| $\mathbf{d}$ | $z$ | zero-light term (dark field) | $\mathbb{R}^P$, shared by all frames of a group |
+| $\mathbf{y}_n$ | $I_o$ | recorded image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{x}_n$ | $I$ | latent (shading-free) image $n$ | $\mathbb{R}^{\lvert\Omega\rvert}$, one per frame |
+| $\mathbf{f}$ | $v$ | illumination gain (flat field) | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
+| $\mathbf{d}$ | $z$ | zero-light term (dark field) | $\mathbb{R}^{\lvert\Omega\rvert}$, shared by all frames of a group |
 | $\bar{f}$, $\bar{d}$ | | spatial means of $\mathbf{f}$ and $\mathbf{d}$ | scalars, per group |
 | $\mathbf{r}$ | $x$ | pixel position | 2-D coordinate |
 
@@ -80,7 +80,7 @@ transform of one distribution $\mathbf{Q}$ common to all pixels:
 === "optix"
 
     $$
-    q_n(\mathbf{r}) = f(\mathbf{r})\,Q_n + c(\mathbf{r}), \qquad
+    q_m(\mathbf{r}) = f(\mathbf{r})\,Q_m + c(\mathbf{r}), \qquad
     \mathbf{c} = \mathbf{d} - \mathbf{f}\,Z_Q
     $$
 
@@ -94,7 +94,7 @@ transform of one distribution $\mathbf{Q}$ common to all pixels:
     b(x) = z(x) - v(x)\,Z_Q \tag{8}
     $$
 
-with $n = 1 \ldots K$ the quantile levels ($K = 100$ by default),
+with $m = 1 \ldots K$ the quantile levels ($K = 100$ by default),
 $\mathbf{q}(\mathbf{r}) \in \mathbb{R}^K$ and $\mathbf{Q} \in \mathbb{R}^K$, and
 $(Z_Q, Z_q)$ the zero-light point,
 through which every line passes. $\mathbf{Q}$ is the robust mean of the
@@ -110,8 +110,8 @@ The fields minimise an energy, not a likelihood:
     $$
 
     $$
-    E_f = \sum_{\mathbf{r}} \sum_n \tfrac{w^2}{2}
-    \log\Bigl(1 + \bigl(\tfrac{Q_n f(\mathbf{r}) + c(\mathbf{r}) - q_n(\mathbf{r})}{w}\bigr)^2\Bigr),
+    E_f = \sum_{\mathbf{r}} \sum_m \tfrac{w^2}{2}
+    \log\Bigl(1 + \bigl(\tfrac{Q_m f(\mathbf{r}) + c(\mathbf{r}) - q_m(\mathbf{r})}{w}\bigr)^2\Bigr),
     \qquad
     E_r = \sum_{t \in T} \Bigl\lVert \tfrac{1}{\lvert T \rvert}\, t^2\, \nabla^2 G_t * \mathbf{f} \Bigr\rVert^2 ,
     $$
@@ -132,8 +132,8 @@ The fields minimise an energy, not a likelihood:
     regulariser $E_r$ (Eq. 11), the zero-light term $E_z$ (Eq. 12) and the
     barrier $E_b$ (Eqs. 13–14).
 
-Here $\mathbf{r}$ runs over the $P_w \le 128^2$ pixels of the working grid,
-on which $\mathbf{f}, \mathbf{c} \in \mathbb{R}^{P_w}$; $\lvert T \rvert$ is
+Here $\mathbf{r}$ runs over the $\lvert\Omega_w\rvert \le 128^2$ pixels of the working grid $\Omega_w$,
+on which $\mathbf{f}, \mathbf{c} \in \mathbb{R}^{\lvert\Omega_w\rvert}$; $\lvert T \rvert$ is
 the number of scales.
 
 - $E_f$ is a robust (Cauchy, width $w$) fit of the $K$ quantiles at every pixel.
@@ -148,7 +148,7 @@ the number of scales.
 |---|---|---|---|
 | $\mathbf{q}(\mathbf{r})$ | $q(x)$ | sorted intensities (quantiles) at pixel $\mathbf{r}$ | $\mathbb{R}^K$, per pixel |
 | $\mathbf{Q}$ | $Q$ | target distribution common to all pixels | $\mathbb{R}^K$, per group |
-| $\mathbf{c}$ | $b$ | intercept of the per-pixel line | $\mathbb{R}^{P_w}$, per group |
+| $\mathbf{c}$ | $b$ | intercept of the per-pixel line | $\mathbb{R}^{\lvert\Omega_w\rvert}$, per group |
 | $(Z_Q, Z_q)$ | $(Z_Q, Z_q)$ | zero-light point shared by all lines | two scalars, per group |
 | $\omega$ | $\omega$ | half-width of the central band of pixel means | scalar |
 | $w$, $w_b$ | | widths of the Cauchy fit and of the barrier | scalars |
@@ -184,13 +184,13 @@ zero-light point, constrained by $E_z$ and $E_b$.
 
 ## Algorithm
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$,
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$,
 optionally in groups. \
 **Output:** `ShadingEstimate` with $\hat{\mathbf{f}}$ and $\hat{\mathbf{d}}$.
 
 For each group:
 
-1. **Resample** each frame to the working grid (long side 128, $P_w$ pixels).
+1. **Resample** each frame to the working grid (long side 128, $\lvert\Omega_w\rvert$ pixels).
 2. **Summarise** each pixel by $K = 100$ quantiles $\mathbf{q}(\mathbf{r})$
    (exact, or from per-pixel histograms) and divide by the maximum intensity.
 3. **Target** $\mathbf{Q}$: robust mean over the central band, $\omega = 0.25$.
@@ -237,8 +237,8 @@ Interpretations of the paper and choices it leaves open:
 CIDRE is tagged `per-pixel-stats`. The fit makes one pass over the data, plus
 a second one when the quantiles come from per-pixel histograms
 (`quantile_method="histogram"`, or `"auto"` when the resampled stack does not
-fit the memory budget). Memory is then $O(P_w \cdot \texttt{bins})$ on the
-working grid ($P_w \le 128^2$), independent of the number of frames; the
+fit the memory budget). Memory is then $O(\lvert\Omega_w\rvert \cdot \texttt{bins})$ on the
+working grid ($\lvert\Omega_w\rvert \le 128^2$), independent of the number of frames; the
 energy has at most $K$ terms per pixel. [`apply`](../../reference/shading.md)
 works on frame batches. Tune `working_size`, `quantiles` and `bins`.
 

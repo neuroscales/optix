@@ -619,8 +619,8 @@ class MultiviewRL(Estimator):
           iterations by the test of
           [Lucy (1974)](https://doi.org/10.1086/111605) on all views:
           stop once P(χ² > χ²_obs) ≥ `alpha`, with χ²_obs =
-          ∑ᵥ ∑ᵢ (yᵥᵢ − μᵥᵢ)²/μᵥᵢ, μᵥ = Hᵥ f, and ν = N n − 1 degrees of
-          freedom (n pixels per view), capped at `max_iter`. The test
+          ∑ᵥ ∑ᵢ (yᵥᵢ − μᵥᵢ)²/μᵥᵢ, μᵥ = Hᵥ f, and ν = N |Ω| − 1 degrees
+          of freedom (|Ω| pixels per view), capped at `max_iter`. The test
           assumes counts.
 
     !!! warning "Approximations"

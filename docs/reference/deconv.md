@@ -15,9 +15,21 @@ Deconvolution with a known point spread function.
         - Snyder
         - WienerButterworth
         - BiggsAndrews
+        - NagyOLeary
         - MultiviewRL
         - Wiener
         - Tikhonov
+
+## Shift-variant PSF models
+
+::: optix.deconv
+    options:
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      members:
+        - NagyOLearyPSF
+        - DenisPSF
 
 ## Transforms
 
@@ -31,6 +43,7 @@ Deconvolution with a known point spread function.
         - richardson_lucy_tv
         - wiener_butterworth
         - biggs_andrews
+        - nagy_oleary
         - multiview_rl
         - wiener
         - tikhonov
@@ -47,6 +60,13 @@ Deconvolution with a known point spread function.
       show_root_toc_entry: false
       members:
         - PaddedConvolution
+        - ShiftVariantConvolution
+        - ShiftVariantPSF
+        - interpolation_weights
+        - object_positions
+        - optimal_circulant
+        - RegionPreconditioner
+        - cgls
         - next_fast_len
         - transfer_function
         - smooth_periodic_extension

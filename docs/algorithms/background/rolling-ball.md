@@ -1,11 +1,11 @@
 # Rolling ball
 
 !!! info "At a glance"
-    **Estimates:** the background of an image or volume, and the image minus it \
-    **Noise model:** none \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Sternberg, Computer, 1983, [doi:10.1109/MC.1983.1654163](https://doi.org/10.1109/MC.1983.1654163)
+    - **Estimates:** the background of an image or volume, and the image minus it
+    - **Noise model:** none
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Sternberg, Computer, 1983, [doi:10.1109/MC.1983.1654163](https://doi.org/10.1109/MC.1983.1654163)
 
 ## Overview
 
@@ -49,7 +49,8 @@ assumption on the camera or the illumination beyond their smoothness:
     A(x, y) = \text{spots}(x, y) + \text{background}(x, y)
     $$
 
-The image $\mathbf{y}$ is the sum of the features $\mathbf{x} \ge 0$ and a
+The image $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$, one frame of
+$\lvert\Omega\rvert$ pixels (each frame of a stack is treated alone), is the sum of the features $\mathbf{x} \ge 0$ and a
 background $\boldsymbol{\beta}$ that is smooth with respect to the ball while
 the features are not ([Sternberg 1983, p. 29](https://doi.org/10.1109/MC.1983.1654163)).
 The paper does not write this sum as an equation; it describes the gel image as
@@ -92,17 +93,17 @@ inside the umbra, and its upper surface is the background.
     with $C = A \ominus B_k$ and $D = (A \ominus B) \oplus B = A_B$ (p. 30);
     the background image is $D$ and the result is $A - D$ (Fig. 9).
 
-| optix | [Sternberg 1983](https://doi.org/10.1109/MC.1983.1654163) |
-|---|---|
-| $\mathbf{y}$, $y(\mathbf{r})$ | $A$, $A(x, y)$ |
-| $\mathbf{r}$ | $(x, y)$ |
-| $\mathbf{u}$ | $(-i, -j)$ in the erosion, $(i, j)$ in the dilation |
-| $B(\mathbf{u})$ | $B_k(i, j)$, the grey level of the element |
-| $\mathbf{y} \ominus B$ | $C = A \ominus B_k$ |
-| $\boldsymbol{\beta}$ | $D = A_B$, the "background image" |
-| $\hat{\mathbf{x}}$ | background-normalised image |
-| $\rho$ | not named: half the "sphere diameter" of the paper (p. 29), as $\rho$ is a radius |
-| $B$ | $B = (B_1 \oplus \cdots \oplus B_K)$, the composite element of the sequence $B_1, \ldots, B_K$ |
+| optix | [Sternberg 1983](https://doi.org/10.1109/MC.1983.1654163) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}$, $y(\mathbf{r})$ | $A$, $A(x, y)$ | recorded image; its value at position $\mathbf{r}$ | $\lvert\Omega\rvert$, one per frame |
+| $\mathbf{r}$ | $(x, y)$ | pixel position | $p$ integers (one per spatial axis) |
+| $\mathbf{u}$ | $(-i, -j)$ in the erosion, $(i, j)$ in the dilation | offset within the element | $p$ integers |
+| $B(\mathbf{u})$ | $B_k(i, j)$ | height (grey level) of the element at offset $\mathbf{u}$ | one per offset, one element for the whole stack |
+| $\mathbf{y} \ominus B$ | $C = A \ominus B_k$ | eroded image: height of the apex of the ball | $\lvert\Omega\rvert$, one per frame |
+| $\boldsymbol{\beta}$ | $D = A_B$, the "background image" | background, the opening of the image | $\lvert\Omega\rvert$, one per frame |
+| $\hat{\mathbf{x}}$ | $A - D$ | background-normalised image | $\lvert\Omega\rvert$, one per frame |
+| $\rho$ | half the "sphere diameter" (p. 29) | radius of the ball, in pixels and grey levels | scalar, one for the whole stack |
+| $B$ | $B_1 \oplus \cdots \oplus B_K$ | structuring element, composite of the sequence $B_1, \ldots, B_K$ | offsets within radius $\rho$, one for the whole stack |
 
 The paper builds its element as a sequence of small elements $B_1, \ldots, B_K$,
 applied one after the other, and relies on the identities
@@ -129,8 +130,8 @@ B(\mathbf{u}) = \sqrt{\rho^2 - \lVert \mathbf{u} \rVert^2} - \rho,
 $$
 
 on the integer offsets $\mathbf{u}$, and $-\infty$ elsewhere (those offsets are left out). The shift by $-\rho$ makes $B(\mathbf{0}) = 0$; an opening does not
-depend on it. For an image ($n = 2$) the ball has three dimensions, the two of
-the image plane and the grey level; for a volume ($n = 3$) it has four.
+depend on it. For an image ($p = 2$ spatial axes) the ball has three dimensions, the two of
+the image plane and the grey level; for a volume ($p = 3$) it has four.
 
 **The flat element.** For a flat element $S$ ($B = 0$ on $S$), the same formulas
 reduce to a minimum then a maximum filter over $S$, which is the top-hat of
@@ -150,7 +151,10 @@ $$
 ## Inference / derivation
 
 There is no estimation: the background follows from the image by the two
-filters above. The reasoning of the paper (Fig. 10) is geometric:
+filters above. The method has no statistical counterpart (no likelihood or
+prior is optimised); the opening is the largest function below $\mathbf{y}$
+that is a union of translates of $B$, a deterministic envelope rather than an
+estimator. The reasoning of the paper (Fig. 10) is geometric:
 
 - The erosion $\mathbf{y} \ominus B$ is the height of the apex of the ball (the top
   of its umbra, where $B = 0$) as it is pushed up against the underside of the
@@ -175,17 +179,21 @@ is the halo that makes block-wise processing exact (see
 
 ## Algorithm
 
-```text
-Input: image or volume y, radius ρ > 0 (ball) or half-width k (flat element)
-Build the element B on the integer offsets u, ‖u‖ ≤ ρ  (or the disk / square of k)
-1. c(r) = min over u of [ y(r + u) − B(u) ]        (erosion)
-2. β(r) = max over u of [ c(r − u) + B(u) ]        (dilation)
-3. β = min(β, y)
-Return y − β  (or β with output="background")
-```
+**Input:** an image or volume $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$
+with $p \le 3$ spatial axes; the radius $\rho > 0$ of the ball, or the
+half-width of a flat disk or square for `TopHat`; `output="corrected"`. \
+**Output:** $\hat{\mathbf{x}} = \mathbf{y} - \boldsymbol{\beta}$, or
+$\boldsymbol{\beta}$ with `output="background"`.
+
+1. **Build** the element $B(\mathbf{u})$ on the integer offsets
+   $\lVert \mathbf{u} \rVert \le \rho$ (or $B = 0$ on the disk or square).
+2. **Erode:** $c(\mathbf{r}) = \min_{\mathbf{u}} \bigl[\, y(\mathbf{r} + \mathbf{u}) - B(\mathbf{u}) \,\bigr]$.
+3. **Dilate:** $\beta(\mathbf{r}) = \max_{\mathbf{u}} \bigl[\, c(\mathbf{r} - \mathbf{u}) + B(\mathbf{u}) \,\bigr]$.
+4. **Cap:** $\boldsymbol{\beta} \leftarrow \min(\boldsymbol{\beta}, \mathbf{y})$, pixel-wise.
+5. **Return** $\mathbf{y} - \boldsymbol{\beta}$ (or $\boldsymbol{\beta}$).
 
 Offsets that fall outside the image are left out of the minimum and the maximum.
-Step 3 changes nothing in exact arithmetic, as the opening never exceeds $\mathbf{y}$;
+Step 4 changes nothing in exact arithmetic, as the opening never exceeds $\mathbf{y}$;
 it removes the rounding error of $(\mathbf{y} - B) + B$ in floating point, so that
 the result is never negative.
 
@@ -216,8 +224,8 @@ background subtraction of ImageJ and do not reproduce its output bit for bit:
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
-| `shrink` | $s \ge 1$: take the minimum over cells of $s^n$ pixels, open that coarse image with the ellipsoid of lateral radius $\rho / s$ and height $\rho$, then interpolate the background linearly from the cell centres back to the pixel grid. The cost drops by about $s^{2n}$ | 1 | 1 |
-| `smooth` | open the $3^n$ mean of the image (edges replicated) instead of the image; the result is still the image minus the background | `False` | `False` |
+| `shrink` | $s \ge 1$: take the minimum over cells of $s^p$ pixels, open that coarse image with the ellipsoid of lateral radius $\rho / s$ and height $\rho$, then interpolate the background linearly from the cell centres back to the pixel grid. The cost drops by about $s^{2p}$ | 1 | 1 |
+| `smooth` | open the $3^p$ mean of the image (edges replicated) instead of the image; the result is still the image minus the background | `False` | `False` |
 
 With either, the background approximates the opening and is capped at the image.
 Sternberg's streak removal, by openings with a horizontal and a vertical bar, is
@@ -244,7 +252,7 @@ global grid, and the halo grows to $s\,(2\lfloor\rho/s\rfloor + 2 + [\text{smoot
 multiple of $s$ that covers the coarse opening, the cells and the interpolation
 ($[\text{smooth}]$ is 1 with `smooth=True` and 0 otherwise).
 
-The cost of the exact ball is $O(N \rho^n)$ for $N$ pixels, one operation per
+The cost of the exact ball is $O(\lvert\Omega\rvert\, \rho^p)$ for $\lvert\Omega\rvert$ pixels, one operation per
 offset of the ball. On one CPU thread, a $1024^2$ image takes about 0.4 s with
 $\rho = 10$ and 11 s with $\rho = 50$; `shrink=4` brings the latter to 0.03 s. A
 $128^3$ volume takes about 12 s with $\rho = 10$. The flat disk and square are

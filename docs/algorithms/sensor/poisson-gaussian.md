@@ -26,7 +26,7 @@ read-noise variance $\sigma^2$ unless the offset is zero (see below).
 ## Image formation (optics)
 
 The camera model of [Image formation and noise](../../concepts/image-formation.md):
-each pixel counts $n \sim \operatorname{Poisson}(\lambda)$ photoelectrons,
+each pixel counts $e \sim \operatorname{Poisson}(\lambda)$ photoelectrons,
 converted with gain $g$ and offset $o$ and corrupted by Gaussian read noise. The
 image may be clipped to the range of the format (saturation, and zero for
 offset-free data). Nothing about the optics is assumed: the scene only needs
@@ -35,7 +35,7 @@ smooth regions spanning several intensities.
 === "optix"
 
     $$
-    y = g\,n + o + \varepsilon, \qquad n \sim \operatorname{Poisson}(\lambda),\quad
+    y = g\,e + o + \varepsilon, \qquad e \sim \operatorname{Poisson}(\lambda),\quad
     \varepsilon \sim \mathcal{N}(0, \sigma^2)
     $$
 
@@ -64,14 +64,14 @@ Both parametrisations give a variance that is affine in the expectation:
     \sigma^2\bigl(y(x)\bigr) = a\,y(x) + b, \qquad a = \chi^{-1}
     $$
 
-Here $P$ is the number of pixels of a frame, $N$ the number of frames of a
+Here $\lvert\Omega\rvert$ is the number of pixels of a frame, $N$ the number of frames of a
 group, and $M$ the number of level sets (segments) found in a group.
 
 | optix | [Foi et al. 2008](https://doi.org/10.1109/TIP.2008.2001399) | Meaning | Shape |
 |---|---|---|---|
 | $y$ | $z$ (clipped: $\tilde z$) | recorded value of a pixel | scalar, per pixel and per frame |
 | $\mathbb{E}[y]$ | $y(x)$ | noise-free expectation of the pixel | scalar, per pixel |
-| $g\,(n - \lambda)$, $\varepsilon$ | $\eta_p$, $\eta_g$ | Poisson (signal-dependent) and Gaussian (read) noise | scalar, per pixel and per frame |
+| $g\,(e - \lambda)$, $\varepsilon$ | $\eta_p$, $\eta_g$ | Poisson (signal-dependent) and Gaussian (read) noise | scalar, per pixel and per frame |
 | $g$ | $a = \chi^{-1}$ | gain, slope of the variance function | scalar, one per group |
 | $\sigma^2 - g\,o$ | $b$ | variance extrapolated to zero expectation | scalar, one per group |
 | $(\hat y_j, \hat\sigma_j)$ | $(\hat y_i, \hat\sigma_i)$ | mean and noise standard deviation of level set $j$ | $\mathbb{R}^2$, one pair per segment, $M$ per group |
@@ -117,7 +117,7 @@ observed-information (Laplace) approximation of the ML estimator.
 
 ## Algorithm
 
-**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^P$ of one
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$ of one
 group (only frame `frame` unless `pooled=True`); `data_range`,
 $\Delta = 1/300$, $\tau = 0.25$, `max_iter` $= 500$, `tol` $= 10^{-10}$. \
 **Output:** $(\hat a, \hat b)$ in ADU for the group and their $2 \times 2$

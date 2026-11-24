@@ -32,7 +32,7 @@ illumination is uniform and stable within each level.
 === "optix"
 
     $$
-    y = g\,n + o + \varepsilon, \qquad n \sim \operatorname{Poisson}(\lambda),\quad
+    y = g\,e + o + \varepsilon, \qquad e \sim \operatorname{Poisson}(\lambda),\quad
     \varepsilon \sim \mathcal{N}(0, \sigma^2), \qquad \text{plus rounding to } \Delta = 1
     $$
 
@@ -60,12 +60,12 @@ The photon-transfer curve ([EMVA 1288 R4.0 Linear, Eq. (15)](https://www.emva.or
     \qquad \sigma_q^2 = \tfrac{1}{12}\ \text{DN}^2
     $$
 
-Here $L$ is the number of illumination levels and $P$ the number of pixels.
+Here $L$ is the number of illumination levels and $\lvert\Omega\rvert$ the number of pixels.
 
 | optix | [EMVA 1288](https://www.emva.org/wp-content/uploads/EMVA1288Linear_4.0Release.pdf) | Meaning | Shape |
 |---|---|---|---|
 | $g$ | $K$ | overall system gain (DN per e⁻) | scalar, one per group (per pixel with `per_pixel=True`) |
-| $o$ | $\mu_{y.\text{dark}}$ | dark mean (offset) | $\mathbb{R}^P$, per pixel (the dark mean image) |
+| $o$ | $\mu_{y.\text{dark}}$ | dark mean (offset) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel (the dark mean image) |
 | $\mathbb{E}[y]$, $\operatorname{var}[y]$ | $\mu_y$, $\sigma_y^2$ | spatially averaged mean and temporal variance | scalars, one pair per level and group |
 | $\sigma^2$ | $K^2 \sigma_d^2$ ($\sigma_d$ in e⁻) | read-noise variance | scalar, one per group |
 | $\sigma^2 + \tfrac{1}{12}$ | $\sigma_{y.\text{dark}}^2$ | dark temporal variance | scalar, one per group |
@@ -105,9 +105,9 @@ would account for their growth with the level).
 ## Algorithm
 
 **Input:** for each level $l = 1, \ldots, L$, at least two frames in
-$\mathbb{R}^P$; a dark stack; optionally the photon exposure of each level;
+$\mathbb{R}^{\lvert\Omega\rvert}$; a dark stack; optionally the photon exposure of each level;
 `fit_range` $= 0.7$, `saturation_fraction` $= 0.002$, `spline_intervals` $= 6$. \
-**Output:** `offset` (dark mean image, $\mathbb{R}^P$), `variance` $= \sigma^2$
+**Output:** `offset` (dark mean image, $\mathbb{R}^{\lvert\Omega\rvert}$), `variance` $= \sigma^2$
 (DN²) and `gain` $= K$, one per group; DSNU, PRNU and linearity in `meta`.
 
 1. **Stream** every stack once, accumulating pair statistics and per-pixel moments.

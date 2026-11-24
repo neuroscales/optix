@@ -62,7 +62,7 @@ Y = y.numpy()
 
 `Y` is what a file reader would hand you: 100 frames of 64 by 80 pixels, as
 unsigned 16-bit integers. The pixel values follow the model
-$y = g\,\mathrm{Poisson}(n) + o + \varepsilon$ described in
+$y = g\,\mathrm{Poisson}(\lambda) + o + \varepsilon$ described in
 [Image formation and noise](../concepts/image-formation.md).
 
 ## An estimator
