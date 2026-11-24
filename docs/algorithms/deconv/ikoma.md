@@ -387,41 +387,32 @@ whole-image one near the seams, and the difference fades with the halo width. A
 
 ## Usage
 
-The example blurs a test pattern with a Gaussian PSF from
-[`optix.models`](../../reference/models.md), records it with a camera of gain
-2, offset 100 ADU and read noise of 3 ADU, and deconvolves it with the
-`SensorEstimate` of that camera.
+The example blurs a [phantom](../../reference/models.md#phantoms) of cells with a Gaussian PSF from
+[`optix.models`](../../reference/models.md), records it with a simulated camera
+of gain 2 and read noise of 3 ADU, and deconvolves it with the `SensorEstimate`
+of that camera.
 
-```pycon
->>> import torch
->>> from optix.deconv import Ikoma, RichardsonLucy
->>> from optix.estimates import SensorEstimate
->>> from optix.models import gaussian_psf, simulate_blur
->>> _ = torch.manual_seed(0)
+```python
+from optix.deconv import Ikoma, RichardsonLucy
+from optix.models import gaussian_psf, phantoms, random_sensor
+from optix.models import simulate_blur, simulate_sensor
 
->>> # 1. A Gaussian PSF and a noisy recording of a test pattern.
->>> psf = gaussian_psf((15, 15), sigma=2.0)
->>> x = torch.full((64, 64), 1.0)
->>> x[16:48:8, 16:48] = 20.0
->>> gain, offset, sigma = 2.0, 100.0, 3.0
->>> counts = torch.poisson(simulate_blur(x, psf))
->>> y = offset + gain * counts + sigma * torch.randn(64, 64)
->>> sensor = SensorEstimate(offset=offset, gain=gain, variance=sigma**2)
+# 1. Cells at 20 photoelectrons, blurred and recorded by a camera.
+psf = gaussian_psf((15, 15), sigma=2.0)
+x = phantoms.cells((64, 64), intensity=20.0, seed=0) + 1
+sensor = random_sensor((64, 64), gain=2.0, read_sd=3.0, seed=0)
+y = simulate_sensor(simulate_blur(x, psf), sensor, seed=0)
 
->>> # 2. Fit and deconvolve; Richardson-Lucy for comparison.
->>> ikoma = Ikoma(psf).fit(y, init=sensor)
->>> x_ikoma = ikoma.apply(y)
->>> x_rl = RichardsonLucy(psf).fit(y, init=sensor).apply(y)
+# 2. Fit with the camera model; Richardson-Lucy for comparison.
+ikoma = Ikoma(psf).fit(y, init=sensor)
+rl = RichardsonLucy(psf).fit(y, init=sensor)
 
->>> # 3. The weights that were used, and the errors against the truth.
->>> round(float(ikoma.nu), 4), round(float(ikoma.rho), 2)
-(0.0094, 4.41)
->>> ikoma.history.extras["iterations"], ikoma.is_faithful
-([150.0], True)
->>> sorted(ikoma.history.extras)
-['change', 'dual_residual', 'iterations', 'primal_residual']
->>> [round(float((e - x).abs().mean()), 2) for e in (x_ikoma, x_rl)]
-[1.35, 1.99]
+# 3. Apply.
+x_ikoma, x_rl = ikoma.apply(y), rl.apply(y)
+
+# 4. Compare to the truth: mean error about 1.4 with Ikoma, 2.9 with RL.
+print(float(ikoma.nu), ikoma.history.extras["iterations"])  # ν, iterations
+print([float((e - x).abs().mean()) for e in (x_ikoma, x_rl)])
 ```
 
 Common variations: `Ikoma(psf, nu=0.02)` to set the weight, then

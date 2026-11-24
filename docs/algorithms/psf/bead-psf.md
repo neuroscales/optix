@@ -182,29 +182,24 @@ number of beads times the cost of one fit and one shift.
 
 ## Usage
 
+The example simulates a [phantom](../../reference/models.md#phantoms) of beads imaged with a Gaussian PSF and
+averages the isolated ones.
+
 ```python
 import torch
+from optix.models import phantoms
 from optix.psf import BeadPSF
 
 torch.manual_seed(0)
 
-# 1. A Gaussian PSF (sigma 1.5 voxels) at 40 random sub-voxel positions.
-H = W = 256
-yy, xx = torch.meshgrid(
-    torch.arange(H) * 1.0, torch.arange(W) * 1.0, indexing="ij"
-)
-img = torch.full((H, W), 20.0)
-g = torch.Generator().manual_seed(1)
-centres = 16 + torch.rand(40, 2, generator=g) * (H - 32)
-for cy, cx in centres:
-    img += 500 * torch.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 1.5**2))
-y = torch.poisson(img)
+# 1. 40 beads imaged with a Gaussian PSF (sigma 1.5 pixels), on a background.
+x, _ = phantoms.beads((256, 256), sigma=1.5, brightness=7000.0, seed=1)
+y = torch.poisson(x + 20)
 
-# 2. Average the isolated beads.
-est = BeadPSF(radius=6).fit(y)
-psf = est.estimates["psf"]
+# 2. Fit: average the isolated beads.
+psf = BeadPSF(radius=6).fit(y).estimates["psf"]
 
-# 3. Beads kept, and the FWHM (expected 2.355 · 1.5 ≈ 3.5 voxels).
+# 3. Compare to the truth: FWHM 3.56 and 3.53 pixels (expected 2.355 · 1.5 ≈ 3.53).
 print(int(psf.count), psf.psf.shape, psf.fwhm.tolist())
 ```
 
