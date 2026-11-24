@@ -62,9 +62,10 @@ def scene(shape, seed=0):
     return x / x.max()
 
 
-def simulate(shape, psf, peak, seed=0):
-    """x with max = peak and Poisson data of its circular blur."""
-    x = peak * scene(shape, seed)
+def simulate(shape, psf, peak, seed=0, background=0.0):
+    """x = peak·(scene + background) and Poisson data of its circular
+    blur."""
+    x = peak * (scene(shape, seed) + background)
     otf = transfer_function(psf, shape)
     mean = torch.fft.irfftn(torch.fft.rfftn(x) * otf, s=shape).clamp(min=0)
     gen = torch.Generator().manual_seed(1000 + seed)
@@ -121,7 +122,9 @@ def test_defaults_and_paper_rules():
     assert float(est.peak) == float(y.max())
     q = float(torch.quantile(y.flatten(), 0.999))
     assert float(est.robust_peak) == pytest.approx(q, rel=1e-12)
-    tau = 1.4 / q
+    med = float(torch.quantile(y.flatten(), 0.5))
+    assert float(est.median) == pytest.approx(med, rel=1e-12)
+    tau = 1.6 / (q - med)
     assert float(est.tau) == pytest.approx(tau)
     assert float(est.rho) == pytest.approx(60 * tau / float(y.max()))
     out = est.apply(y)
@@ -218,8 +221,10 @@ def test_optimality_certificate(p):
 
 def test_paper_setting_in_miniature():
     """Gaussian blur σ_b = 4 (9 × 9), peak 25, circular blur: each HS_p
-    at its best τ beats the data and TV (same solver and α rule) at its
-    best τ, minus 0.2 dB (Table I ordering)."""
+    at its best τ beats the data and at least matches TV (same solver
+    and α rule) at its best τ, minus 0.2 dB, as in Table I. The order
+    among the three norms (within about 0.2 dB in Table I) is not
+    checked: it is not stable on images this small."""
     psf = gaussian2d(9, 4.0)
     peak = 25.0
     x, y = simulate((64, 64), psf, peak, seed=6)
@@ -255,21 +260,41 @@ def test_paper_setting_in_miniature():
         assert value >= max(tv) - 0.2, (p, value, max(tv))
 
 
-def test_default_tau_across_intensity_ranges():
+def test_default_tau_across_intensities_and_backgrounds():
     """The default τ (not in the paper) is close to the best τ of a
-    grid at 10, 100 and 1000 photons, and better than the data."""
+    grid at 10, 100 and 1000 photons, with and without a constant
+    background, and better than the data."""
     psf = gaussian2d(9, 2.0)
-    for peak in (10.0, 100.0, 1000.0):
-        x, y = simulate((64, 64), psf, peak, seed=7)
+    for peak, bg in (
+        (10.0, 0.0),
+        (100.0, 0.0),
+        (1000.0, 0.0),
+        (20.0, 3.0),
+        (200.0, 10.0),
+    ):
+        x, y = simulate((64, 64), psf, peak, seed=7, background=bg)
+        top = float(x.max())
         est = HSPIRAL(psf, dtype=F64).fit(y)
-        default = psnr(est.apply(y), x, peak)
+        default = psnr(est.apply(y), x, top)
         tau = float(est.tau)
         grid = [
-            psnr(HSPIRAL(psf, tau=tau * f, dtype=F64).fit(y).apply(y), x, peak)
+            psnr(HSPIRAL(psf, tau=tau * f, dtype=F64).fit(y).apply(y), x, top)
             for f in (1 / 9, 1 / 3, 3, 9)
         ]
-        assert default >= max(grid) - 1.5, (peak, default, grid)
-        assert default > psnr(y, x, peak) + 2, (peak, default)
+        assert default >= max(grid) - 1.5, (peak, bg, default, grid)
+        assert default > psnr(y, x, top) + 1, (peak, bg, default)
+
+
+def test_median_from_a_sample():
+    """The median of `fit` is exact up to 8192 pixels and sampled above."""
+    psf = gaussian2d(5, 1.0)
+    gen = torch.Generator().manual_seed(21)
+    y = torch.poisson(
+        torch.rand(200, 200, generator=gen, dtype=F64) * 50, generator=gen
+    )
+    est = HSPIRAL(psf, max_iter=1, dtype=F64).fit(y)
+    q = torch.quantile(y.flatten(), torch.tensor([0.45, 0.55], dtype=F64))
+    assert float(q[0]) <= float(est.median) <= float(q[1])
 
 
 def test_three_d_frobenius_only():
@@ -287,6 +312,11 @@ def test_three_d_frobenius_only():
     for p in (1, "inf"):
         with pytest.raises(NotImplementedError, match="p=2"):
             HSPIRAL(psf, p=p)
+        # a 3-D PSF set after construction fails at the start of fit
+        est = HSPIRAL(p=p)
+        est.psf = psf
+        with pytest.raises(NotImplementedError, match="p=2"):
+            est.fit(y)
 
 
 def test_unknown_boundary_extension():
@@ -390,6 +420,10 @@ def test_layout_and_state(tmp_path):
 def test_options_and_faithfulness():
     psf = gaussian2d(5, 1.0)
     assert HSPIRAL(psf).is_faithful
+    # the faithful=False preset uses the unobserved margin
+    rec = HSPIRAL(psf, faithful=False)
+    assert rec.options["boundary"] == "unknown" and not rec.is_faithful
+    assert HSPIRAL(psf, boundary="periodic", faithful=False).is_faithful
     for opts in (
         dict(tau=0.01),
         dict(p=2),

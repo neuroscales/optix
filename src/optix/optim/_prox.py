@@ -232,7 +232,7 @@ def _eig2(v: Tensor, dim: int) -> tuple[Tensor, Tensor, Tensor]:
     """m, r and the off-centre part of packed symmetric 2 × 2 matrices.
 
     v holds (a, d, √2·b) along `dim`, for X = [[a, b], [b, d]]. The
-    eigenvalues are λ± = m ± r with m = (a + d)/2 and
+    eigenvalues are μ± = m ± r with m = (a + d)/2 and
     r = √(((a − d)/2)² + b²) ≥ 0. Returns m, r (size-1 dims along `dim`)
     and X − m·I in packed form.
     """
@@ -253,8 +253,8 @@ def schatten_norm(v: Tensor, p: float | str, *, dim: int = 0) -> Tensor:
     components. The singular values of X are the absolute values of its
     eigenvalues, so
 
-        ‖X‖_{S₁} = ∑ |λᵢ|,   ‖X‖_{S₂} = ‖X‖_F = ‖v‖₂,
-        ‖X‖_{S∞} = maxᵢ |λᵢ|.
+        ‖X‖_{S₁} = ∑ |μᵢ|,   ‖X‖_{S₂} = ‖X‖_F = ‖v‖₂,
+        ‖X‖_{S∞} = maxᵢ |μᵢ|.
 
     For d = 2 the eigenvalues are computed in closed form (Lefkimmiatis,
     Bourquard & Unser 2012, Eq. 15); p = 2 is available for any d;
@@ -316,15 +316,15 @@ def prox_schatten(
       written out: the paper states it for t = 1, and c = t·γ(σ/t).
 
     For symmetric 2 × 2 matrices no decomposition is computed: the
-    eigenvalues λ± = m ± r (m the mean of the diagonal, r ≥ 0 half
+    eigenvalues μ± = m ± r (m the mean of the diagonal, r ≥ 0 half
     their gap), whose absolute values are the singular values, are
-    mapped to λ̂± by the ℓ_p prox with their signs kept, and
+    mapped to μ̂± by the ℓ_p prox with their signs kept, and
 
-        X̂ = m̂·I + (r̂/r)·(X − m·I),   m̂ = (λ̂₊ + λ̂₋)/2,
-        r̂ = (λ̂₊ − λ̂₋)/2,
+        X̂ = m̂·I + (r̂/r)·(X − m·I),   m̂ = (μ̂₊ + μ̂₋)/2,
+        r̂ = (μ̂₊ − μ̂₋)/2,
 
     which keeps the eigenvectors of X (X̂ = m̂·I where r = 0). The
-    proxes are monotone in λ, so λ̂₊ ≥ λ̂₋ and 0 ≤ r̂ ≤ r.
+    proxes are monotone in μ, so μ̂₊ ≥ μ̂₋ and 0 ≤ r̂ ≤ r.
 
     The packing is that of [`Hessian`][optix.optim.Hessian] (diagonal
     entries, then √2 times the off-diagonal ones), an isometry for the
@@ -364,7 +364,7 @@ def prox_schatten(
             "matrices (2-D images) only; use p=2"
         )
     m, r, dev = _eig2(v, dim)
-    hi, lo = m + r, m - r  # λ₊ ≥ λ₋
+    hi, lo = m + r, m - r  # μ₊ ≥ μ₋
     s1, s2 = hi.abs(), lo.abs()
     if p == 1:
         n1 = (s1 - t).clamp(min=0)

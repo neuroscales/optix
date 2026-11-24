@@ -26,8 +26,9 @@ from ._variational import _Problem, _Variational
 __all__ = ["HSPIRAL", "hspiral"]
 
 _BOUNDARY = ("periodic", "unknown")
-#: Constant κ of the default weight τ = κ / q₉₉.₉(y) (not in the paper).
-_KAPPA = 1.4
+#: Constant κ of the default weight τ = κ / (q₉₉.₉(y) − q₅₀(y)) (not in
+#: the paper).
+_KAPPA = 1.6
 #: Working buffers of `admm_fft` per voxel of the FFT grid (measured
 #: peak), per number of Hessian components C: base + per_component·C.
 _GRID_BASE = 21.0
@@ -99,7 +100,8 @@ class HSPIRAL(_Variational):
     a larger grid (the block plus the PSF, as in
     [`Ikoma`][optix.deconv.Ikoma]), the Poisson term sums over the
     observed pixels only, and x⁰ is the data continued smoothly over the
-    margin; it avoids wrap-around artefacts on real images.
+    margin; it avoids wrap-around artefacts on real images and is the
+    default of the `faithful=False` preset.
 
     **Choices not specified in the paper.**
 
@@ -114,29 +116,40 @@ class HSPIRAL(_Variational):
     - The regularisation weight τ: the paper tunes τ per image for the
       best PSNR. The default here is
 
-          τ = κ / q₉₉.₉(y),   κ = 1.4,
+          τ = κ / (q₉₉.₉(y) − q₅₀(y)),   κ = 1.6,
 
       per image, with q₉₉.₉(y) the 99.9th percentile of the data
       (computed exactly in the one pass of `fit`; a hot pixel barely
-      changes it). The 1/scale factor is that of a MAP estimate whose
-      prior on the normalised image x/s (s the intensity scale) is the
-      same at every photon count: the Poisson log-likelihood is
-      homogeneous, ℓ(s x̂; s ŷ) = s ℓ(x̂; ŷ) up to a constant, so
-      ℓ(x; y) + κ‖H x/s‖ has the weight τ = κ/s.
+      changes it) and q₅₀(y) their median (from a uniform sample of 8192
+      pixels in the same pass, exact for smaller images). The
+      difference is a robust range of the signal above the background:
+      the Hessian ignores a constant, so it is the signal amplitude, not
+      the intensity, that sets the scale of the prior. The 1/scale
+      factor is that of a MAP estimate whose prior on the normalised
+      image x/s (s the signal scale) is the same at every photon count:
+      the Poisson log-likelihood is homogeneous, ℓ(s x̂; s ŷ) = s ℓ(x̂; ŷ)
+      up to a constant, so ℓ(x; y) + κ‖H x/s‖ has the weight τ = κ/s.
+      The rule needs q₉₉.₉(y) > q₅₀(y) (pass `tau` otherwise).
 
       κ was calibrated for the paper's α rule and stopping rule on
-      simulated 64 × 64 images with circular blur (Gaussian, σ_b = 2,
-      9 × 9; uniform 7 × 7): blobs, filaments, their mixture and
-      piecewise-smooth scenes, peaks of 10, 100 and 1000 photons, three
-      seeds each (72 cases for each of p = 1, 2, ∞). The best κ of a
-      grid (0.004 to 8, factor √2) hardly depends on the photon count,
-      which supports the 1/scale rule, but depends on the content:
-      about 0.2 to 0.5 for thin filaments, 1 to 6 for smooth blobs.
-      With κ = 1.4 the PSNR is on average 0.5 dB below that of the best
-      κ (at most 2.0, 3.0 and 3.9 dB for p = 1, 2, ∞, on blobs or
-      filaments) and at least 2 dB above that of the data (5 dB on
-      average). Pass `tau` to set the weight; the values used are in
-      `tau` and `rho` after `fit`.
+      simulated images with circular blur (Gaussian, σ_b = 2, 9 × 9;
+      uniform 7 × 7): blobs, filaments, their mixture and
+      piecewise-smooth scenes, peaks of 10, 100 and 1000 photons on a
+      constant background of 0, 1, 3 and 10 times the peak, 64 × 64
+      (two seeds) and 128 × 128 (one seed) pixels, 288 cases, against
+      a grid of τ (factor √2). Among the scales q₉₉.₉, q₉₉.₉ − q₁ and
+      q₉₉.₉ − q₅₀, the last gives the smallest mean and worst-case
+      loss; with q₉₉.₉ alone the best κ grows with the background (about
+      18 times from no background to 10 times the peak). The best κ
+      depends only weakly on the photon count for smooth content (blobs
+      and piecewise-smooth scenes: about 1.3 to 2.9 at every count) but
+      falls by up to 5 times for thin filaments between 10 and 1000
+      photons (about 1.6 to 0.3). With κ = 1.6 the PSNR is on
+      average 0.4 dB below that of the best τ of the grid (at most 2.4,
+      2.7 and 3.2 dB for p = 1, 2, ∞; the grid was searched with p = 1)
+      and at least 1.3 dB above that of the data (8 dB on average).
+      Pass `tau` to set the weight; the values used are in `tau` and
+      `rho` after `fit`.
 
     **Camera calibration** (not in the paper, which takes photon
     counts). With a [`SensorEstimate`][optix.estimates.SensorEstimate]
@@ -216,6 +229,9 @@ class HSPIRAL(_Variational):
         max y per image (M of the α rule).
     robust_peak : Tensor
         99.9th percentile q₉₉.₉(y) per image (used by the default τ).
+    median : Tensor
+        Median q₅₀(y) per image (used by the default τ), from a uniform
+        sample of 8192 pixels (exact for smaller images).
 
     Examples
     --------
@@ -243,7 +259,9 @@ class HSPIRAL(_Variational):
         "halo": None,
         "block": None,
     }
-    recommended = dict(paper)
+    #: `faithful=False` preset: the unobserved margin, which avoids the
+    #: wrap-around of the periodic boundary on real images.
+    recommended = {**paper, "boundary": "unknown"}
     #: Options that do not make an estimate unfaithful: τ is tuned per
     #: image and p ∈ {1, 2, ∞} are all compared in the paper; `halo` and
     #: `block` are memory settings.
@@ -275,8 +293,9 @@ class HSPIRAL(_Variational):
             of the spatial axes of the layout, centred at index
             `K // 2`. Normalised to unit sum.
         tau : float, optional
-            Regularisation weight τ ≥ 0. Default: 1.4 / q₉₉.₉(y) per
-            image (see above; not in the paper).
+            Regularisation weight τ ≥ 0. Default:
+            1.6 / (q₉₉.₉(y) − q₅₀(y)) per image (see above; not in the
+            paper).
         p : {1, 2, inf}
             Order of the Schatten norm. Default: 1 (all three are the
             paper's method; p ∈ {1, inf} needs a 2-D PSF).
@@ -288,7 +307,8 @@ class HSPIRAL(_Variational):
             Relative-change tolerance. Default (paper): 10⁻⁵.
         boundary : {"periodic", "unknown"}
             Periodic blur and differences on the block (default, paper),
-            or an unobserved margin around it (extension).
+            or an unobserved margin around it (extension; the default
+            with `faithful=False`).
         halo : int or sequence of int, optional
             Halo width per spatial axis, at least the PSF size along that
             axis. Default: twice the PSF size (not specified in the
@@ -310,6 +330,7 @@ class HSPIRAL(_Variational):
         self.shading: ShadingEstimate | None = None
         self.peak: Tensor | None = None
         self.robust_peak: Tensor | None = None
+        self.median: Tensor | None = None
         self.noise: Tensor | None = None
         self.tau: Tensor | None = None
         self.rho: Tensor | None = None
@@ -362,6 +383,11 @@ class HSPIRAL(_Variational):
             raise ValueError("psf must be non-negative")
         if not psf.sum() > 0:
             raise ValueError("psf must have a positive sum")
+        if psf.ndim == 3 and self.options["p"] != 2:
+            raise NotImplementedError(
+                "HSPIRAL in 3-D is implemented for p=2 only (the "
+                "Frobenius norm of the Hessian)"
+            )
         return psf / psf.sum()
 
     def _prepare(self, chunk: Chunk, maps: dict) -> _Problem:
@@ -377,13 +403,14 @@ class HSPIRAL(_Variational):
                 "HSPIRAL needs data with a positive maximum in every image"
             )
         if opts["tau"] is None:
-            robust = self.robust_peak
-            if not bool((robust > 0).all()):
+            spread = self.robust_peak - self.median
+            if not bool((spread > 0).all()):
                 raise ValueError(
-                    "HSPIRAL needs data with a positive 99.9th percentile "
-                    "in every image for the default tau: pass tau"
+                    "HSPIRAL needs data whose 99.9th percentile is above "
+                    "their median in every image for the default tau: pass "
+                    "tau"
                 )
-            tau = _KAPPA / robust
+            tau = _KAPPA / spread
         else:
             tau = torch.full_like(peak, float(opts["tau"]))
         if opts["rho"] is not None:

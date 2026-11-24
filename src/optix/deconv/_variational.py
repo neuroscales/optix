@@ -11,6 +11,7 @@ from torch import Tensor
 from .._config import get_config
 from ..estimates import SensorEstimate, ShadingEstimate
 from ..io import ArrayLike, Chunk, Chunks, Labeled, blocks, chunks_of
+from ..stats import Reservoir
 from ._block import _BlockDeconvolution
 from ._fft import next_fast_len
 
@@ -18,6 +19,9 @@ __all__: list[str] = []
 
 #: Quantile of the prepared data stored as `robust_peak` by `fit`.
 _PEAK_QUANTILE = 0.999
+#: Size of the uniform sample of each image from which `fit` computes
+#: its median (exact for images of at most this many voxels).
+_MEDIAN_SAMPLE = 8192
 #: Working buffers per loaded voxel besides the grid (data, read noise).
 _LOADED_BUFFERS = 4.0
 #: Smallest fraction of a loaded block kept as its core, when the
@@ -76,7 +80,9 @@ class _Variational(_BlockDeconvolution):
 
     `fit` makes one pass over the prepared data and stores, per image
     `(*group, *sample)`, its maximum (`peak`), its 99.9th percentile
-    (`robust_peak`) and the mean read-noise variance (`noise`);
+    (`robust_peak`), its median (`median`, from a uniform sample of
+    8192 voxels, exact for smaller images) and the mean read-noise
+    variance (`noise`);
     subclasses derive their per-image parameters from them in
     `_setup_images`. `apply` solves each block with `_solve(blk, op,
     index, trace)`, where `index` selects the image in those per-image
@@ -320,6 +326,7 @@ class _Variational(_BlockDeconvolution):
         noise = torch.zeros(group + sample, dtype=f64)
         # keyed by (start, stop) pairs: slices are unhashable before 3.12
         upper: dict[tuple, tuple[tuple, _UpperQuantile]] = {}
+        reservoirs: dict[tuple, tuple[tuple, Reservoir]] = {}
         n = math.prod(spatial)
         maps = self._maps(data, backend)
         for chunk in blocks(data, None, 0, **backend):
@@ -333,6 +340,9 @@ class _Variational(_BlockDeconvolution):
             if key not in upper:
                 upper[key] = (index, _UpperQuantile(n, _PEAK_QUANTILE))
             upper[key][1].update(blk.data)
+            if key not in reservoirs:
+                reservoirs[key] = (index, Reservoir(_MEDIAN_SAMPLE, seed=0))
+            reservoirs[key][1].update(blk.data)
             var = torch.as_tensor(blk.variance)
             noise[index] += float(var.sum(dtype=f64)) * (
                 blk.data.numel() / max(var.numel(), 1)
@@ -340,9 +350,14 @@ class _Variational(_BlockDeconvolution):
         robust = torch.full(group + sample, -torch.inf, dtype=f64)
         for index, q in upper.values():
             robust[index] = q.value()
+        median = torch.full(group + sample, math.nan, dtype=f64)
+        for index, res in reservoirs.values():
+            values = res.values.to(dtype=f64, device="cpu")
+            median[index] = float(torch.quantile(values, 0.5))
         tiny = torch.finfo(f64).tiny
         self.peak = peak
         self.robust_peak = robust
+        self.median = median
         self.noise = noise / count.clamp(min=tiny)
         self._setup_images(psf)
         self.history.extras["iterations"] = []
@@ -354,6 +369,7 @@ class _Variational(_BlockDeconvolution):
         state = super()._extra_state()
         state["peak"] = getattr(self, "peak", None)
         state["robust_peak"] = getattr(self, "robust_peak", None)
+        state["median"] = getattr(self, "median", None)
         state["noise"] = getattr(self, "noise", None)
         sensor = getattr(self, "sensor", None)
         shading = getattr(self, "shading", None)
@@ -365,6 +381,7 @@ class _Variational(_BlockDeconvolution):
         super()._load_extra_state(state)
         self.peak = state.get("peak")
         self.robust_peak = state.get("robust_peak")
+        self.median = state.get("median")
         self.noise = state.get("noise")
         sensor = state.get("sensor")
         if sensor is not None:
