@@ -40,6 +40,7 @@ example. The sections follow the modules of the
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
 | | [Phase retrieval](psf/phase-retrieval.md) (`PhaseRetrieval`) | pupil function and Zernike aberrations from a bead z-stack |
 | | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |
+| [`optix.fusion`](../reference/fusion.md) | [Intensity adjustment](fusion/intensity-adjustment.md) (`IntensityAdjustment`) | gain and offset of each tile of a mosaic |
 
 The rest of this page explains how the section is organised and what an
 algorithm page contains.

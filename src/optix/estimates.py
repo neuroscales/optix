@@ -23,6 +23,8 @@ Conventions
 - `PSFEstimate.psf` is normalised to unit sum and centred at index
   `K // 2` along each spatial axis, as the PSFs taken by
   `optix.deconv`.
+- `TileIntensityEstimate` maps the recorded tile to the harmonised one,
+  `x̂ = scale · y + shift`, one pair per tile (and group).
 - Data-sized outputs (class probabilities, corrected stacks) are never
   stored in an estimate: they come from `Estimator.apply(data, out=)`.
 """
@@ -46,6 +48,7 @@ __all__ = [
     "PupilEstimate",
     "SensorEstimate",
     "ShadingEstimate",
+    "TileIntensityEstimate",
 ]
 
 _REGISTRY: dict[str, type["Estimate"]] = {}
@@ -492,6 +495,60 @@ class PSFEstimate(Estimate):
     fwhm: Tensor | None = None
     count: Tensor | None = None
     centers: Tensor | None = None
+
+
+@dataclass(eq=False)
+class TileIntensityEstimate(Estimate):
+    """Per-tile linear intensity transform of a tiled acquisition.
+
+    Tile `i` (with group index `g`) is harmonised as
+
+        x̂ᵢ = aᵢ yᵢ + cᵢ,
+
+    with `aᵢ = scale[..., i]` and `cᵢ = shift[..., i]`. The identity
+    transform is `scale = 1`, `shift = 0`.
+
+    Attributes
+    ----------
+    scale : Tensor, optional
+        (*group, T) multiplicative factor aᵢ of each of the T tiles
+        (dimensionless).
+    shift : Tensor, optional
+        (*group, T) additive term cᵢ, in the units of the data (ADU).
+    """
+
+    scale: Tensor | None = None
+    shift: Tensor | None = None
+
+    def correct(self, y: Tensor, tile: int) -> Tensor:
+        """Harmonise tile `tile`: aᵢ yᵢ + cᵢ.
+
+        Parameters
+        ----------
+        y : Tensor
+            `(*group, *spatial)` tile, the group axes leading (or no group
+            axes when the estimate has none).
+        tile : int
+            Index of the tile.
+
+        Returns
+        -------
+        Tensor
+            Fields that are None are absent terms (a = 1, c = 0).
+        """
+        x = y
+        lead = None
+        for value in (self.scale, self.shift):
+            if value is not None:
+                lead = value.shape[:-1]
+        nsp = y.ndim - (0 if lead is None else len(lead))
+        if self.scale is not None:
+            a = self.scale[..., tile].to(y)
+            x = x * a.reshape(*a.shape, *([1] * nsp))
+        if self.shift is not None:
+            c = self.shift[..., tile].to(y)
+            x = x + c.reshape(*c.shape, *([1] * nsp))
+        return x
 
 
 @dataclass(eq=False)

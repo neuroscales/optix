@@ -210,6 +210,20 @@ precision of a Normal; the context tells which is meant.
 | $\rho$ | radius of the ball, in pixels and intensity units | `radius` |
 | $\ominus$, $\oplus$ | grey-scale erosion and dilation | `grey_erosion`, `grey_dilation` |
 
+## Tiles
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $I$ | number of tiles of a mosaic | `T` in docstrings |
+| $i$, $j$ | tile indices (frame indices elsewhere) | |
+| $\mathbf{y}_i$, $y_i(\mathbf{r})$ | tile $i$; its value at grid pixel $\mathbf{r}$ (the common pixel grid of the mosaic) | the tiles `data` |
+| $a_i$, $c_i$ | scale and shift of tile $i$, $\hat{\mathbf{x}}_i = a_i \mathbf{y}_i + c_i$ | `TileIntensityEstimate.scale`, `.shift` |
+| $\gamma_i$, $\omega_i$ | gain (dimensionless) and offset (ADU) of tile $i$ in a simulation, $\mathbf{y}_i = \gamma_i \mathbf{x} + \omega_i$; not the camera $g$, $o$ | `simulate_tiles(tile_gain=, tile_offset=)` |
+| $v$, $w$ | a value of tile $i$ and the transformed value of a neighbour at the same pixel | |
+| $a'_i$, $c'_i$, $c''_i$ | linear and additive sub-models of tile $i$ | |
+| $\lambda_1$, $\lambda_2$, $\lambda_3$ | weights of the linear, additive and identity sub-models (not the photoelectron rate $\lambda$) | `weights` |
+| $O_{ij}$ | overlap of tiles $i$ and $j$ | `overlap_box` |
+| $F$ | set of fixed tiles | `fixed` |
 ## Intensity histograms
 
 | Symbol | Meaning | In code |
