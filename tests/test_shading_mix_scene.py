@@ -654,3 +654,29 @@ def test_joint_classify_shares_the_posterior(_gain_fit):
     per, _ = est.classify(data, joint=True, per_class=True)
     assert per.shape == (1, *data.shape)
     assert torch.allclose(per.sum(0), pj, atol=1e-5)
+
+
+# -- stage 6: regression from the experiments ------------------------------
+def test_low_snr_overlap_does_not_bias_the_flat_field():
+    """Stationary scene, signal ≈ 8 ADU (excess ≈ 1-2 sd of the noise).
+
+    Measured (seeds 0-1): no overlap 0.028, log-ratio term (e7d4cf7)
+    0.046 with a y-ramp of −0.07, shared-signal model 0.027, ramp −0.008.
+    """
+    import math
+
+    from test_shading_mix import _tile_fit, _tiles
+
+    from optix.shading.mix import TileOverlap
+
+    data, logm = _tiles(seed=0, X=24, bright=0.0, amp=8.0)
+    errs, ramps = [], []
+    for ov in (None, TileOverlap(step=(0, 16, 0), axis="t")):
+        d = _tile_fit(data, ov, it=40).estimates["shading"].flat.double()
+        d = d.log() - logm
+        y = torch.linspace(-1, 1, d.shape[0], dtype=torch.float64)
+        ramps.append(((d.mean(1) - d.mean()) * y).sum().item() / (y**2).sum())
+        errs.append(d.abs().mean().item())
+    assert errs[1] < errs[0] + 0.005
+    assert abs(ramps[1]) < 0.03
+    assert math.isfinite(errs[1])
