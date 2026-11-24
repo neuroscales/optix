@@ -234,7 +234,7 @@ def wavelet_fft(
           [`otsu_threshold`][optix.stats.otsu_threshold], unless given)
           and the foreground fraction
 
-              φ = G_s ∗ sigmoid((y − t)/c),
+              χ = G_s ∗ sigmoid((y − t)/c),
 
           with c the `crossover` and G_s a Gaussian of width s =
           `smoothing` pixels, the frame is split into a background
@@ -242,7 +242,7 @@ def wavelet_fft(
           bandwidths σ_bg (`sigma_background`) and σ_fg (`sigma`), and
           blended:
 
-              x = φ · W(max(y, t); σ_fg) + (1 − φ) · W(min(y, t); σ_bg).
+              x = χ · W(max(y, t); σ_fg) + (1 − χ) · W(min(y, t); σ_bg).
 
           `bands="foreground"` replaces the background term by y itself
           (only the foreground is filtered), `bands="background"` the
@@ -770,8 +770,11 @@ class WaveletFFT(Estimator):
         [`ShadingEstimate`][optix.estimates.ShadingEstimate] in `init`
         adds pystripe's illumination correction after destriping,
         x ← (x − d)/f, with its `flat` f and `dark` d (either may be
-        None; its per-frame `baseline` is not used). Its maps are
-        `(*group, *spatial)` or broadcast to the frames.
+        None; its per-frame `baseline` is not used). Its maps must
+        broadcast to `(*group, *spatial)`: e.g. one map per group, one
+        map for all groups (`(*spatial)`), or a map that broadcasts over
+        some group axes (size 1 there). The shapes are checked when
+        `data` is given, and again by `apply`.
 
         Parameters
         ----------
@@ -813,7 +816,9 @@ class WaveletFFT(Estimator):
         callback: Callable | None,
         verbose: bool,
     ) -> None:
-        pass
+        shading = self.estimates.get("shading")
+        if shading is not None:
+            _broadcast_maps(shading, self._map_shape(data))
 
     def _frame_axis(self, layout: Layout, ndim: int) -> int:
         """The stripe axis as a frame dim, -2 or -1."""
@@ -847,21 +852,22 @@ class WaveletFFT(Estimator):
         raw = data.array if isinstance(data, Labeled) else data
         integer = _is_integer(raw.dtype)
         shading = self.estimates.get("shading")
+        maps = {"flat": None, "dark": None}
+        if shading is not None:
+            maps = _broadcast_maps(shading, layout.map_shape(data))
 
         def pick(
             m: Tensor | None, group: tuple, like: Tensor
         ) -> Tensor | None:
             if m is None:
                 return None
-            if group and m.ndim > 2:
-                m = m[group]
+            if group:
+                m = m[tuple(group)]
             return m.to(like)
 
         def fn(chunk: object, batch: Tensor) -> Tensor:
-            flat = dark = None
-            if shading is not None:
-                flat = pick(shading.flat, chunk.group, batch)
-                dark = pick(shading.dark, chunk.group, batch)
+            flat = pick(maps["flat"], chunk.group, batch)
+            dark = pick(maps["dark"], chunk.group, batch)
             return _wavelet_fft(
                 batch,
                 wavelet=o["wavelet"],
@@ -886,6 +892,34 @@ class WaveletFFT(Estimator):
         return self._apply_frames(
             data, out, fn, overhead=overhead, contiguous=True
         )
+
+
+def _broadcast_maps(
+    shading: ShadingEstimate, shape: tuple[int, ...]
+) -> dict[str, Tensor | None]:
+    """The `flat` and `dark` maps expanded to `shape` = `(*group, *spatial)`.
+
+    Raises a ValueError if a map does not broadcast to `shape`.
+    """
+    out: dict[str, Tensor | None] = {}
+    for name in ("flat", "dark"):
+        m = getattr(shading, name)
+        if m is None:
+            out[name] = None
+            continue
+        m = torch.as_tensor(m)
+        try:
+            ok = torch.broadcast_shapes(m.shape, shape) == torch.Size(shape)
+        except RuntimeError:
+            ok = False
+        if not ok:
+            raise ValueError(
+                f"ShadingEstimate.{name} has shape {tuple(m.shape)}, which "
+                f"does not broadcast to the (*group, *spatial) map shape "
+                f"{tuple(shape)}"
+            )
+        out[name] = m.expand(shape)
+    return out
 
 
 def _is_integer(dtype: object) -> bool:

@@ -82,7 +82,7 @@ def _otsu(x: Tensor, bins: int | None) -> Tensor:
         if not torch.equal(x, x.round()):
             raise ValueError("bins=None needs integer-valued data")
         lo_i = int(lo)
-        counts = torch.bincount((x - lo).long()).to(x.dtype)
+        counts = torch.bincount((x - lo).long())
         centres = torch.arange(counts.numel(), dtype=x.dtype, device=x.device)
         centres = centres + lo_i
     else:
@@ -94,11 +94,14 @@ def _otsu(x: Tensor, bins: int | None) -> Tensor:
         idx = ((x - lo) * (bins / (hi - lo))).long().clamp_(0, bins - 1)
         idx = idx - (x < edges[idx]).long()
         idx = idx + ((x >= edges[idx + 1]) & (idx != bins - 1)).long()
-        counts = torch.bincount(idx, minlength=bins).to(x.dtype)
+        counts = torch.bincount(idx, minlength=bins)
         centres = (edges[:-1] + edges[1:]) / 2
+    # class sums in float64 (exact counts, no ties broken by rounding)
+    counts = counts.to(torch.float64)
+    c64 = centres.to(torch.float64)
     w0 = counts.cumsum(0)
     w1 = counts.flip(0).cumsum(0).flip(0)
-    m0 = (counts * centres).cumsum(0) / w0
-    m1 = (counts * centres).flip(0).cumsum(0).flip(0) / w1
+    m0 = (counts * c64).cumsum(0) / w0
+    m1 = (counts * c64).flip(0).cumsum(0).flip(0) / w1
     between = w0[:-1] * w1[1:] * (m0[:-1] - m1[1:]).square()
     return centres[torch.argmax(between)]

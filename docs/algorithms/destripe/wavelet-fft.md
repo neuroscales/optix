@@ -222,8 +222,8 @@ the only one in play.
     Swaney et al. note that with very bright signals the hybrid wavelet-FFT
     filter may introduce ringing artefacts. Their remedies are the dual-band
     mode, which filters the background and the foreground with separate
-    bandwidths, a smaller bandwidth, or no destriping.  The paper does not say how much
-    each helps on a given image.
+    bandwidths, a smaller bandwidth, or no destriping. The paper does not say
+    how much each helps on a given image.
 
 The options map to those of the pystripe command line (and of its function
 `filter_streaks`) as follows. The paper's examples are `-s1 256 -s2 256 -w db10
@@ -234,19 +234,27 @@ with `sigma_units="pystripe"` for both.
 |---|---|---|---|
 | `-s1`, `sigma1` (foreground bandwidth, pixels) | `sigma` | 1.5 (`"band"` units) | with `sigma_units="pystripe"` for pystripe's meaning |
 | `-s2`, `sigma2` (background bandwidth, pixels) | `sigma_background` | `None` | needed by `bands="dual"` and `"background"` |
-| dual-band filtering | `bands` | `"single"` | `"dual"`, `"foreground"` or `"background"` |
+| no option: set by `-s1` and `-s2` (see below) | `bands` | `"single"` | `"dual"`, `"foreground"` or `"background"` |
 | `-w`, wavelet | `wavelet` | `"db10"` | pystripe's default is `"db3"` |
-| `level` | `level` | 4 | pystripe's default is the maximum level: `level="max"` |
+| `-l`, `--level`, `level` | `level` | 4 | pystripe's default, 0, is the maximum level: `level="max"` |
 | `-x`, crossover | `crossover` | 10 | only used by the dual-band modes |
-| threshold (Otsu by default) | `threshold` | `None` | `None` is Otsu's threshold of each frame |
+| `-t`, `--threshold`, `threshold` | `threshold` | `None` | pystripe's default, −1, is Otsu's threshold of each frame: `None` |
 | smoothing of the fraction (1 pixel) | `smoothing` | 1 | `0` for none |
 | log transform | `log_transform` | `False` | pystripe filters $\log(1 + \mathbf{y})$ |
 | frame padded to even size | `pad_even` | `False` | |
 | stripe direction (horizontal stripes) | `axis=-1` | `-2` | optix defaults to the paper's direction |
 | `-f`, `--flat` | `flat`, or `ShadingEstimate.flat` | `None` | used as given, not divided by its maximum |
-| `-d`, `--dark` | `dark`, or `ShadingEstimate.dark` | `None` | an image or a scalar in `wavelet_fft`, a map in the estimate |
+| `-d`, `--dark` | `dark`, or `ShadingEstimate.dark` | `None` | pystripe takes a scalar and subtracts it only if it is positive; optix subtracts any value, an image or a scalar in `wavelet_fft`, a map in the estimate |
 | `-c`, compression | not applicable | | file output option of pystripe |
 | cast to `uint16` | not applied | | the output stays floating point |
+
+pystripe has no option for the band mode: `filter_streaks` chooses it from the
+two bandwidths. With `s1 == s2 > 0`, the frame is filtered as a single band
+(`bands="single"`, or `"dual"` with equal bandwidths); with `s2 == 0`, only the
+foreground is filtered (`bands="foreground"`); with `s1 == 0`, only the
+background (`bands="background"`); otherwise both, with their own bandwidths
+(`bands="dual"`). `-s2` defaults to 0, so pystripe's command line with only
+`-s1` given is `bands="foreground"`, not the single band.
 
 With pystripe's settings (db3, `level="max"`, `log_transform=True`,
 `sigma_units="pystripe"`, `pad_even=True`, `axis=-1`), the filter matches
@@ -300,21 +308,19 @@ with a filter of length $F$; the working memory is a few copies of a batch.
 
 The example adds stripes to a [phantom](../../reference/models.md#phantoms) of cells on a smooth background.
 
-```python
-from optix.destripe import WaveletFFT
-from optix.models import phantoms
-
-# 1. Cells on a background (the truth), plus stripes along the first axis.
-shape = (1, 128, 128)  # (frames, H, W)
-x = phantoms.cells(shape, intensity=50.0, seed=0)
-x = x + phantoms.background(shape, level=100.0, seed=1)
-y = x + phantoms.stripes(shape, strength=10.0, seed=2)
-
-# 2. Fit (nothing is learned) and 3. filter.
-y_hat = WaveletFFT().fit(y).apply(y)
-
-# 4. Compare to the truth: error std about 8.9 before, 3.5 after.
-print(float((y - x).std()), float((y_hat - x).std()))
+```pycon
+>>> from optix.destripe import WaveletFFT
+>>> from optix.models import phantoms
+>>> # 1. Cells on a background (the truth), plus stripes along the first axis.
+>>> shape = (1, 128, 128)  # (frames, H, W)
+>>> x = phantoms.cells(shape, intensity=50.0, seed=0)
+>>> x = x + phantoms.background(shape, level=100.0, seed=1)
+>>> y = x + phantoms.stripes(shape, strength=10.0, seed=2)
+>>> # 2. Fit (nothing is learned) and 3. filter.
+>>> y_hat = WaveletFFT().fit(y).apply(y)
+>>> # 4. Compare to the truth: the error std before and after.
+>>> round(float((y - x).std()), 1), round(float((y_hat - x).std()), 1)
+(8.9, 3.5)
 ```
 
 Common variations: `axis=-1` for horizontal stripes, `level=` and `sigma=` for

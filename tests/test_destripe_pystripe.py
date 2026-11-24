@@ -342,3 +342,85 @@ def test_save_load_keeps_shading(tmp_path):
     assert back.options == est.options and not back.is_faithful
     data = make_frames()
     torch.testing.assert_close(back.apply(data), est.apply(data))
+
+
+def _reduce_to(full: torch.Tensor, shape: tuple) -> torch.Tensor:
+    """The part of a `(G1, G2, H, W)` map that has the shape `shape`."""
+    x = full
+    while x.ndim > len(shape):
+        x = x[0]
+    for d, s in enumerate(shape):
+        if s == 1:
+            x = x.narrow(d, 0, 1)
+    return x
+
+
+@pytest.mark.parametrize(
+    "flat_shape, dark_shape",
+    [
+        ((2, 3, 48, 40), (2, 3, 48, 40)),  # one map per group
+        ((2, 1, 48, 40), (1, 3, 1, 1)),  # broadcast over one group axis
+        ((48, 40), ()),  # one map for all groups
+        ((1, 48, 40), (3, 48, 40)),  # fewer leading dims than groups
+    ],
+)
+def test_shading_per_group(flat_shape, dark_shape):
+    """Maps that are `(*group, *spatial)` or broadcast to it."""
+    from optix.io import labeled
+
+    frames = make_frames(4)  # (4, 48, 40)
+    data = frames.expand(2, 3, *frames.shape).contiguous()  # abtyx
+    groups = torch.arange(1, 7, dtype=torch.float64).reshape(2, 3, 1, 1)
+    ramp = torch.linspace(0.5, 1.0, 40, dtype=torch.float64)
+    flat = _reduce_to(groups * ramp.expand(48, 40), flat_shape)
+    rows = torch.linspace(0.0, 1.0, 48, dtype=torch.float64)[:, None]
+    dark = _reduce_to(groups + rows.expand(48, 40), dark_shape)
+    assert tuple(flat.shape) == flat_shape
+    assert tuple(dark.shape) == dark_shape
+    layout = dict(axes="abtyx", spatial="yx", sample="t", group="ab")
+    kw = dict(wavelet="db4", level=3)
+    est = WaveletFFT(**kw, **F64).fit(
+        labeled(data, **layout),
+        init=ShadingEstimate(flat=flat, dark=dark),
+    )
+    with optix.config(batch=3):
+        out = torch.as_tensor(est.apply(labeled(data, **layout)))
+    flat_b = flat.expand(2, 3, 48, 40)
+    dark_b = dark.expand(2, 3, 48, 40)
+    plain = wavelet_fft(frames, **kw)
+    for i in range(2):
+        for j in range(3):
+            torch.testing.assert_close(
+                out[i, j], (plain - dark_b[i, j]) / flat_b[i, j]
+            )
+
+
+def test_shading_shape_checked():
+    """A map that does not broadcast to `(*group, *spatial)` fails early."""
+    from optix.io import labeled
+
+    data = make_frames(4).expand(2, 3, 4, 48, 40).contiguous()
+    layout = dict(axes="abtyx", spatial="yx", sample="t", group="ab")
+    bad = ShadingEstimate(flat=torch.ones(3, 2, 48, 40, dtype=torch.float64))
+    with pytest.raises(ValueError, match="does not broadcast"):
+        WaveletFFT(**F64).fit(labeled(data, **layout), init=bad)
+    # without data at fit: checked by apply, before anything is written
+    est = WaveletFFT(**F64).fit(init=bad)
+    out = np.zeros(data.shape)
+    with pytest.raises(ValueError, match="does not broadcast"):
+        est.apply(labeled(data, **layout), out=out)
+    assert not out.any()
+
+
+def test_otsu_float32_matches_float64(ref):
+    """The class sums run in float64 whatever the data dtype."""
+    image = torch.as_tensor(ref["image"])
+    t32 = float(otsu_threshold(image.float()))
+    t64 = float(otsu_threshold(image))
+    step = float(image.max() - image.min()) / 256
+    assert abs(t32 - t64) < 1e-3 * step
+    # integer bins: the counts and centres are exact, so is the threshold
+    u16 = torch.as_tensor(ref["image_u16"].astype(np.int32))
+    expected = float(ref["otsu_u16"])
+    for dtype in (torch.float32, torch.float64, torch.int64):
+        assert float(otsu_threshold(u16.to(dtype), bins=None)) == expected
