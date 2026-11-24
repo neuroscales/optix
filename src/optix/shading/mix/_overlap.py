@@ -132,6 +132,7 @@ class TileOverlap:
         axis: int | str = 0,
         weight: float = 1.0,
         fit_gain: bool = False,
+        coarse: int | None = None,
     ) -> None:
         given = [x is not None for x in (positions, steps, step)]
         if sum(given) != 1:
@@ -142,6 +143,9 @@ class TileOverlap:
         self.axis = axis
         self.weight = float(weight)
         self.fit_gain = bool(fit_gain)
+        self.coarse = None if coarse is None else int(coarse)
+        if self.coarse is not None and self.coarse < 2:
+            raise ValueError("coarse must be an integer factor of at least 2")
         if not self.weight >= 0:
             raise ValueError("overlap weight must be non-negative")
 
@@ -161,6 +165,7 @@ class TileOverlap:
             and self.axis == other.axis
             and self.weight == other.weight
             and self.fit_gain == other.fit_gain
+            and self.coarse == other.coarse
         )
 
     __hash__ = None
@@ -173,6 +178,7 @@ class TileOverlap:
                     f"TileOverlap({name}={v.tolist()}, axis={self.axis!r}, "
                     f"weight={self.weight}"
                     + (", fit_gain=True" if self.fit_gain else "")
+                    + (f", coarse={self.coarse}" if self.coarse else "")
                     + ")"
                 )
         return "TileOverlap()"
@@ -445,6 +451,7 @@ class Overlap:
     ntiles: int = 0
     fit_gain: bool = False
     positions: np.ndarray | None = None  # (ntiles, D) poses
+    coarse: int | None = None  # binning factor of a coarse first fit
     scene: "SceneIndex | None" = None  # cells seen by several tiles
 
     @classmethod
@@ -486,6 +493,7 @@ class Overlap:
             ntiles=int(raw_shape[axis]),
             fit_gain=spec.fit_gain,
             positions=pos,
+            coarse=spec.coarse,
             scene=SceneIndex(pos, tile),
         )
 

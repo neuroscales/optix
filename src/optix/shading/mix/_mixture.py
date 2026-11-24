@@ -470,6 +470,64 @@ class GammaMixture(Estimator):
             overlap=overlap,
         )
 
+    def _coarse_start(
+        self,
+        model: MixtureFit,
+        overlap: Overlap,
+        backend: dict,
+        quantization: float,
+    ) -> tuple[Tensor, Tensor | None]:
+        """Flat field and tile gains of a fit of the binned mosaic.
+
+        The data are averaged over `coarse` × `coarse` pixels (positions
+        scaled), the scene model is fitted there with the exact gain step
+        (per-tile maps are small at that size), and its log flat field is
+        interpolated back to the full grid. The quantisation of a mean of
+        f² values is Δ/f².
+        """
+        opt = self.options
+        f = overlap.coarse
+        data, layout, pos = model.binned(f)
+        spec = TileOverlap(
+            positions=pos, axis=model._tile_index, fit_gain=overlap.fit_gain
+        )
+        ov = Overlap.build(
+            spec, tuple(data.shape), layout, threshold=overlap.threshold
+        )
+        coarse = self._model(
+            data,
+            layout,
+            backend,
+            alpha=self._prior_alpha(backend),
+            gain=float(model.param.gain),
+            quantization=float(quantization) / f**2,
+            overlap=ov,
+        )
+        coarse.exact_gain = True
+        coarse.init(
+            bg_fraction=float(opt["bg_fraction"]),
+            threshold=float(opt["threshold"]),
+            modulation=True,
+            spread_floor=bool(opt["spread_floor"]),
+        )
+        coarse.run(
+            niter=int(opt["max_iterations"]),
+            tol=float(opt["tol"]),
+            learn_modulation=True,
+            learn_alpha=bool(opt["learn_alpha"]),
+            lr=float(opt["lr"]),
+            max_halvings=int(opt["max_halvings"]),
+            max_log_step=float(opt["max_log_step"]),
+        )
+        logm = coarse.param.M.log()[None, None]
+        logm = torch.nn.functional.interpolate(
+            logm,
+            size=model.spatial_shape,
+            mode="bilinear",
+            align_corners=False,
+        )[0, 0]
+        return logm.exp(), coarse.tile_gain()
+
     def _prior_alpha(self, backend: dict) -> Tensor:
         nclass = int(self.options["nclass"])
         alpha = torch.as_tensor(self.options["concentration"], **backend)
@@ -564,6 +622,11 @@ class GammaMixture(Estimator):
             offset = field(shading, "dark", g)
             if offset is None:
                 offset = field(sensor, "offset", g)
+            flat0, gains0 = field(shading, "flat", g), None
+            if overlap is not None and overlap.coarse and flat0 is None:
+                flat0, gains0 = self._coarse_start(
+                    model, overlap, backend, quantization
+                )
             model.init(
                 bg_fraction=float(opt["bg_fraction"]),
                 threshold=float(opt["threshold"]),
@@ -571,8 +634,9 @@ class GammaMixture(Estimator):
                 spread_floor=bool(opt["spread_floor"]),
                 offset=offset,
                 variance=field(sensor, "variance", g),
-                flat=field(shading, "flat", g),
+                flat=flat0,
                 classes=_class_init(classes, nclass, g, group_shape),
+                gains=gains0,
             )
 
             def report(

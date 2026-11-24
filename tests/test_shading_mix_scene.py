@@ -594,3 +594,19 @@ def test_gain_step_reaches_the_exact_fixed_point(fade, monkeypatch):
     assert torch.allclose(a.tile_gain_, b.tile_gain_, rtol=2e-3)
     fa, fb = (f.estimates["shading"].flat.double().log() for f in fits)
     assert (fa - fb).abs().max() < 5e-3
+
+
+def test_coarse_start_option():
+    from test_shading_mix import _tile_fit, _tiles
+
+    from optix.shading.mix import TileOverlap
+
+    spec = TileOverlap(step=(0, 16, 0), fit_gain=True, coarse=4)
+    assert "coarse=4" in repr(spec)
+    assert spec != TileOverlap(step=(0, 16, 0), fit_gain=True)
+    with pytest.raises(ValueError, match="coarse"):
+        TileOverlap(step=(0, 1), coarse=1)
+    data, logm = _tiles(seed=0, X=12, bright=0.0, fade=0.1)
+    est = _tile_fit(data, spec, it=5)
+    assert est.tile_gain_.shape == (4,)
+    assert torch.isfinite(torch.tensor(est.history.objective)).all()

@@ -354,6 +354,30 @@ class MixtureFit:
         mask = torch.from_numpy(mask).to(self.param.C.device)
         return mask.reshape(-1, *mask.shape[-2:])
 
+    def binned(self, factor: int) -> tuple[Tensor, Layout, np.ndarray]:
+        """Data averaged over factor × factor pixels, for a coarse fit.
+
+        Returns the coarse data `(*sample, h, w)` (sample axes in storage
+        order, spatial axes last in layout order), its layout and the tile
+        positions over its non-tile axes (spatial ones divided by the
+        factor and rounded).
+        """
+        H, W = self.spatial_shape
+        h, w = H // factor, W // factor
+        out = torch.empty((*self.sample_shape, h, w), **self.backend)
+        for chunk in self.frames():
+            y = chunk.data[..., : h * factor, : w * factor]
+            pooled = torch.nn.functional.avg_pool2d(y[:, None], factor)[:, 0]
+            out[chunk.samples] = pooled.reshape(*chunk.sample_shape, h, w)
+        nsample = len(self.sample_shape)
+        layout = Layout(spatial=(nsample, nsample + 1))
+        pos = self.overlap.positions
+        cols = [pos[:, r] for r in self._rest]
+        cols += [
+            np.rint(pos[:, a] / factor).astype(np.int64) for a in self._sp
+        ]
+        return out, layout, np.stack(cols, 1)
+
     def _tile_shape(self) -> tuple[int, ...]:
         shape = self.source.shape
         return tuple(int(shape[a]) for a in self._other)
@@ -601,6 +625,7 @@ class MixtureFit:
         variance: Tensor | None = None,
         flat: Tensor | None = None,
         classes: tuple[Tensor, Tensor, Tensor | None] | None = None,
+        gains: Tensor | None = None,
     ) -> None:
         """Data-driven starting point; given fields replace their estimate.
 
@@ -738,7 +763,12 @@ class MixtureFit:
             prm.theta = theta
             M = self.modulation()
         prm.M = M
-        if prm.A is not None:
+        if prm.A is not None and gains is not None:
+            a = gains.to(prm.A).log()
+            a = torch.where(self._fitted_tiles, a, 0)
+            a[self._fitted_tiles] -= a[self._fitted_tiles].mean()
+            prm.A = a
+        elif prm.A is not None:
             # initial tile gains from the log-ratios of the overlaps (an
             # initialiser only: they do not enter the bound)
             prm.C, prm.V = C, V
