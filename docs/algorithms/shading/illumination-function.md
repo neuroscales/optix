@@ -156,21 +156,18 @@ paper's 500-pixel window on a 1280 × 1024 image is very slow; a smaller
 
 ## Usage
 
+The example shades a [phantom](../../reference/models.md#phantoms) of cells
+with a known flat field and records it with a simulated camera from
+[`optix.models`](../../reference/models.md).
+
 ```python
-import torch
-import optix
-from optix.models import (
-    random_sensor,
-    random_shading,
-    simulate_sensor,
-    simulate_shading,
-)
+from optix.models import phantoms, random_sensor, random_shading
+from optix.models import simulate_sensor, simulate_shading
 from optix.shading import IlluminationFunction
 
-# 1. A synthetic stack with known truth: random content, smooth flat field.
+# 1. A synthetic stack with known truth: 200 frames of cells, smooth flat.
 truth = random_shading((64, 64), strength=0.2, seed=0)
-gen = torch.Generator().manual_seed(1)
-x = 50.0 + 400.0 * torch.rand(200, 64, 64, generator=gen)
+x = phantoms.cells((200, 64, 64), count=20, intensity=400.0, seed=1) + 50
 sensor = random_sensor((64, 64), gain=1.0, offset=0.0, offset_sd=0.0, seed=2)
 Y = simulate_sensor(simulate_shading(x, truth), sensor, seed=3)
 
@@ -180,9 +177,9 @@ est = IlluminationFunction(size=31).fit(Y)
 # 3. Correct.
 corrected = est.apply(Y)
 
-# 4. The flat field is the truth up to a scale.
+# 4. Compare to the truth: the flat field is the truth up to a scale.
 ratio = est.estimates["shading"].flat / truth.flat
-print(float(ratio.std() / ratio.mean()))  # small
+error = ratio.std() / ratio.mean()  # about 0.08
 ```
 
 Common variations: `IlluminationFunction(smoothing="gaussian", size="auto",

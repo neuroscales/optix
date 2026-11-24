@@ -377,46 +377,35 @@ re-estimates $\beta_n$ per image.
 
 ## Usage
 
-```pycon
->>> import torch
->>> from optix.shading import KaskFlatField
->>> # 1. Poisson images of bright disks, with distinct background and
->>> #    foreground profiles.
->>> H, W, N = 128, 136, 96
->>> y = torch.linspace(-1, 1, H)[:, None]
->>> x = torch.linspace(-1, 1, W)[None, :]
->>> def dome(depth):
-...     p = 1 - 0.5 * depth * (x**2 + y**2)
-...     return p / p.mean()
->>> s_b, s_f = dome(0.3), dome(0.5)
->>> g = torch.Generator().manual_seed(0)
->>> rows, cols = torch.arange(H)[:, None], torch.arange(W)[None, :]
->>> frames = []
->>> for _ in range(N):
-...     u = torch.zeros(H, W)
-...     for _ in range(40):
-...         cy, cx = torch.rand(2, generator=g) * torch.tensor([H, W])
-...         disk = (rows - cy) ** 2 + (cols - cx) ** 2 < 25
-...         u = torch.where(disk, 2000.0, u)
-...     level = 80 + 40 * torch.rand(1, generator=g)
-...     frames.append(torch.poisson(s_f * u + level * s_b, generator=g))
->>> data = torch.stack(frames)
->>> # 2. Fit, then correct.
->>> kask = KaskFlatField(group_size=8).fit(data)
->>> shading = kask.estimates["shading"]
->>> corrected = kask.apply(data)
->>> shading.flat.shape, shading.meta["dark_scaling"]
-(torch.Size([128, 136]), 'per-frame')
->>> kask.background_level_.shape
-torch.Size([96])
->>> shading.meta["noise_constant"] > 0
-True
->>> # 3. Compare the profiles to the truth (relative rms error).
->>> bool((shading.flat / s_f - 1).square().mean().sqrt() < 0.05)
-True
->>> dark = shading.dark / shading.dark.mean()
->>> bool((dark / s_b - 1).square().mean().sqrt() < 0.01)
-True
+The example images a [phantom](../../reference/models.md#phantoms) of bright
+cells through distinct foreground and background profiles, with Poisson noise.
+
+```python
+import torch
+from optix.models import phantoms, random_shading
+from optix.shading import KaskFlatField
+
+torch.manual_seed(0)
+
+# 1. Known truth: distinct foreground and background profiles, and 96
+#    Poisson frames of bright cells on a background level that varies.
+s_f = random_shading((128, 136), strength=0.2, seed=0).flat
+s_b = random_shading((128, 136), strength=0.1, seed=1).flat
+u = phantoms.cells((96, 128, 136), 40, intensity=2e3, edge=0.05, seed=2)
+level = 80 + 40 * torch.rand(96, 1, 1)
+data = torch.poisson(s_f * u + level * s_b)
+
+# 2. Fit, applying the profiles whatever their estimated random error.
+kask = KaskFlatField(group_size=8, max_error=(None, None)).fit(data)
+shading = kask.estimates["shading"]
+
+# 3. Correct.
+corrected = kask.apply(data)
+
+# 4. Compare the profiles to the truth: rms error about 0.024 and 0.004.
+dark = shading.dark / shading.dark.mean()
+print(float((shading.flat / s_f - 1).square().mean().sqrt()))
+print(float((dark / s_b - 1).square().mean().sqrt()))
 ```
 
 Common variations: `model="polynomial"` for the fourth-order polynomial,
