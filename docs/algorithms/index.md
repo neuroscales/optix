@@ -46,6 +46,7 @@ example. The sections follow the modules of the
 | | [Richards–Wolf](psf/richards-wolf.md) (`richards_wolf`) | vectorial point-spread function of a high-aperture objective, from theory |
 | | [Phase retrieval](psf/phase-retrieval.md) (`PhaseRetrieval`) | pupil function and Zernike aberrations from a bead z-stack |
 | | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |
+| | [Light-sheet PSF](psf/lightsheet.md) (`lightsheet_psf`, `gaussian_sheet`) | effective PSF of light-sheet imaging: detection PSF times a Gaussian sheet, with a rotation for multiview |
 | [`optix.fusion`](../reference/fusion.md) | [Intensity adjustment](fusion/intensity-adjustment.md) (`IntensityAdjustment`) | gain and offset of each tile of a mosaic |
 
 The rest of this page explains how the section is organised and what an
