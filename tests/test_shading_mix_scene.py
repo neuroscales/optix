@@ -517,3 +517,80 @@ def test_scene_scores_are_finite_differences_of_the_bound():
             prm.theta += d
             num = (up - down) / 2e-5
             assert g[k].item() == pytest.approx(num, rel=2e-3, abs=1e-3)
+
+
+# -- stage 4: tile gains -----------------------------------------------------
+def test_gain_score_is_the_derivative_of_the_bound():
+    model, *_ = _tiny_fit(nclass=1, gain=True)
+    prm = model.param
+    assert prm.A is not None and bool(model._fitted_tiles.all())
+    with optix.config(compile=False):
+        model.update_latent()
+        s = model._gains["s"].clone()
+        for t in range(3):
+            h = 1e-5
+            prm.A[t] += h
+            up = model.update_latent()
+            prm.A[t] -= 2 * h
+            down = model.update_latent()
+            prm.A[t] += h
+            num = (up - down) / (2 * h)
+            assert s[t].item() == pytest.approx(num, rel=2e-3, abs=1e-3)
+
+
+def test_recentring_leaves_the_bound_unchanged():
+    model, *_ = _tiny_fit(nclass=2, gain=True)
+    prm = model.param
+    prm.A = torch.tensor([0.3, -0.1, 0.25], dtype=torch.float64)
+    with optix.config(compile=False):
+        before = model.update_latent()
+        shift = model._recentre()
+        after = model.update_latent()
+    assert shift == pytest.approx(0.15)
+    assert abs(prm.A.sum().item()) < 1e-12
+    assert after == pytest.approx(before, rel=1e-11, abs=1e-8)
+
+
+def test_isolated_tiles_keep_unit_gain():
+    pos = [[0, 0, 0], [0, 2, 1], [0, 40, 0]]  # tile 2 overlaps nothing
+    model, *_ = _tiny_fit(nclass=1, gain=True, positions=pos)
+    assert model._fitted_tiles.tolist() == [True, True, False]
+    with optix.config(compile=False):
+        for _ in range(3):
+            model.update_latent()
+            model.update_post()
+            model.update_prior()
+            model.update_parameters()
+    a = model.param.A
+    assert a[2].item() == 0
+    assert abs(a[:2].sum().item()) < 1e-10
+    assert a[0].item() != 0
+
+
+@pytest.mark.parametrize("fade", [0.05, 0.1])
+def test_gain_step_reaches_the_exact_fixed_point(fade, monkeypatch):
+    """The default step (no gain–c, v coupling) against the exact oracle."""
+    from test_shading_mix import _tile_fit, _tiles
+
+    from optix.shading.mix import TileOverlap, _model
+
+    data, logm = _tiles(seed=0, X=24, bright=0.0, fade=fade)
+    fits = []
+    for exact in (False, True):
+        orig = _model.MixtureFit.__init__
+
+        def init(self, *a, orig=orig, exact=exact, **k):
+            orig(self, *a, **k)
+            self.exact_gain = exact
+
+        monkeypatch.setattr(_model.MixtureFit, "__init__", init)
+        ov = TileOverlap(step=(0, 16, 0), fit_gain=True)
+        fits.append(_tile_fit(data, ov, it=60))
+        monkeypatch.undo()
+    a, b = fits
+    # measured: same iterations, bound within 0.2, gains within 0.05 %
+    assert "decrement" in a.history.reason and "decrement" in b.history.reason
+    assert abs(a.history.objective[-1] - b.history.objective[-1]) < 1.0
+    assert torch.allclose(a.tile_gain_, b.tile_gain_, rtol=2e-3)
+    fa, fb = (f.estimates["shading"].flat.double().log() for f in fits)
+    assert (fa - fb).abs().max() < 5e-3

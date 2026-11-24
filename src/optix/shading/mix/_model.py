@@ -165,6 +165,11 @@ class Params:
     M: Tensor  # (H, W)
     theta: Tensor  # (ky, kx), theta[0, 0] = 0
     gain: Tensor  # ()
+    A: Tensor | None = None  # (T,) log tile gains (overlapping tiles)
+
+
+def _dev(t: Tensor) -> dict:
+    return dict(dtype=t.dtype, device=t.device)
 
 
 def _halve_(current: Tensor, previous: Tensor) -> Tensor:
@@ -253,8 +258,20 @@ class MixtureFit:
         self._class_stats: tuple[Tensor, Tensor] | None = None
         self.overlap = overlap
         self._overlap: OverlapStats | None = None
+        # tile gains: per-tile terms of the joint (θ, a) step
+        self._gains: dict | None = None
+        self.exact_gain = False  # test oracle: per-tile maps (small data)
+        self._decrement = math.inf
         if overlap is not None:
             self._init_scene(source)
+            if overlap.fit_gain:
+                self.param.A = torch.zeros(overlap.ntiles, **backend)
+                fitted = [
+                    overlap.scene.covered(t) for t in range(overlap.ntiles)
+                ]
+                self._fitted_tiles = torch.tensor(
+                    fitted, device=backend.get("device")
+                )
 
     # -- helpers -----------------------------------------------------------
     def modulation(self) -> Tensor:
@@ -291,16 +308,10 @@ class MixtureFit:
         )
 
     def tile_gain(self) -> Tensor | None:
-        """Per-tile gains of the overlap term at the current m.
-
-        None unless the overlap term fits them (`fit_gain`).
-        """
-        if self.overlap is None or not self.overlap.fit_gain:
+        """Per-tile gains gₜ (b = gₜ·m), or None unless they are fitted."""
+        if self.param.A is None:
             return None
-        if self._overlap is None:
-            self._overlap = self.overlap_stats()
-        logm = self.param.M.log()
-        return self._overlap.log_gain(logm).exp().to(**self.backend)
+        return self.param.A.exp()
 
     def _elogpi(self, alpha: Tensor) -> Tensor:
         return Dirichlet(alpha).mean_log
@@ -422,6 +433,8 @@ class MixtureFit:
                 st[[AU, BU]] *= g.square()
                 for k, p in enumerate(pix):
                     stats[(slice(None), *p)] += st[:, k]
+                    if prm.A is not None:
+                        self._gain_add(cell.tiles[k], st[:, k], p)
                 for k, w in enumerate(where):
                     view = counts[w]
                     counts[w] = view + cnt[k].reshape(view.shape)
@@ -503,8 +516,78 @@ class MixtureFit:
         return stats, bound, counts, class_stats
 
     def _log_tile_gain(self) -> Tensor:
-        """log gₜ of every tile (zeros: the gains are fixed at one)."""
+        """log gₜ of every tile (zeros unless the gains are fitted)."""
+        if self.param.A is not None:
+            return self.param.A
         return torch.zeros(self.overlap.ntiles, **self.backend)
+
+    def _frame_tiles(self, chunk: object) -> Tensor:
+        """`(n,)` tile of every frame of a chunk."""
+        shape = chunk.sample_shape
+        ti = self._tile_index
+        start = chunk.samples[ti].start or 0
+        idx = torch.arange(
+            start, start + shape[ti], device=self.param.C.device
+        )
+        view = [1] * len(shape)
+        view[ti] = shape[ti]
+        return idx.reshape(view).expand(shape).reshape(-1)
+
+    # -- tile gains: terms of the joint (θ, a) step --------------------------
+    def _gain_add(self, t: int, st: Tensor, pix: tuple | None = None) -> None:
+        """Add the observations of tile t to the terms of its log gain.
+
+        `st` holds their statistics in terms of m, summed over frames, on
+        the pixels `pix`. aₜ is the coefficient of a per-tile constant
+        column of the θ system (log b = aₜ + Φθ): its score sₜ is exact,
+        its curvature dₜ and cross term Uₜ = Φᵀ(…) with θ come from the
+        same per-pixel Fisher information as θ, with the coupling of aₜ to
+        the per-pixel c and v left out (the score, hence the fixed point,
+        is exact; only the curvature of the step is approximate).
+        """
+        prm, acc = self.param, self._gains
+        pix = pix or (slice(None), slice(None))
+        M = prm.M[pix].to(st)
+        gM = prm.gain.to(st) * M
+        F = M.square() * st[AU] + gM.square() * st[BU]  # Fisher of log gₜ
+        Sm = M * st[G1] + gM * st[G2]  # score of log gₜ
+        if self.exact_gain:
+            Fcm, Fvm = M * st[XU], gM * st[WU]
+            maps = acc["maps"][t]
+            maps[(slice(None), *pix)] += torch.stack([F, Sm, Fcm, Fvm])
+            return
+        acc["s"][t] += Sm.sum()
+        acc["d"][t] += F.sum()
+        bases = [self.by[pix[0]], self.bx[pix[1]]]
+        acc["U"][:, t] += project(F, [b.to(F) for b in bases]).flatten()
+
+    def _gain_system(
+        self,
+        Fcm: Tensor,
+        Fvm: Tensor,
+        Gc: Tensor,
+        Gv: Tensor,
+        iHcc: Tensor,
+        iHvv: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Score s `(T,)`, curvature D `(T, T)` and cross term U `(k, T)`.
+
+        Default: the accumulated terms, D diagonal (no coupling to c, v).
+        Exact (test oracle, per-tile maps): with c and v eliminated.
+        """
+        acc = self._gains
+        if not self.exact_gain:
+            return acc["s"], acc["d"].diag(), acc["U"]
+        maps = acc["maps"].to(Fcm)
+        F, Sm, Fc, Fv = maps.unbind(1)  # (T, H, W) each
+        s = (Sm - Fc * (Gc * iHcc) - Fv * (Gv * iHvv)).sum((-2, -1))
+        Fx = F - Fc * (Fcm * iHcc) - Fv * (Fvm * iHvv)
+        bases = [self.by.to(Fx), self.bx.to(Fx)]
+        U = torch.stack([project(f, bases).flatten() for f in Fx], 1)
+        D = torch.diag(F.sum((-2, -1)))
+        D -= torch.einsum("thw,shw->ts", Fc * iHcc, Fc)
+        D -= torch.einsum("thw,shw->ts", Fv * iHvv, Fv)
+        return s, D, U
 
     # -- initialisation ----------------------------------------------------
     def init(
@@ -655,6 +738,19 @@ class MixtureFit:
             prm.theta = theta
             M = self.modulation()
         prm.M = M
+        if prm.A is not None:
+            # initial tile gains from the log-ratios of the overlaps (an
+            # initialiser only: they do not enter the bound)
+            prm.C, prm.V = C, V
+            if self._overlap is None:
+                self._overlap = self.overlap_stats()
+            ov = self._overlap
+            ov.fit_gain = True
+            a = ov.log_gain(M.log()).to(prm.A)
+            a = torch.where(self._fitted_tiles, a, 0)
+            fitted = self._fitted_tiles
+            a[fitted] -= a[fitted].mean()
+            prm.A = a
 
         n_tissue = n_tissue.reshape(-1)
         alpha = None
@@ -734,10 +830,22 @@ class MixtureFit:
         class_stats = torch.zeros((nk, self.component.nstats), **acc)
         bound = torch.zeros((), **acc)
         scene = self.overlap is not None
+        gains = prm.A is not None
+        if gains:
+            T = self.overlap.ntiles
+            k = self.by.shape[1] * self.bx.shape[1]
+            self._gains = dict(
+                s=torch.zeros(T, **acc),
+                d=torch.zeros(T, **acc),
+                U=torch.zeros((k, T), **acc),
+            )
+            if self.exact_gain:
+                self._gains["maps"] = torch.zeros((T, 4, height, width), **acc)
         for chunk in self.frames():
             ep = elogpi[chunk.samples].reshape(-1, nk + 1)
             mask = self._single_mask(chunk) if scene else None
-            st, bnd, cnt, cs = self._latent_chunk(chunk.data, ep, mask)
+            tiles = self._frame_tiles(chunk) if gains else None
+            st, bnd, cnt, cs = self._latent_chunk(chunk.data, ep, mask, tiles)
             stats += st
             counts[chunk.samples] = cnt.reshape(*chunk.sample_shape, nk + 1)
             class_stats += cs
@@ -771,15 +879,24 @@ class MixtureFit:
         return bound
 
     def _latent_chunk(
-        self, Y: Tensor, elogpi: Tensor, mask: Tensor | None = None
+        self,
+        Y: Tensor,
+        elogpi: Tensor,
+        mask: Tensor | None = None,
+        tiles: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         """Local step on `(n, H, W)` frames with `(n, K+1)` E[log π].
 
         With a boolean `mask` `(n, H, W)`, only the voxels where it is
         True contribute (the others are seen by several tiles and belong
-        to the cell pass).
+        to the cell pass). With fitted tile gains, `tiles` `(n,)` gives the
+        tile of every frame: its flat field is b = gₜ·m.
         """
         C, V = self.param.C, self.param.V
+        M = None
+        if tiles is not None:
+            g = self.param.A[tiles].exp()[:, None, None]
+            M = self.param.M * g
         nk = self.nclass
         dq = self.dq
 
@@ -808,7 +925,7 @@ class MixtureFit:
         suffs = []
         for k in range(nk):
             logZ0 = logZ
-            logpY, suff, st = self._loglik(Y, k)
+            logpY, suff, st = self._loglik(Y, k, M)
             logZY = elogpi[:, k, None, None] + logpY  # log p(y, z=k)
             logZ = torch.logaddexp(logZ, logZY)  # log ∑ p(y, z)
             pz_prv = (logZ0 - logZ).exp_()
@@ -840,19 +957,29 @@ class MixtureFit:
         if mask is not None:
             acc = torch.where(mask, acc, 0)
             logZ = torch.where(mask, logZ, 0)
-        stats = acc.sum(-3).to(sdt)  # sum over frames
         bound = logZ.sum().to(sdt)
+        if tiles is not None:
+            # in terms of m: u-weighted statistics times g, g²
+            acc[[XU, G1, WU, G2]] *= g
+            acc[[AU, BU]] *= g.square()
+            stats = torch.zeros_like(acc[:, 0], dtype=sdt)
+            for t in tiles.unique().tolist():
+                st = acc[:, tiles == t].sum(1).to(sdt)
+                self._gain_add(t, st)
+                stats += st
+            return stats, bound, sum_Z, class_stats
+        stats = acc.sum(-3).to(sdt)  # sum over frames
         return stats, bound, sum_Z, class_stats
 
     def _loglik(
-        self, Y: Tensor, k: int
+        self, Y: Tensor, k: int, M: Tensor | None = None
     ) -> tuple[Tensor, tuple[Tensor, ...], Tensor]:
         prm = self.param
         return self.component.loglik(
             Y,
             prm.C,
             prm.V,
-            prm.M,
+            prm.M if M is None else M,
             prm.gain,
             self.prior.params[k],
             dq=self.dq,
@@ -931,12 +1058,32 @@ class MixtureFit:
             H[0, :] = H[:, 0] = 0
             H[0, 0] = 1
             g[0] = 0
+        da = None
+        self._decrement = 0.0
+        if prm.A is not None and self._gains is not None:
+            dtheta, da = self._joint_step(
+                H if theta else None,
+                g if theta else None,
+                *self._gain_system(Fcm, Fvm, Gc, Gv, iHcc, iHvv),
+            )
+            dtheta = dtheta.reshape(prm.theta.shape)
+            # c, v part of the decrement (their per-pixel blocks)
+            if c:
+                self._decrement += (Gc.square() * iHcc).sum().item()
+            if v:
+                self._decrement += (Gv.square() * iHvv).sum().item()
+        elif theta:
             dtheta = torch.linalg.solve(H, g).reshape(prm.theta.shape)
-            dlogm = reconstruct(dtheta, bases)
+        if theta or da is not None:
+            dlogm = reconstruct(dtheta, [self.by, self.bx])
             largest = max(dlogm.abs().max().item(), 1e-12)
+            if da is not None:
+                largest = max(largest, da.abs().max().item())
             shrink = min(1.0, max_log_step / largest)
             dtheta *= shrink
             dlogm *= shrink
+            if da is not None:
+                da *= shrink
 
         # Gain: scalar step on log g, with v eliminated
         dloggain = 0.0
@@ -946,18 +1093,103 @@ class MixtureFit:
             curvature = Vmm.sum().item() + 1 / prior.gain_sd**2
             dloggain = max(-max_log_step, min(max_log_step, score / curvature))
 
-        # Back-substitution
+        # Back-substitution (without the c, v part of the gain step)
+        cross = None
+        if da is not None and self.exact_gain:
+            maps = self._gains["maps"].to(da)
+            full_da = torch.zeros(len(maps), dtype=da.dtype, device=da.device)
+            full_da[self._fitted_tiles] = da
+            cross = torch.einsum(
+                "t,cthw->chw", full_da, maps[:, 2:].transpose(0, 1)
+            )
         if c:
-            dC = Gc.addcmul(Fcm, dlogm, value=-1).mul_(iHcc)
-            prm.C.add_(dC, alpha=lr)
+            dC = Gc.addcmul(Fcm, dlogm, value=-1)
+            if cross is not None:
+                dC.sub_(cross[0])
+            prm.C.add_(dC.mul_(iHcc), alpha=lr)
         if v:
-            dV = (dlogm + dloggain).mul_(Fvm).sub_(Gv).neg_().mul_(iHvv)
+            dV = (dlogm + dloggain).mul_(Fvm)
+            if cross is not None:
+                dV.add_(cross[1])
+            dV = dV.sub_(Gv).neg_().mul_(iHvv)
             prm.V = torch.maximum(prm.V.add(dV, alpha=lr), prm.V.mul(0.1))
         if theta:
             prm.theta.add_(dtheta, alpha=lr)
             prm.M = self.modulation()
+        if da is not None:
+            A = prm.A.clone()
+            A[self._fitted_tiles] += lr * da.to(A)
+            prm.A = A
         if gain:
             prm.gain = gam * math.exp(lr * dloggain)
+
+    def _joint_step(
+        self,
+        H: Tensor | None,
+        g: Tensor | None,
+        s: Tensor,
+        D: Tensor,
+        U: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Joint Fisher-scoring step of θ and the fitted log gains a.
+
+        a enters as extra columns of the θ system. When every tile is
+        fitted, the common level of a is free in the step (μ is held
+        fixed) and is moved into μ afterwards (`_recentre`, exact gauge).
+        Otherwise the tiles without overlap stay at a = 0 and ∑ a = 0 over
+        the fitted tiles is a constraint of the step (a = Q·b). If the
+        Schur complement of θ is not positive definite, θ and a take
+        separate (block) steps. Sets the Newton decrement δ = stepᵀ·score.
+        """
+        F = self._fitted_tiles
+        nF = int(F.sum())
+        dtype = (H if H is not None else D).dtype
+        s, D, U = s[F].to(dtype), D[F][:, F].to(dtype), U[:, F].to(dtype)
+        if bool(F.all()):
+            Q = torch.eye(nF, dtype=dtype, device=D.device)
+        else:
+            eye = torch.eye(nF, dtype=dtype, device=D.device)
+            Q = torch.linalg.qr((eye - 1 / nF)[:, : nF - 1])[0]
+        Dq = Q.T @ D @ Q
+        Dq.diagonal().add_(Dq.diagonal().abs().mean(), alpha=1e-8)
+        sq = Q.T @ s
+        if H is None:
+            b = torch.linalg.solve(Dq, sq)
+            self._decrement = float(b @ sq)
+            k = self.param.theta.numel()
+            return torch.zeros(k, dtype=dtype, device=D.device), Q @ b
+        k = len(H)
+        Uq = U.to(H) @ Q
+        Uq[0] = 0  # θ₀₀ is pinned
+        schur = Dq - Uq.T @ torch.linalg.solve(H, Uq)
+        if torch.linalg.eigvalsh(schur).min() > 0:
+            A = torch.cat([torch.cat([H, Uq], 1), torch.cat([Uq.T, Dq], 1)], 0)
+            rhs = torch.cat([g, sq])
+            x = torch.linalg.solve(A, rhs)
+            dtheta, b = x[:k], x[k:]
+            self._decrement = float(x @ rhs)
+        else:
+            dtheta = torch.linalg.solve(H, g)
+            b = torch.linalg.solve(Dq, sq)
+            self._decrement = float(dtheta @ g + b @ sq)
+        return dtheta, Q @ b
+
+    def _recentre(self) -> float:
+        """Move the mean log gain into the class means (exact gauge).
+
+        g → g·e⁻ˢ for every tile with μ → μ·eˢ leaves the likelihood and
+        the bound unchanged. Only when every tile is fitted (otherwise the
+        step keeps ∑ a = 0 itself). Returns s.
+        """
+        prm = self.param
+        if prm.A is None or not bool(self._fitted_tiles.all()):
+            return 0.0
+        shift = prm.A.mean()
+        prm.A = prm.A - shift
+        mi = self.component.mean_index
+        for params in (self.prior.params, self.post.params):
+            params[:, mi] *= shift.exp().to(params)
+        return float(shift)
 
     # -- mixture step: q(π), then μ, ν, α ----------------------------------
     def update_post(self) -> None:
@@ -1022,6 +1254,8 @@ class MixtureFit:
                 _halve_(prm.V, previous[1])
                 _halve_(prm.theta, previous[2])
                 _loghalve_(prm.gain, previous[3])
+                if prm.A is not None:
+                    _halve_(prm.A, previous[4])
                 if learn_modulation:  # otherwise m stays as given
                     prm.M = self.modulation()
                 self.history.pop()
@@ -1037,7 +1271,7 @@ class MixtureFit:
                 return False, f"the bound is not finite at iteration {n}"
             if callback is not None:
                 callback(n, bound)
-            if abs(bound - last) < slack:
+            if prm.A is None and abs(bound - last) < slack:
                 # q(z, u) is already consistent with the parameters
                 converged = True
                 reason = f"bound change below tol={tol:g} per data point"
@@ -1047,13 +1281,29 @@ class MixtureFit:
             previous = [t.clone() for t in (prm.C, prm.V, prm.theta, prm.gain)]
             self.update_post()
             self.update_prior(alpha=learn_alpha)
+            if prm.A is not None:
+                # after the class step (its statistics are in the old gauge)
+                self._recentre()
+                previous.append(prm.A.clone())
             self.update_parameters(
                 theta=learn_modulation, lr=lr, max_log_step=max_log_step
             )
+            if prm.A is not None and 0.5 * self._decrement < slack:
+                # with tile gains the bound changes slowly along the
+                # gain/ramp direction, and the class step is not halved
+                # (the bound wanders by a few units): stop on the Newton
+                # decrement of (c, v, θ, a), the predicted gain of the step
+                converged = True
+                reason = f"Newton decrement below tol={tol:g} per data point"
+                self._recentre()
+                self.update_latent()
+                break
         else:
             # Make the statistics and the bound consistent with the final
             # parameters (the mixture was updated after the last local
             # step).
+            if prm.A is not None:
+                self._recentre()
             self.update_latent()
         return converged, reason
 
