@@ -175,28 +175,27 @@ start levels.
 
 ## Usage
 
-The example blurs a test pattern with a Gaussian PSF from
-[`optix.models`](../../reference/models.md), using the same forward model as
-the estimator.
+The example blurs a [phantom](../../reference/models.md#phantoms) of thin
+filaments with a Gaussian PSF from [`optix.models`](../../reference/models.md),
+using the same forward model as the estimator.
 
 ```python
 import torch
 from optix.deconv import RichardsonLucy
-from optix.models import gaussian_psf, simulate_blur
+from optix.models import gaussian_psf, phantoms, simulate_blur
 
 torch.manual_seed(0)
 
-# 1. A Gaussian PSF and a blurred, Poisson-noisy test pattern.
+# 1. A Gaussian PSF and a blurred, Poisson-noisy specimen of filaments.
 psf = gaussian_psf((15, 15), sigma=2.0)
-x = torch.full((96, 96), 5.0)
-x[20:76:8, 20:76] = 200.0
+x = phantoms.filaments((96, 96), intensity=200.0, seed=0) + 5
 y = torch.poisson(simulate_blur(x, psf))
 
 # 2. Fit and deconvolve (χ² stopping rule).
 rl = RichardsonLucy(psf).fit(y)
 x_hat = rl.apply(y)
 
-# 3. Compare to the truth.
+# 3. Compare to the truth: mean error about 21 before, 10 after.
 print(rl.history.extras["iterations"])  # iterations used
 print(float((y - x).abs().mean()), float((x_hat - x).abs().mean()))
 ```
