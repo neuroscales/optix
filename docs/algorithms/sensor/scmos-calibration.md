@@ -10,8 +10,8 @@
 ## Overview
 
 [`SCMOSCalibration`](../../reference/sensor.md) measures, for every pixel of an
-sCMOS camera, its offset $o_p$, its read-noise variance $\sigma^2_p$ and its gain
-$g_p$, following the camera characterisation of
+sCMOS camera, its offset $o_i$, its read-noise variance $\sigma^2_i$ and its gain
+$g_i$, following the camera characterisation of
 [Huang et al. 2013 (Supplementary Note, §2)](https://doi.org/10.1038/nmeth.2488).
 It needs a stack of dark frames and a few stacks of uniform illumination at
 different levels. Its `apply` converts data to photoelectrons,
@@ -28,30 +28,30 @@ The camera model of [Image formation and noise](../../concepts/image-formation.m
 with one value per pixel. The illumination stacks only need to be uniform *in
 time* at each pixel: the calibration is per pixel, so spatial non-uniformity of
 the light does not matter. Within one level, every frame of a pixel has the same
-expected number of photoelectrons $\lambda_p^k$.
+expected number of photoelectrons $\lambda_i^k$.
 
 ## Probabilistic model
 
-Each pixel $p$ of each frame follows
+Each pixel $i$ of each frame follows
 
 $$
-y_p = g_p\, n_p + o_p + \varepsilon_p, \qquad
-n_p \sim \mathrm{Poisson}(\lambda_p), \qquad
-\varepsilon_p \sim \mathcal{N}(0, \sigma^2_p),
+y_i = g_i\, e_i + o_i + \varepsilon_i, \qquad
+e_i \sim \mathrm{Poisson}(\lambda_i), \qquad
+\varepsilon_i \sim \mathcal{N}(0, \sigma^2_i),
 $$
 
 so that, over the frames of one illumination level $k$,
 
 $$
-\mathbb{E}[y_p] = g_p \lambda_p^k + o_p, \qquad
-\mathrm{Var}[y_p] = g_p^2 \lambda_p^k + \sigma^2_p
-= g_p\,\bigl(\mathbb{E}[y_p] - o_p\bigr) + \sigma^2_p .
+\mathbb{E}[y_i] = g_i \lambda_i^k + o_i, \qquad
+\mathrm{Var}[y_i] = g_i^2 \lambda_i^k + \sigma^2_i
+= g_i\,\bigl(\mathbb{E}[y_i] - o_i\bigr) + \sigma^2_i .
 $$
 
-The variance excess is linear in the mean excess, with slope $g_p$ and no
-intercept. In vector form, with $P$ the number of pixels, $M$ the number of dark
+The variance excess is linear in the mean excess, with slope $g_i$ and no
+intercept. In vector form, with $\lvert\Omega\rvert$ the number of pixels, $M$ the number of dark
 frames, $K$ the number of illumination levels, dark frames
-$\mathbf{y}_m^{\text{dark}} \in \mathbb{R}^P$, and $\bar{\mathbf{y}}^k, \mathbf{v}^k \in \mathbb{R}^P$ the
+$\mathbf{y}_m^{\text{dark}} \in \mathbb{R}^{\lvert\Omega\rvert}$, and $\bar{\mathbf{y}}^k, \mathbf{v}^k \in \mathbb{R}^{\lvert\Omega\rvert}$ the
 temporal mean and variance at level $k$ (squares and divisions are pixel-wise):
 
 === "optix"
@@ -62,9 +62,9 @@ temporal mean and variance at level $k$ (squares and divisions are pixel-wise):
     $$
 
     $$
-    \hat{g}_p = \arg\min_{g} \sum_{k=1}^{K}
-    \Bigl( (v_p^k - \sigma^2_p) - g\,(\bar{y}_p^k - o_p) \Bigr)^2
-    = \frac{\sum_k (\bar{y}_p^k - o_p)(v_p^k - \sigma^2_p)}{\sum_k (\bar{y}_p^k - o_p)^2}
+    \hat{g}_i = \arg\min_{g} \sum_{k=1}^{K}
+    \Bigl( (v_i^k - \sigma^2_i) - g\,(\bar{y}_i^k - o_i) \Bigr)^2
+    = \frac{\sum_k (\bar{y}_i^k - o_i)(v_i^k - \sigma^2_i)}{\sum_k (\bar{y}_i^k - o_i)^2}
     $$
 
 === "Huang et al. 2013"
@@ -85,20 +85,20 @@ temporal mean and variance at level $k$ (squares and divisions are pixel-wise):
 
 | optix | [Huang et al. 2013](https://doi.org/10.1038/nmeth.2488) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}_m^{\text{dark}}$ | $s^m$ | dark frame $m$ (ADU) | $\mathbb{R}^P$, per frame |
-| $\mathbf{o}$ | $o$ | offset: mean dark level (ADU) | $\mathbb{R}^P$, per pixel, shared by all frames |
-| $\boldsymbol{\sigma}^2$ | $\mathrm{var}$ | read-noise variance (ADU²) | $\mathbb{R}^P$, per pixel, shared by all frames |
-| $\mathbf{g}$ | $g$ | gain (ADU per photoelectron) | $\mathbb{R}^P$, per pixel, shared by all frames |
-| $\bar{\mathbf{y}}^k$ | $\bar{D}^k$ | temporal mean at level $k$ (ADU) | $\mathbb{R}^P$, per pixel and level |
-| $\mathbf{v}^k$ | $v^k$ | temporal variance at level $k$ (ADU²) | $\mathbb{R}^P$, per pixel and level |
-| $\lambda_p^k$ | | expected photoelectrons of pixel $p$ at level $k$ | scalar, per pixel and level |
+| $\mathbf{y}_m^{\text{dark}}$ | $s^m$ | dark frame $m$ (ADU) | $\mathbb{R}^{\lvert\Omega\rvert}$, per frame |
+| $\mathbf{o}$ | $o$ | offset: mean dark level (ADU) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel, shared by all frames |
+| $\boldsymbol{\sigma}^2$ | $\mathrm{var}$ | read-noise variance (ADU²) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel, shared by all frames |
+| $\mathbf{g}$ | $g$ | gain (ADU per photoelectron) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel, shared by all frames |
+| $\bar{\mathbf{y}}^k$ | $\bar{D}^k$ | temporal mean at level $k$ (ADU) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel and level |
+| $\mathbf{v}^k$ | $v^k$ | temporal variance at level $k$ (ADU²) | $\mathbb{R}^{\lvert\Omega\rvert}$, per pixel and level |
+| $\lambda_i^k$ | | expected photoelectrons of pixel $i$ at level $k$ | scalar, per pixel and level |
 | | $A$, $B$ | variance and mean excesses of one pixel over the levels | $\mathbb{R}^{1\times K}$, per pixel |
-| $M$, $K$, $P$ | | numbers of dark frames, levels, pixels | scalars, whole stack |
+| $M$, $K$, $\lvert\Omega\rvert$ | | numbers of dark frames, levels, pixels | scalars, whole stack |
 | $\delta$ (`ddof`) | $0$ | degrees of freedom removed from the variance divisor | scalar, whole stack |
 
 ## Inference / derivation
 
-Strategy: moments, then a regression. The dark stack ($\lambda_p = 0$) gives the
+Strategy: moments, then a regression. The dark stack ($\lambda_i = 0$) gives the
 offset and read variance directly as its temporal mean and variance. Removing
 them from the moments of each illuminated level leaves $K$ points per pixel on a
 line through the origin whose slope is the gain, fitted by least squares with
@@ -114,7 +114,7 @@ median of per-level slopes.
 
 ## Algorithm
 
-**Input:** dark frames $\mathbf{y}_1^{\text{dark}}, \ldots, \mathbf{y}_M^{\text{dark}} \in \mathbb{R}^P$;
+**Input:** dark frames $\mathbf{y}_1^{\text{dark}}, \ldots, \mathbf{y}_M^{\text{dark}} \in \mathbb{R}^{\lvert\Omega\rvert}$;
 $K$ illumination stacks; `robust="none"`, `confidence=None`, `ddof` $\delta = 0$ (faithful) or $1$. \
 **Output:** `SensorEstimate` with $\mathbf{o}$, $\boldsymbol{\sigma}^2$, $\mathbf{g}$ and, if `confidence` is set, `defective`.
 
@@ -123,11 +123,11 @@ $K$ illumination stacks; `robust="none"`, `confidence=None`, `ddof` $\delta = 0$
 2. **Level moments.** For each level $k = 1, \ldots, K$, stream its stack once:
    per-pixel mean $\bar{\mathbf{y}}^k$ and variance $\mathbf{v}^k$.
 3. **Excesses.** $\mathbf{a}^k = \bar{\mathbf{y}}^k - \mathbf{o}$ and
-   $\mathbf{b}^k = \mathbf{v}^k - \boldsymbol{\sigma}^2$, both in $\mathbb{R}^P$.
+   $\mathbf{b}^k = \mathbf{v}^k - \boldsymbol{\sigma}^2$, both in $\mathbb{R}^{\lvert\Omega\rvert}$.
 4. **Gain.** Pixel-wise $\mathbf{g} = \sum_k \mathbf{a}^k \odot \mathbf{b}^k \big/ \sum_k (\mathbf{a}^k)^2$,
-   or the Huber IRLS fit, or the Theil-Sen median of $b_p^k / a_p^k$.
-5. **Defects** (if `confidence` is set): flag pixel $p$ unless $g_p$ is finite,
-   $g_p > 0$ and $\mathrm{stderr}(g_p) / g_p \le$ `confidence`.
+   or the Huber IRLS fit, or the Theil-Sen median of $b_i^k / a_i^k$.
+5. **Defects** (if `confidence` is set): flag pixel $i$ unless $g_i$ is finite,
+   $g_i > 0$ and $\mathrm{stderr}(g_i) / g_i \le$ `confidence`.
 
 The paper used 60,000 dark frames and 15 levels of 20,000 frames, from about 20
 to 200 photons per pixel.

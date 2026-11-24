@@ -33,20 +33,20 @@ In electrons, after the offset has been subtracted and the gain divided out,
 
     $$
     \mathbf{r} = \frac{\mathbf{y} - \mathbf{o}}{g}
-    = \mathbf{n} + \mathbf{n}_0 + \boldsymbol{\varepsilon},
+    = \mathbf{e} + \mathbf{e}_0 + \boldsymbol{\varepsilon},
     \qquad
-    \mathbf{n} \sim \mathrm{Poisson}\bigl(\mathbf{f} \odot \mathbf{A}\mathbf{x}\bigr),
+    \mathbf{e} \sim \mathrm{Poisson}\bigl(\mathbf{f} \odot \mathbf{A}\mathbf{x}\bigr),
     \quad
-    \mathbf{n}_0 \sim \mathrm{Poisson}(\mathbf{b}),
+    \mathbf{e}_0 \sim \mathrm{Poisson}(\mathbf{b}),
     \quad
     \boldsymbol{\varepsilon} \sim \mathcal{N}(\mathbf{0}, \sigma^2 \mathbf{I}).
     $$
 
-    Here $\mathbf{y}, \mathbf{r}, \mathbf{n}, \mathbf{n}_0,
-    \boldsymbol{\varepsilon} \in \mathbb{R}^P$ for one image of $P$ pixels,
+    Here $\mathbf{y}, \mathbf{r}, \mathbf{e}, \mathbf{e}_0,
+    \boldsymbol{\varepsilon} \in \mathbb{R}^{\lvert\Omega\rvert}$ for one image of $\lvert\Omega\rvert$ pixels,
     $\mathbf{x} \in \mathbb{R}^Q$ is the latent image on the domain extended
-    by the PSF support ($Q \ge P$ pixels) and
-    $\mathbf{A} \in \mathbb{R}^{P \times Q}$.
+    by the PSF support ($Q \ge \lvert\Omega\rvert$ pixels) and
+    $\mathbf{A} \in \mathbb{R}^{\lvert\Omega\rvert \times Q}$.
 
 === "Snyder et al. 1993"
 
@@ -65,16 +65,16 @@ In electrons, after the offset has been subtracted and the gain divided out,
 
 | optix | [Snyder et al. 1993](https://doi.org/10.1364/JOSAA.10.001014) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}$ | none (the paper works in electrons) | recorded image, in ADU | $P$, one per image |
-| $\mathbf{r}$ | $r(j)$ | data in electrons | $P$, one per image |
+| $\mathbf{y}$ | none (the paper works in electrons) | recorded image, in ADU | $\lvert\Omega\rvert$, one per image |
+| $\mathbf{r}$ | $r(j)$ | data in electrons | $\lvert\Omega\rvert$, one per image |
 | $\mathbf{x}$ | $\lambda(i)$ | latent image | $Q$, one per image |
-| $\mathbf{h}$, $\mathbf{A}$ | $p(j \mid i)$ | PSF and blur operator | $K$ and $P \times Q$, one for the whole stack |
-| $\mathbf{f}$ | $\beta(j)$ | flat field (detection efficiency) | $P$, one per pixel, shared by all images |
-| $\mathbf{b}$ | $\mu_0(j)$ | mean background counts | $P$, one per pixel, shared by all images |
-| $\mathbf{o}$ | $m$ (bias) | camera offset, in ADU | $P$ or scalar, one per pixel, shared by all images |
-| $\boldsymbol{\varepsilon}$, $\sigma^2$ | $g(j)$, $\sigma^2$ | read noise and its variance | $P$ per image; $\sigma^2$ per pixel or scalar, shared |
-| $g$ | none | camera gain, ADU per electron | $P$ or scalar, shared by all images |
-| $\mathbf{n}$, $\mathbf{n}_0$ | $n_{\mathrm{obj}}(j)$, $n_0(j)$ | object and background photo-electron counts | $P$, one per image |
+| $\mathbf{h}$, $\mathbf{A}$ | $p(j \mid i)$ | PSF and blur operator | $K$ and $\lvert\Omega\rvert \times Q$, one for the whole stack |
+| $\mathbf{f}$ | $\beta(j)$ | flat field (detection efficiency) | $\lvert\Omega\rvert$, one per pixel, shared by all images |
+| $\mathbf{b}$ | $\mu_0(j)$ | mean background counts | $\lvert\Omega\rvert$, one per pixel, shared by all images |
+| $\mathbf{o}$ | $m$ (bias) | camera offset, in ADU | $\lvert\Omega\rvert$ or scalar, one per pixel, shared by all images |
+| $\boldsymbol{\varepsilon}$, $\sigma^2$ | $g(j)$, $\sigma^2$ | read noise and its variance | $\lvert\Omega\rvert$ per image; $\sigma^2$ per pixel or scalar, shared |
+| $g$ | none | camera gain, ADU per electron | $\lvert\Omega\rvert$ or scalar, shared by all images |
+| $\mathbf{e}$, $\mathbf{e}_0$ | $n_{\mathrm{obj}}(j)$, $n_0(j)$ | object and background photo-electron counts | $\lvert\Omega\rvert$, one per image |
 
 The paper's $g(j)$ is the read noise, not the gain. Since the offset is
 subtracted in optix, its bias is $m = 0$ in electrons.
@@ -105,11 +105,11 @@ There is no prior; regularisation, when wanted, is by the method of sieves
 ## Inference / derivation
 
 The strategy is expectation–maximisation with the Poisson counts
-$\mathbf{n} + \mathbf{n}_0$ as the missing data. The E step replaces each
+$\mathbf{e} + \mathbf{e}_0$ as the missing data. The E step replaces each
 noisy data value by the conditional mean of the counts given it,
 
 $$
-F(r, \mu, \sigma) = \mathbb{E}[\,n + n_0 \mid r\,],
+F(r, \mu, \sigma) = \mathbb{E}[\,e + e_0 \mid r\,],
 $$
 
 a ratio of two sums over the possible counts (Eqs. 19 and 21) that pulls the
@@ -141,9 +141,9 @@ field in the forward and back projections:
 | optix | [Snyder et al. 1993](https://doi.org/10.1364/JOSAA.10.001014) | Meaning | Shape |
 |---|---|---|---|
 | $\mathbf{x}_k$ | $\lambda_k(i)$ | iterate after $k$ updates | $Q$, one per image |
-| $\boldsymbol{\mu}_k$ | $\mu_k(j)$ | predicted mean counts | $P$, one per image |
+| $\boldsymbol{\mu}_k$ | $\mu_k(j)$ | predicted mean counts | $\lvert\Omega\rvert$, one per image |
 | $\mathbf{A}^\top \mathbf{f}$ | $\bar\beta(i)$ | back-projected flat, the normaliser | $Q$, shared by all images |
-| $F(\mathbf{r}, \boldsymbol{\mu}_k, \sigma)$ | $F[r(j), \mu_k(j), \sigma]$ | conditional mean of the counts given the data | $P$, one per image |
+| $F(\mathbf{r}, \boldsymbol{\mu}_k, \sigma)$ | $F[r(j), \mu_k(j), \sigma]$ | conditional mean of the counts given the data | $\lvert\Omega\rvert$, one per image |
 
 As for any EM scheme, every iterate is non-negative and the likelihood never
 decreases. Without read noise ($\sigma \to 0$), $F = r$ and the update is
@@ -166,7 +166,7 @@ $\mathbf{s}$, which estimates the smoothed object $\mathbf{s} * \mathbf{x}$.
 
 ## Algorithm
 
-**Input:** an image $\mathbf{y} \in \mathbb{R}^P$ in ADU, the PSF
+**Input:** an image $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$ in ADU, the PSF
 $\mathbf{h}$, the sensor (offset $\mathbf{o}$, gain $g$, read-noise variance),
 optional flat $\mathbf{f}$ and background; hyper-parameters `noise` $=$
 `"exact"`, `alpha` $= 0.05$, `max_iter` $= 100$, `n_iter` $=$ `None`. \
@@ -180,12 +180,12 @@ region.
    $(\mathbf{d} - \mathbf{o})/g$ clipped at 0, plus the extra background
    divided by $g$.
 3. **Initialise** $\mathbf{x}_0$ uniform, at
-   $\sum_p (r_p - b_p) / \sum_p f_p$ per image.
+   $\sum_{i\in\Omega} (r_i - b_i) / \sum_{i\in\Omega} f_i$ per image.
 4. **Repeat** for $k = 0, 1, \ldots$ until `n_iter` (if given) or `max_iter`
    iterations:
     1. **Predict** $\boldsymbol{\mu}_k = \mathbf{f} \odot \mathbf{A}\mathbf{x}_k + \mathbf{b}$;
     2. **Test** (only when `n_iter` is `None`): stop if the χ² statistic
-       $\sum_p (r_p - \mu_{k,p})^2 / (\mu_{k,p} + \sigma^2)$ is no longer
+       $\sum_{i\in\Omega} (r_i - \mu_{k,i})^2 / (\mu_{k,i} + \sigma^2)$ is no longer
        significant at level `alpha`;
     3. **E step:** $\mathbf{c} = F(\mathbf{r}, \boldsymbol{\mu}_k, \sigma)$
        (exact), or use Eq. 15 on $\mathbf{r} + \sigma^2$ (shifted Poisson);

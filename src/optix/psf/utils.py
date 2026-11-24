@@ -14,10 +14,18 @@ from ._ops import (
     local_maxima,
     tukey_window,
 )
+from ._pupil import (
+    bead_otf,
+    fit_otf_rescaling,
+    pupil_coordinates,
+    vectorial_factors,
+    zernike_pupil,
+)
 from ._richards_wolf import (
     richards_wolf_field,
     richards_wolf_integrals,
 )
+from ._zernike import noll_index, unwrap_phase, zernike, zernike_fit
 
 __all__ = [
     "beam_radius",
@@ -35,4 +43,13 @@ __all__ = [
     "sheet_intensity",
     "threshold_centroid",
     "tukey_window",
+    "zernike",
+    "noll_index",
+    "zernike_fit",
+    "unwrap_phase",
+    "pupil_coordinates",
+    "zernike_pupil",
+    "vectorial_factors",
+    "bead_otf",
+    "fit_otf_rescaling",
 ]

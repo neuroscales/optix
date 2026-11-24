@@ -1,11 +1,11 @@
 # Multiview Richardson–Lucy
 
 !!! info "At a glance"
-    **Estimates:** deconvolved image (the latent image $\mathbf{x}$, one image for all the views, of the shape of one view) \
-    **Noise model:** none assumed by the derivation; Poisson counts for the χ² extension \
-    **Streaming:** halo \
-    **Needs many frames:** no (several registered views of one specimen) \
-    **Reference:** Preibisch et al., Nat Methods, 2014, [doi:10.1038/nmeth.2929](https://doi.org/10.1038/nmeth.2929)
+    - **Estimates:** deconvolved image (the latent image $\mathbf{x}$, one image for all the views, of the shape of one view)
+    - **Noise model:** none assumed by the derivation; Poisson counts for the χ² extension
+    - **Streaming:** halo
+    - **Needs many frames:** no (several registered views of one specimen)
+    - **Reference:** Preibisch et al., Nat Methods, 2014, [doi:10.1038/nmeth.2929](https://doi.org/10.1038/nmeth.2929)
 
 ## Overview
 
@@ -45,25 +45,33 @@ camera offset are assumed removed.
     $$
     \mathbb{E}[\mathbf{y}_v] = \mathbf{A}_v \mathbf{x},
     \qquad
-    (\mathbf{A}_v \mathbf{x})_p = \sum_q h_v(p - q)\, x_q ,
-    \qquad v = 1, \ldots, V .
+    (\mathbf{A}_v \mathbf{x})_i = \sum_{j \in \Omega} h_v(i - j)\, x_j ,
+    \qquad i \in \Omega,\; v = 1, \ldots, V ,
     $$
+
+    with $\mathbf{y}_v \in \mathbb{R}^{\lvert\Omega\rvert}$ view $v$ on the
+    common grid of $\lvert\Omega\rvert$ pixels, $\mathbf{x} \in \mathbb{R}^{Q}$
+    the latent image on the extended domain of $Q \ge \lvert\Omega\rvert$ pixels
+    (the sum over $j$ runs over it), $\mathbf{h}_v$ the PSF of view $v$, of $K$
+    voxels, and $\mathbf{A}_v \in \mathbb{R}^{\lvert\Omega\rvert \times Q}$ its
+    blur, cropped to the observed region.
 
 === "Preibisch et al. 2014"
 
     $$
-    \phi_v(x_v) = \int_\xi \psi(\xi)\, P_v(x_v \mid \xi)\, d\xi
-    \quad \text{(Suppl. Note 1.2, Eqs. 12–15)}.
+    \phi_v(x_v) = \int_\xi \psi(\xi)\, P_v(x_v \mid \xi)\, d\xi ,
     $$
 
-| optix | [Preibisch et al. 2014](https://doi.org/10.1038/nmeth.2929) |
-|---|---|
-| $\mathbf{y}_v$ (view $v$) | $\phi_v(x_v)$ |
-| $\mathbf{x}$ (latent image) | $\psi(\xi)$ |
-| $\mathbf{h}_v$, $\mathbf{A}_v$ (PSF, blur) | $P_v(x_v \mid \xi)$, convolution $\psi * P_v$ |
-| $\check{\mathbf{h}}_v$, $\mathbf{A}_v^\top$ (mirrored PSF, adjoint) | $P_v^*$, convolution $\cdot * P_v^*$ |
-| $V$, $v$ | $N = \lvert V \rvert$, $v \in V$ |
-| $t$ (iteration) | $r$ |
+    (Suppl. Note 1.2, Eqs. 12–15).
+
+| optix | [Preibisch et al. 2014](https://doi.org/10.1038/nmeth.2929) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_v$ | $\phi_v(x_v)$ | recorded view $v$, registered to the common grid | $\lvert\Omega\rvert$, one per view |
+| $\mathbf{x}$ | $\psi(\xi)$ | latent (deconvolved) image | $Q$, one shared by all views |
+| $\mathbf{h}_v$, $\mathbf{A}_v$ | $P_v(x_v \mid \xi)$, convolution $\psi * P_v$ | PSF of view $v$ and the blur it defines | $K$ and $\lvert\Omega\rvert \times Q$, one per view |
+| $\check{\mathbf{h}}_v$, $\mathbf{A}_v^\top$ | $P_v^*$, convolution $\cdot * P_v^*$ | mirrored PSF and the adjoint blur (back projection) | $K$ and $Q \times \lvert\Omega\rvert$, one per view |
+| $V$, $v$ | $N = \lvert V \rvert$, $v \in V$ | number of views; view index | scalars |
+| $t$ | $r$ | iteration counter | scalar |
 
 The mirrored kernel is $\check{h}(\mathbf{r}) = h(-\mathbf{r})$. It is the kernel of
 the adjoint $\mathbf{A}_v^\top$, which matters because the PSFs of rotated views
@@ -97,6 +105,10 @@ regulariser.
 ## Inference / derivation
 
 The strategy is a multiplicative fixed-point iteration, built in four steps.
+Its statistical counterpart is maximum-likelihood estimation under Poisson noise:
+`update="additive"` is the EM algorithm of the stacked views, the default
+sequential update is ordered-subset EM with one view per subset, and the
+compound kernels are heuristic accelerations of it.
 
 **1. Plain Bayesian-based iteration.** The correction of view $v$ is the
 single-view Richardson–Lucy correction,
@@ -120,8 +132,9 @@ averages them arithmetically.
 
     $$
     \psi^{r+1} = \psi^{r} \prod_{v \in V} \frac{\phi_v}{\psi^{r} * P_v} * P_v^*
-    \quad \text{(Eqs. 36–37)}.
     $$
+
+    (Eqs. 36–37).
 
 The exponent $1/V$ is not optional: with the product as printed in Eq. 36 the
 iteration diverges from about four views on. The normaliser $\mathbf{A}_v^\top\mathbf{1}$ is 1 inside the field and falls below
@@ -160,17 +173,16 @@ view:
     $$
     \psi^{r+1} = \psi^{r} \prod_{v \in V} \frac{\phi_v}{\psi^{r} * P_v} *
     \Bigl( P_v^* \prod_{w \in W_v} P_v^* * P_w * P_w^* \Bigr)
-    \quad \text{(Eqs. 102–103)},
     $$
 
-    with $W_v = V \setminus \{v\}$.
+    (Eqs. 102–103), with $W_v = V \setminus \{v\}$.
 
-| optix | [Preibisch et al. 2014](https://doi.org/10.1038/nmeth.2929) |
-|---|---|
-| $\mathbf{h}_{b,v}$, $\mathbf{B}_v$ (back-projection kernel, operator) | $P_v^{\mathrm{compound}}$, convolution $\cdot * P_v^{\mathrm{compound}}$ |
-| $\odot$, $\prod$ of kernels | $\cdot$, $\prod$ (pixel-wise) |
-| $\mathbf{c}_v$ (correction of view $v$) | the factor of view $v$ in Eq. 102 |
-| $w \ne v$ | $w \in W_v$ |
+| optix | [Preibisch et al. 2014](https://doi.org/10.1038/nmeth.2929) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{h}_{b,v}$, $\mathbf{B}_v$ | $P_v^{\mathrm{compound}}$, convolution $\cdot * P_v^{\mathrm{compound}}$ | compound back-projection kernel of view $v$ and its operator | $K$ and $Q \times \lvert\Omega\rvert$, one per view |
+| $\odot$, $\prod$ of kernels | $\cdot$, $\prod$ | pixel-wise product of kernels | operators |
+| $\mathbf{c}_v$ | the factor of view $v$ in Eq. 102 | multiplicative correction of view $v$ | $Q$, one per view and iteration |
+| $w \ne v$ | $w \in W_v$ | the other views | indices |
 
 The approximation holds for Gaussian-like PSFs, which measured light-sheet PSFs
 resemble ([Suppl. Fig. 3](https://doi.org/10.1038/nmeth.2929)); the convergence
@@ -185,23 +197,21 @@ $\mathbf{h}_w$ constant, which leaves the pixel-wise power of the mirrored PSF
 === "optix"
 
     $$
-    \mathbf{h}_{b,v} \propto \check{\mathbf{h}}_v \odot \prod_{w \ne v}
-    \bigl(\check{\mathbf{h}}_v * \mathbf{h}_w\bigr)
-    \quad\text{(I)},
+    \underbrace{\mathbf{h}_{b,v} \propto \check{\mathbf{h}}_v \odot \prod_{w \ne v}
+    \bigl(\check{\mathbf{h}}_v * \mathbf{h}_w\bigr)}_{\mathrm{I}},
     \qquad
-    \mathbf{h}_{b,v} \propto \check{\mathbf{h}}_v^{\,\odot V}
-    \quad\text{(II)}.
+    \underbrace{\mathbf{h}_{b,v} \propto \check{\mathbf{h}}_v^{\,\odot V}}_{\mathrm{II}}.
     $$
 
 === "Preibisch et al. 2014"
 
     $$
-    P_v^* \prod_{w \in W_v} P_v^* * P_w
-    \quad \text{(Eq. 114)},
+    P_v^* \prod_{w \in W_v} P_v^* * P_w ,
     \qquad
-    \prod_{v,\, w \in W_v} P_v^*
-    \quad \text{(Eq. 115)}.
+    \prod_{v,\, w \in W_v} P_v^* ,
     $$
+
+    Eqs. 114 and 115.
 
 The paper reports, for a simulated ground truth and depending on the number of
 views (up to twelve in Suppl. Fig. 4), that
@@ -212,20 +222,26 @@ gives the lowest quality at low signal-to-noise ratio (Suppl. Note 7.5).
 
 ## Algorithm
 
-```text
-Input: views y_1 … y_V (registered, same shape), PSFs h_1 … h_V,
-       kernel = "efficient", update = "sequential", n_iter = 10,
-       optional weights w_1 … w_V and weight_sum k = 1
-Pad every PSF to a common odd shape, normalise to unit sum
-Compute the compound kernels h_b,1 … h_b,V (once)
-Initialise x(0): constant, the mean intensity of all the views (one level per image)
-For every block (core + halo) of the views, all views at once:
-    Repeat n_iter times (or until the χ² rule stops, if chi2_stop):
-        for v = 1 … V in turn:
-            c_v = B_v[y_v / (A_v x)] / (B_v 1)           (1 where view v does not reach)
-            x   = x ⊙ (1 − w_v + w_v c_v),  negative values set to 0
-Return x, cropped to the observed region
-```
+**Input:** registered views $\mathbf{y}_1, \ldots, \mathbf{y}_V \in \mathbb{R}^{\lvert\Omega\rvert}$,
+PSFs $\mathbf{h}_1, \ldots, \mathbf{h}_V$; `kernel="efficient"`,
+`update="sequential"`, `n_iter=10`; optional weight images
+$\mathbf{w}_1, \ldots, \mathbf{w}_V$ and `weight_sum` $k = 1$. \
+**Output:** the deconvolved image $\hat{\mathbf{x}}$, cropped to the observed
+region.
+
+1. **Prepare the kernels:** pad every PSF to a common odd shape, normalise it to
+   unit sum, and compute the compound kernels $\mathbf{h}_{b,1}, \ldots, \mathbf{h}_{b,V}$
+   once.
+2. **Initialise** $\mathbf{x}^{(0)}$ constant, at the mean intensity of all the
+   views (one level per image).
+3. **For every block** (core plus halo) of the views, all views at once,
+   **repeat** `n_iter` times (or until the χ² rule stops, with `chi2_stop`):
+    1. for $v = 1, \ldots, V$ in turn:
+        1. **Correct:** $\mathbf{c}_v = \mathbf{B}_v[\mathbf{y}_v / (\mathbf{A}_v\mathbf{x})] / \mathbf{B}_v\mathbf{1}$,
+           set to 1 where view $v$ does not reach;
+        2. **Update:** $\mathbf{x} \leftarrow \mathbf{x} \odot (\mathbf{1} - \mathbf{w}_v + \mathbf{w}_v \odot \mathbf{c}_v)$,
+           with negative values set to 0 ($\mathbf{w}_v = \mathbf{1}$ without weights).
+4. **Crop** $\mathbf{x}$ to the observed region and return it.
 
 The default `n_iter = 10` is not given in the paper, where the user chooses the
 number of iterations. With `update="multiplicative"` the loop over views is
@@ -256,14 +272,15 @@ $v$ then applies the fraction $w_v$ of its correction.
     $$
     \psi^{r+1}(\xi) = \psi^{r}(\xi)\, w_v(\xi)\, f^{v}_{\mathrm{RL}}(\xi),
     \qquad \textstyle\sum_{v \in V} w_v(\xi) = 1
-    \quad \text{(Online Methods, Eq. 3)}.
     $$
 
-| optix | [Preibisch et al. 2014](https://doi.org/10.1038/nmeth.2929) |
-|---|---|
-| $\mathbf{w}_v$ (weight image of view $v$) | $w_v(\xi)$ |
-| $\mathbf{c}_v$ (correction factor) | $f^v_{\mathrm{RL}}$ |
-| $k$ (`weight_sum`) | the number the weights sum to; 1 by default |
+    (Online Methods, Eq. 3).
+
+| optix | [Preibisch et al. 2014](https://doi.org/10.1038/nmeth.2929) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{w}_v$ | $w_v(\xi)$ | weight image of view $v$, in $[0, 1]$ | $Q$, one per view |
+| $\mathbf{c}_v$ | $f^v_{\mathrm{RL}}$ | multiplicative correction of view $v$ | $Q$, one per view and iteration |
+| $k$ (`weight_sum`) | 1 (the sum of the weights) | the number the weights of a pixel sum to | scalar, one for the whole stack |
 
 By default the weights of every pixel sum to 1, which balances the update over
 the image but gives no ordered-subset speed-up. Summing them to $k > 1$ recovers
@@ -301,9 +318,9 @@ given. The defaults of `faithful=False` are the same.
 The χ² stop is the only extension. Following
 [Lucy (1974, §IV)](https://doi.org/10.1086/111605), it stops at the first
 iteration for which $P(\chi^2 > \chi^2_{\mathrm{obs}}) \ge \alpha$, with
-$\chi^2_{\mathrm{obs}} = \sum_v \sum_p (y_{vp} - \mu_{vp})^2 / \mu_{vp}$,
-$\boldsymbol{\mu}_v = \mathbf{A}_v \mathbf{x}$ and $V P - 1$ degrees of freedom
-($P$ pixels per view); it assumes counts.
+$\chi^2_{\mathrm{obs}} = \sum_v \sum_{i \in \Omega} (y_{vi} - \mu_{vi})^2 / \mu_{vi}$,
+$\boldsymbol{\mu}_v = \mathbf{A}_v \mathbf{x}$ and $V \lvert\Omega\rvert - 1$ degrees of freedom
+($\lvert\Omega\rvert$ pixels per view); it assumes counts.
 
 !!! note "Choices the paper leaves open"
     These are fixed by the implementation and have no keyword:

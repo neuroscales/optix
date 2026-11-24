@@ -1,6 +1,7 @@
 """Processing algorithms for microscopy."""
 
 from . import (
+    attenuation,
     background,
     basis,
     deconv,
@@ -8,6 +9,7 @@ from . import (
     distributions,
     estimates,
     filters,
+    fusion,
     io,
     models,
     psf,
@@ -25,6 +27,7 @@ __all__ = [
     "History",
     "Tags",
     "__version__",
+    "attenuation",
     "background",
     "basis",
     "config",
@@ -34,6 +37,7 @@ __all__ = [
     "estimates",
     "estimators",
     "filters",
+    "fusion",
     "get_config",
     "io",
     "load",
