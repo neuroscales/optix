@@ -37,6 +37,7 @@ example. The sections follow the modules of the
 | | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
 | | [Ikoma](deconv/ikoma.md) (`Ikoma`) | deconvolved image, regularised, with shifted-Poisson noise |
 | | [HSPIRAL](deconv/hspiral.md) (`HSPIRAL`) | deconvolved image, Hessian Schatten-norm regularised, with Poisson noise |
+| | [Chouzenoux](deconv/chouzenoux.md) (`Chouzenoux`) | deconvolved image, TV and Hessian regularised, with the exact Poisson–Gaussian likelihood |
 | | [Multiview Richardson–Lucy](deconv/multiview.md) (`MultiviewRL`) | one deconvolved image from several registered views |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |

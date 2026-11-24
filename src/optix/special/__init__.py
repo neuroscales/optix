@@ -4,7 +4,11 @@ censored-Gaussian moments."""
 from ._bessel import bessel_j0, bessel_j012, bessel_j1
 from ._clipped import clipped_normal_moments
 from ._kl import kl_dirichlet, kl_gamma, kl_normal
-from ._poisson_normal import poisson_normal_logpdf, poisson_normal_mean
+from ._poisson_normal import (
+    poisson_normal_logpdf,
+    poisson_normal_mean,
+    poisson_normal_ratio,
+)
 from ._quadrature import gauss_hermite, gauss_legendre
 from ._solvers import (
     dirichlet_elog,
@@ -32,6 +36,7 @@ __all__ = [
     "log_minus_digamma",
     "poisson_normal_logpdf",
     "poisson_normal_mean",
+    "poisson_normal_ratio",
     "ratio_minus_log",
     "stirling_residual",
 ]

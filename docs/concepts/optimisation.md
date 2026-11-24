@@ -8,23 +8,29 @@ that choose terms, and the numerical care is written once. It has three layers.
 | Layer | Names | What it is |
 |---|---|---|
 | Proximity operators and functions | `prox_box`, `prox_group_l2`, `project_group_l2`, `prox_squared_l2`, `prox_shifted_poisson`, `prox_schatten`, `schatten_norm`, `prox_conjugate`; `Box`, `GroupL2`, `SquaredL2`, `ShiftedPoisson`, `Schatten` | the building blocks of splitting algorithms |
+| Smooth functions | `Smooth`, `PoissonGaussian` | a differentiable term with a Lipschitz gradient, for the primal–dual solver |
 | Linear operators | `LinearOperator`, `Circulant`; `Identity`, `Convolution`, `as_circulant`; `diff`, `diff_adjoint`, `Gradient`, `Hessian` | the operator protocols, a transfer function as an operator, and finite differences with their Fourier symbols |
-| Solver | `Term`, `admm_fft`, `AdmmResult` | ADMM for circulant operators, solved in the Fourier domain |
+| Solvers | `Term`, `admm_fft`, `AdmmResult`; `primal_dual`, `primal_dual_step`, `PrimalDualResult` | ADMM for circulant operators, solved in the Fourier domain; primal–dual splitting with a smooth term, which needs no inversion |
 
 The module is semi-public: it is documented in the
 [API reference](../reference/optim.md) and may change without notice. It does not
-depend on `optix.deconv`; [Ikoma](../algorithms/deconv/ikoma.md) is its first user, and
-[HSPIRAL](../algorithms/deconv/hspiral.md) uses it too.
+depend on `optix.deconv`; [Ikoma](../algorithms/deconv/ikoma.md) is its first user,
+[HSPIRAL](../algorithms/deconv/hspiral.md) uses it too, and
+[Chouzenoux](../algorithms/deconv/chouzenoux.md) uses the primal–dual solver.
 
 ```pycon
 >>> import torch
 >>> from optix.optim import (
+...     Box,
 ...     Gradient,
 ...     GroupL2,
 ...     Hessian,
+...     PoissonGaussian,
 ...     SquaredL2,
 ...     Term,
 ...     admm_fft,
+...     primal_dual,
+...     primal_dual_step,
 ...     project_group_l2,
 ...     prox_group_l2,
 ... )
@@ -363,6 +369,116 @@ For a Hessian penalty replace `Gradient(2)` with `Hessian(2)`; a non-negativity
 constraint is the term `Term(None, Box(0.0))`; a blur is the term `Term(otf, ...)` with
 the transfer function of the PSF on the grid.
 
+## Primal–dual splitting
+
+ADMM needs the data term to have a proximity operator, and a linear solve of the
+whole problem at every iteration. Some terms have neither: the exact
+Poisson–Gaussian likelihood, for instance, is smooth but has no closed-form prox.
+`primal_dual` minimises
+
+$$
+\min_{\mathbf{x}} \; h(\mathbf{x}) + \psi_0(\mathbf{x}) + \sum_r \psi_r(\mathbf{V}_r\mathbf{x}),
+$$
+
+with $h$ convex and differentiable with a $\mu$-Lipschitz gradient, $\psi_0$ and the
+$\psi_r$ convex with proximity operators, and any linear operators $\mathbf{V}_r$, which
+need not be circulant. It is the forward–backward–forward scheme of
+[Combettes and Pesquet (2012)](https://doi.org/10.1007/s11228-011-0191-y), written as
+Algorithm 1 of [Chouzenoux et al. (2015)](https://doi.org/10.1137/15M1014395), the
+iteration displayed on the [Chouzenoux](../algorithms/deconv/chouzenoux.md#inference-derivation)
+page, with one dual variable $\mathbf{v}_r$ per penalty and no error terms. It calls
+$\nabla h$ twice, and each $\mathbf{V}_r$ and its adjoint twice, per iteration, and
+inverts nothing.
+
+| Argument | Meaning |
+|---|---|
+| `grad` | a callable, $\nabla h$ |
+| `terms` | the pairs $(\mathbf{V}_r, \psi_r)$: a `LinearOperator` and a `Function` (`GroupL2` for TV or the Hessian norm); the dual step uses `prox_conjugate` on the prox of $\psi_r$ |
+| `x0`, `duals` | starting point (sets dtype and device) and starting dual variables, zeros by default |
+| `step` | $\gamma > 0$, from `primal_dual_step` |
+| `constraint` | $\psi_0$, a `Function`, for example `Box(0.0)`; none by default |
+| `max_iter`, `tol` | stop when $\lVert\mathbf{x}_{t+1} - \mathbf{x}_t\rVert \le \mathrm{tol}\,\lVert\mathbf{x}_t\rVert$, or after `max_iter` iterations (5000 and $10^{-5}$ by default; these defaults are not in the paper); `tol=None` runs them all |
+| `value`, `trace`, `callback` | $h$ for the `"objective"` of the trace; a dict filled with the per-iteration lists `"change"`, `"residual"` and `"objective"` (empty without `value`); `callback(k, p1)` after each iteration |
+
+`primal_dual_step(lipschitz, norms2)` returns the largest admissible step of
+[Chouzenoux et al. (2015)](https://doi.org/10.1137/15M1014395), Theorem 3.2 (iii):
+with $\delta = \mu + \bigl(\sum_r \lVert\mathbf{V}_r\rVert^2\bigr)^{1/2}$, convergence
+holds for $\gamma \in [\epsilon, (1 - \epsilon)/\delta]$, $\epsilon \in (0, 1/(\delta + 1))$,
+and the function returns $\gamma = (1 - \epsilon)/\delta$. The paper takes "the maximum
+possible value" without giving $\epsilon$; the default here is
+$\epsilon = \min(10^{-3}, \tfrac{1}{2(\delta + 1)})$ (not in the paper), and `eps=` sets it.
+`norms2` holds upper bounds on $\lVert\mathbf{V}_r\rVert^2$, for which `Gradient.norm2` and
+`Hessian.norm2` are given. The function returns 0 for an infinite $\mu$.
+
+The result is a `PrimalDualResult`: `x`, the primal estimate $\mathbf{p}_1$ of the last
+iteration, which lies in the domain of $\psi_0$ and has the same limit as the iterates
+$\mathbf{x}_t$; the `duals`; `n_iter`; the last relative `change`; and the last `residual`, the norm of the full forward–backward–forward residual
+$\bigl(\lVert\mathbf{x}_t - \mathbf{p}_{1,t}\rVert^2 + \sum_r \lVert\mathbf{v}_{r,t} - \mathbf{p}_{2,r,t}\rVert^2\bigr)^{1/2}/\gamma$,
+which tends to 0 at a solution. The relative change is about $\gamma$ times a residual, so
+the stopping test depends on the step; the residual does not, and is the diagnostic to read
+when the minimiser is wanted.
+
+The smooth term is any object with `value`, `grad` and `lipschitz` (the protocol
+`Smooth`). `PoissonGaussian(data, variance)` is the exact Poisson–Gaussian negative
+log-likelihood of the [Chouzenoux](../algorithms/deconv/chouzenoux.md#probabilistic-model)
+page, continued for $z < 0$ by the quadratic of Eq. 2.28 so that it is convex and twice
+differentiable on the whole space; its `lipschitz` is $\max_i \eta_i(0)$, which may be
+infinite, and `log_lipschitz` is its logarithm, finite when the constant overflows. The
+derivative uses `optix.special.poisson_normal_ratio`.
+
+!!! warning "Slow at high counts"
+    The Lipschitz constant of `PoissonGaussian` grows like $e^{2\max y/\sigma^2}$, so that
+    the step collapses at high counts with a low read noise. The solver then needs a
+    number of iterations that grows with $(\max y + \sigma^2)/\gamma$.
+
+The example is the total-variation denoising of the ADMM example above, with the
+Gaussian fidelity $h(\mathbf{x}) = \tfrac12\lVert\mathbf{x} - \mathbf{y}\rVert^2$ (so that $\mu = 1$), a
+non-negativity constraint and the gradient term. It reaches the minimiser of `admm_fft`
+for the same problem, with a box term, to within 0.1.
+
+```pycon
+>>> terms = [(Gradient(2), GroupL2(1.5))]
+>>> step = primal_dual_step(1.0, [Gradient(2).norm2])  # μ = 1, ‖∇‖² ≤ 8
+>>> round(step, 4)
+0.2609
+>>> trace = {}
+>>> res = primal_dual(
+...     lambda z: z - y,
+...     terms,
+...     torch.full_like(y, float(y.mean())),
+...     step=step,
+...     constraint=Box(0.0),
+...     max_iter=2000,
+...     tol=1e-5,
+...     trace=trace,
+... )
+>>> res.n_iter, res.x.shape, [d.shape for d in res.duals]
+(256, torch.Size([64, 64]), [torch.Size([2, 64, 64])])
+>>> [round(float((e - x).abs().mean()), 2) for e in (y, res.x)]
+[1.6, 0.2]
+>>> float(res.x.min()) >= 0, sorted(trace)
+(True, ['change', 'objective', 'residual'])
+>>> admm_terms = [
+...     Term(None, SquaredL2(1.0, y)),
+...     Term(Gradient(2), GroupL2(1.5)),
+...     Term(None, Box(0.0)),
+... ]
+>>> ref = admm_fft(admm_terms, (64, 64), rho=1.0, max_iter=2000, tol=1e-7)
+>>> float((ref.x - res.x).abs().max()) < 0.1
+True
+```
+
+The exact likelihood of a small image, and its Lipschitz constant:
+
+```pycon
+>>> fidelity = PoissonGaussian(torch.tensor([3.0, 0.0, 8.0]), 9.0)
+>>> round(fidelity.lipschitz, 3)
+0.557
+>>> z = torch.tensor([2.0, 1.0, 6.0])
+>>> fidelity.grad(z).shape, bool(fidelity.value(z) > 0)
+(torch.Size([3]), True)
+```
+
 ## References
 
 !!! references "References"
@@ -371,11 +487,19 @@ the transfer function of the PSF on the grid.
        optimization and statistical learning via the alternating direction
        method of multipliers.* Found Trends Mach Learn **3**(1):1-122, 2011.
        [doi:10.1561/2200000016](https://doi.org/10.1561/2200000016)
-    2. Ikoma H, Broxton M, Kudo T, Wetzstein G. *A convex 3D deconvolution
+    2. Chouzenoux E, Jezierska A, Pesquet J-C, Talbot H. *A convex approach for image
+       restoration with exact Poisson–Gaussian likelihood.* SIAM J Imaging Sci
+       **8**(4):2662-2682, 2015.
+       [doi:10.1137/15M1014395](https://doi.org/10.1137/15M1014395)
+    3. Combettes PL, Pesquet J-C. *Primal-dual splitting algorithm for solving
+       inclusions with mixtures of composite, Lipschitzian, and parallel-sum type
+       monotone operators.* Set-Valued Var Anal **20**(2):307-330, 2012.
+       [doi:10.1007/s11228-011-0191-y](https://doi.org/10.1007/s11228-011-0191-y)
+    4. Ikoma H, Broxton M, Kudo T, Wetzstein G. *A convex 3D deconvolution
        algorithm for low photon count fluorescence imaging.* Sci Rep
        **8**:11489, 2018.
        [doi:10.1038/s41598-018-29768-x](https://doi.org/10.1038/s41598-018-29768-x)
-    3. Lefkimmiatis S, Unser M. *Poisson image reconstruction with Hessian
+    5. Lefkimmiatis S, Unser M. *Poisson image reconstruction with Hessian
        Schatten-norm regularization.* IEEE Trans Image Process
        **22**(11):4314-4327, 2013.
        [doi:10.1109/TIP.2013.2271852](https://doi.org/10.1109/TIP.2013.2271852)
@@ -392,6 +516,26 @@ the transfer function of the PSF on the grid.
           pages   = {1--122},
           year    = {2011},
           doi     = {10.1561/2200000016},
+        }
+        @article{chouzenoux2015convex,
+          author  = {Chouzenoux, Emilie and Jezierska, Anna and Pesquet, Jean-Christophe and Talbot, Hugues},
+          title   = {A Convex Approach for Image Restoration with Exact {Poisson}--{Gaussian} Likelihood},
+          journal = {SIAM Journal on Imaging Sciences},
+          volume  = {8},
+          number  = {4},
+          pages   = {2662--2682},
+          year    = {2015},
+          doi     = {10.1137/15M1014395},
+        }
+        @article{combettes2012primal,
+          author  = {Combettes, Patrick L. and Pesquet, Jean-Christophe},
+          title   = {Primal-Dual Splitting Algorithm for Solving Inclusions with Mixtures of Composite, {Lipschitzian}, and Parallel-Sum Type Monotone Operators},
+          journal = {Set-Valued and Variational Analysis},
+          volume  = {20},
+          number  = {2},
+          pages   = {307--330},
+          year    = {2012},
+          doi     = {10.1007/s11228-011-0191-y},
         }
         @article{ikoma2018convex,
           author  = {Ikoma, Hayato and Broxton, Michael and Kudo, Takamasa and Wetzstein, Gordon},

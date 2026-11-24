@@ -6,6 +6,7 @@ from typing import Protocol, runtime_checkable
 import torch
 from torch import Tensor
 
+from ..special import poisson_normal_logpdf, poisson_normal_ratio
 from ._prox import (
     _packed_ndim,
     _schatten_p,
@@ -21,10 +22,16 @@ __all__ = [
     "Box",
     "Function",
     "GroupL2",
+    "PoissonGaussian",
     "Schatten",
     "ShiftedPoisson",
+    "Smooth",
     "SquaredL2",
 ]
+
+#: Series terms held in memory at once by `PoissonGaussian` (about
+#: 25 MiB of float64 temporaries).
+_SERIES_TERMS = 2**18
 
 
 @runtime_checkable
@@ -37,6 +44,24 @@ class Function(Protocol):
 
     def prox(self, v: Tensor, t: float) -> Tensor:
         """prox_{t f}(v) = argmin_z f(z) + ‖z − v‖² / (2t)."""
+        ...
+
+
+@runtime_checkable
+class Smooth(Protocol):
+    """A convex, differentiable function h with a Lipschitz gradient."""
+
+    @property
+    def lipschitz(self) -> float:
+        """Lipschitz constant of ∇h (may be +inf)."""
+        ...
+
+    def value(self, z: Tensor) -> Tensor:
+        """h(z), a float64 scalar."""
+        ...
+
+    def grad(self, z: Tensor) -> Tensor:
+        """∇h(z)."""
         ...
 
 
@@ -259,3 +284,125 @@ class ShiftedPoisson:
     def prox(self, v: Tensor, t: float) -> Tensor:
         """Closed form (see `prox_shifted_poisson`)."""
         return prox_shifted_poisson(v, t, self.data, self.variance)
+
+
+class PoissonGaussian:
+    """Exact Poisson–Gaussian negative log-likelihood (Chouzenoux et al. 2015).
+
+    With yᵢ = Poisson(zᵢ) + N(0, σᵢ²) (Eqs. 2.1–2.4), the function of
+    z ∈ [0, +∞)^Q is (Eqs. 2.6–2.7)
+
+        φ(z) = ∑ᵢ φᵢ(zᵢ),
+        φᵢ(u) = −log ∑ₙ uⁿe^{−u}/n! · e^{−(yᵢ − n)²/2σᵢ²}/√(2πσᵢ²),
+
+    computed by
+    [`poisson_normal_logpdf`][optix.special.poisson_normal_logpdf].
+    Its derivative is φᵢ′(u) = 1 − ξᵢ(u), ξᵢ(u) = s(u, yᵢ − 1)/s(u, yᵢ)
+    (Eqs. 2.8, 2.10, 2.12; see
+    [`poisson_normal_ratio`][optix.special.poisson_normal_ratio]). It is
+    convex, with φᵢ″(u) = ηᵢ(u) ≤ ηᵢ(0) (Eq. 2.11, Theorem 2.1). For
+    u < 0 it is continued by the quadratic of Eq. (2.28),
+
+        φᵢ(u) = ½ηᵢ(0)u² + (1 − ξᵢ(0))u + φᵢ(0),
+        ξᵢ(0) = e^{(2yᵢ − 1)/2σᵢ²},
+        ηᵢ(0) = (1 − e^{−1/σᵢ²}) e^{(2yᵢ − 1)/σᵢ²}
+
+    (Eqs. 2.29–2.30), so that φ is convex and twice differentiable on
+    ℝ^Q with a gradient of Lipschitz constant maxᵢ ηᵢ(0). The data need
+    no clipping. The Lipschitz constant grows like e^{2 max y/σ²}: at
+    high counts with low read noise it is too large to be useful.
+    """
+
+    def __init__(
+        self,
+        data: Tensor,
+        variance: Tensor | float,
+        *,
+        max_terms: int = _SERIES_TERMS,
+    ) -> None:
+        """Set the data and the read-noise variance.
+
+        Parameters
+        ----------
+        data : Tensor
+            Data y (in electrons).
+        variance : Tensor or float
+            Read-noise variance σ² > 0 (in electrons²); broadcasts with
+            `data`.
+        max_terms : int
+            Series terms evaluated at once (memory bound).
+        """
+        var = torch.as_tensor(variance)
+        if not bool((var > 0).all()):
+            raise ValueError(
+                "PoissonGaussian needs a positive read-noise variance; "
+                "use ShiftedPoisson for Poisson data"
+            )
+        self.data = data
+        self.variance = variance
+        self.max_terms = int(max_terms)
+
+    def _at_zero(self, like: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        """ξ(0), η(0) and φ(0) per element, in float64."""
+        y = torch.as_tensor(self.data).to(device=like.device).double()
+        var = torch.as_tensor(self.variance).to(device=like.device).double()
+        a = (2 * y - 1) / var
+        xi = torch.exp(a / 2)
+        eta = -torch.expm1(-1 / var) * torch.exp(a)
+        phi = y.square() / (2 * var) + 0.5 * torch.log(2 * math.pi * var)
+        return xi, eta, phi
+
+    @property
+    def log_lipschitz(self) -> float:
+        """log maxᵢ ηᵢ(0), finite even when the constant overflows."""
+        y = torch.as_tensor(self.data).double()
+        var = torch.as_tensor(self.variance).double().to(y.device)
+        log_eta = torch.log(-torch.expm1(-1 / var)) + (2 * y - 1) / var
+        return float(log_eta.max())
+
+    @property
+    def lipschitz(self) -> float:
+        """Lipschitz constant maxᵢ ηᵢ(0) of ∇φ (Theorem 2.1); may be inf."""
+        log = self.log_lipschitz
+        return math.exp(log) if log < 709 else math.inf
+
+    def value(self, z: Tensor) -> Tensor:
+        """φ(z) in float64."""
+        zd = z.double()
+        y = torch.as_tensor(self.data).to(zd)
+        var = torch.as_tensor(self.variance).to(zd)
+        inside = -poisson_normal_logpdf(
+            y, zd.clamp(min=0), var, max_terms=self.max_terms
+        )
+        xi, eta, phi = self._at_zero(zd)
+        outside = 0.5 * eta * zd.square() + (1 - xi) * zd + phi
+        return torch.where(zd >= 0, inside, outside).sum()
+
+    def grad(self, z: Tensor) -> Tensor:
+        """∇φ(z) = 1 − ξ(z), with ξ(z) = ξ(0) − η(0)·z for z < 0.
+
+        1 − ξ is formed in float64 (float32 on MPS) and then cast to the
+        dtype of `z`. Raises a `ValueError` when the gradient is not
+        finite in that dtype (ξ overflows at large y/σ²).
+        """
+        wd = torch.float32 if z.device.type == "mps" else torch.float64
+        zw = z.to(wd)
+        data = torch.as_tensor(self.data).to(device=z.device, dtype=wd)
+        var = self.variance
+        if isinstance(var, Tensor):
+            var = var.to(device=z.device, dtype=wd)
+        xi = poisson_normal_ratio(
+            data, zw.clamp(min=0), var, max_terms=self.max_terms
+        )
+        neg = zw < 0
+        if bool(neg.any()):
+            xi0, eta0, _ = self._at_zero(zw)
+            xi = torch.where(neg, (xi0 - eta0 * zw).to(wd), xi)
+        out = (1 - xi).to(z.dtype)
+        if not bool(torch.isfinite(out).all()):
+            raise ValueError(
+                "PoissonGaussian: the gradient 1 − ξ is not finite in "
+                f"{z.dtype} (ξ overflows: max y/σ² is too large for the "
+                "exact likelihood); use ShiftedPoisson (Ikoma) instead"
+            )
+        return out
