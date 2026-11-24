@@ -89,6 +89,7 @@ nav = [
     "reference/sensor.md",
     "reference/shading.md",
     "reference/deconv.md",
+    "reference/denoise.md",
     "reference/destripe.md",
     "reference/psf.md",
     "reference/attenuation.md",
