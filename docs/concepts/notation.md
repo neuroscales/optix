@@ -358,10 +358,17 @@ shared with the other destriping pages.
 | $\mathbf{D}_a$, $\mathbf{D}_{ab}$ | forward difference along axis $a$; second difference $\mathbf{D}_a\mathbf{D}_b$ | `diff` |
 | $\nabla$, $\mathbf{H}$ | stacked first differences; Hessian, its distinct second differences with $\sqrt{2}$ on the off-diagonal ones | `Gradient`, `Hessian` |
 | $\mathcal{C}$, $\Omega$ | observed voxels, where the data term applies; voxels where the regulariser applies | `Term.region` |
-| $\tilde{\mathbf{y}}$, $\tilde\sigma^2$ | data in electrons, $(\mathbf{y} - \mathbf{d}) / (\mathbf{f}\,g)$; shifted-Poisson read-noise variance, $\sigma^2 / (g\,f)^2$ (pixel-wise, $f \equiv 1$ without a flat field) | `variance` of `ShiftedPoisson` |
-| $\kappa$ | constant of the default weight, $\nu = \kappa \sum\mathbf{h} / q_{99.9}(\tilde{y})$ for `Ikoma`, $\tau = \kappa / q_{99.9}(\tilde{y})$ for `HSPIRAL` (a scalar; unrelated to the eigenvalues $\kappa_j$ of the basis) | default of `nu`, `tau` |
+| $\tilde{\mathbf{y}}$, $\tilde\sigma^2$ | data in electrons, $(\mathbf{y} - \mathbf{d}) / (\mathbf{f}\,g)$; read-noise variance in electrons² (shifted-Poisson and Poisson–Gaussian models), $\sigma^2 / (g\,f)^2$ (pixel-wise, $f \equiv 1$ without a flat field) | `variance` of `ShiftedPoisson`, `PoissonGaussian` |
+| $\kappa$ | constant of the default weight, $\nu = \kappa \sum\mathbf{h} / q_{99.9}(\tilde{y})$ for `Ikoma`, $\tau = \kappa / (q_{99.9}(\tilde{y}) - q_{50}(\tilde{y}))$ for `HSPIRAL`, and $\lambda = \kappa / (q_{99.9}(\tilde{y}) - q_{50}(\tilde{y}))$ with $\kappa_{\mathrm{TV}}$, $\kappa_{\mathrm{H}}$ for `Chouzenoux` (a scalar; unrelated to the eigenvalues $\kappa_j$ of the basis) | default of `nu`, `tau` |
 | $\xi_a$ | frequency along axis $a$, $k_a / N_a$ | `rfft_frequencies` |
 | $\tau$ | weight of the Schatten penalty, $\tau\sum_j\lVert\mathbf{X}_j\rVert_{S_p}$ (the role of $\nu$ for `HSPIRAL`) | `HSPIRAL.tau` |
+| $\varphi_i$, $\bar\varphi_i$, $\xi_i$, $\eta_i$ | negative log-likelihood of pixel $i$ of the exact Poisson–Gaussian model, and its continuation for $u < 0$; its first and second derivative terms, $\varphi_i' = 1 - \xi_i$, $\varphi_i'' = \eta_i$ ($\varphi$ is also the function $\varphi(u)$ of the distributions section; $\eta$ also the natural parameters) | `PoissonGaussian`, `poisson_normal_ratio` |
+| $h$, $\mu$ | smooth term of a primal–dual problem and the Lipschitz constant of its gradient (not the PSF $h$, nor the Gamma mean $\mu$) | `Smooth.lipschitz`, `Chouzenoux.lipschitz` |
+| $\psi_0$, $\psi_r$, $\mathbf{V}_r$, $\mathbf{v}_r$ | constraint function, penalty $r$, its linear operator and its dual variable in `primal_dual` (not the digamma $\psi$) | `constraint`, `terms`, `PrimalDualResult.duals` |
+| $\mathbf{y}_1$, $\mathbf{p}_1$, $\mathbf{q}_1$, $\mathbf{y}_2$, $\mathbf{p}_2$, $\mathbf{q}_2$ | intermediate points of one primal–dual iteration (not the data $\mathbf{y}$) | |
+| $\gamma$, $\delta$, $\epsilon$ | step of the primal–dual iteration, $\delta = \mu + (\sum_r\lVert\mathbf{V}_r\rVert^2)^{1/2}$, and the margin in $\gamma = (1 - \epsilon)/\delta$ (unrelated to the tile gain $\gamma_i$ or the read noise $\varepsilon$) | `step`, `primal_dual_step(eps=)` |
+| $\lambda_{\mathrm{H}}$ | weight of the Frobenius norm of the Hessian, next to $\lambda_{\mathrm{TV}}$ | `Chouzenoux.hessian` |
+| $C$, $x_+$ | range of the image, $C = [0, x_+]^N$, and its upper bound | `upper` |
 | $\mathbf{X}_j$ | symmetric Hessian matrix of the image at voxel $j$, packed in $(\mathbf{H}\mathbf{x})_j$ | |
 | $\lVert\cdot\rVert_{S_p}$ | Schatten norm of order $p \in \{1, 2, \infty\}$: the $\ell_p$ norm of the singular values; nuclear, Frobenius and spectral norm | `schatten_norm`, `Schatten` |
 | $\mu_\pm$, $m$, $r$ | eigenvalues of a symmetric $2 \times 2$ matrix, $\mu_\pm = m \pm r$, with $m$ the mean of the diagonal and $r \ge 0$ half the gap | `prox_schatten` |
