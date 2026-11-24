@@ -302,6 +302,13 @@ except where stated, and are marked as such in the docstrings.
   $\nabla^\top$, as Eq. 2 implies. The authors' code applies it in the adjoint
   only, so 3-D results with $0 < \rho_z < 1$ differ from theirs. Stripe
   directions with a $z$ component are not supported.
+- **Negative angles.** For $\theta < 0$, the authors' code mirrors the frame
+  across the stripe axis and solves at $-\theta$. The stripe term is unchanged
+  by the mirroring, but the total variation becomes a backward difference across
+  the stripes. optix keeps forward differences for every angle, which gives a
+  slightly different result with a lower objective, and keeps this behaviour.
+  Flipping the input across the stripe axis, passing $-\theta$ and flipping the
+  result back reproduces the authors' result.
 
 ### Default value of the first weight
 
@@ -408,7 +415,10 @@ Common variations:
   [API reference](../../reference/destripe.md).
 
 The tests check the method on synthetic stripes from `optix.models`, where the
-truth is known; there are no stored fixtures from the authors' code.
+truth is known, and against stored results of the authors' Python code (commit
+[`f1972aa`](https://github.com/NiklasRottmayer/General-Stripe-Removal/tree/f1972aa47fc3ecf6580984f72ce7ce630b1ea683)).
+optix reproduces these to rounding error in 2-D and 3-D (with $\rho_z = 1$),
+except for negative angles (see [above](#not-specified-in-the-paper)).
 
 ## References
 

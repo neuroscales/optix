@@ -7,6 +7,7 @@ from ._moments import Moments
 from ._order import median_mad, order_statistics, tile_reduce
 from ._pixel import PixelStats, pixel_stats
 from ._reservoir import Reservoir
+from ._threshold import otsu_threshold
 
 __all__ = [
     "Histogram",
@@ -17,6 +18,7 @@ __all__ = [
     "Reservoir",
     "median_mad",
     "order_statistics",
+    "otsu_threshold",
     "pixel_stats",
     "reduce",
     "reduce_groups",
