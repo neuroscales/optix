@@ -50,7 +50,7 @@ the terms of imaging it has a closed form. The module provides the following.
 | indicator of the $\ell_2$ ball of radius $r$ | $\mathbf{v}_j \min(1, r / \lVert\mathbf{v}_j\rVert_2)$ | `project_group_l2` |
 | $\tfrac{w}{2}\lVert \mathbf{z} - \mathbf{y} \rVert^2$ | $(\mathbf{v} + tw\mathbf{y}) / (1 + tw)$ | `prox_squared_l2`, `SquaredL2` |
 | $\sum_j z_j - (y_j + \tilde\sigma^2)\log(z_j + \tilde\sigma^2)$ | root of a quadratic, see below | `prox_shifted_poisson`, `ShiftedPoisson` |
-| $w\sum_j \lVert \mathbf{X}_j \rVert_{S_p}$ (Schatten norm of a field of symmetric matrices), $p \in \{1, 2, \infty\}$ | soft threshold of the singular values, see below | `prox_schatten`, `Schatten` |
+| $w\sum_j \lVert \mathbf{X}_j \rVert_{S_p}$ (Schatten norm of a field of symmetric matrices), $p \in \{1, 2, \infty\}$ | a shrinkage of the singular values, see below | `prox_schatten`, `Schatten` |
 
 In the group norm, $\mathbf{z}_j$ collects the components of $\mathbf{z}$ along one
 axis (`dim`) at voxel $j$: the gradient for isotropic total variation, the packed

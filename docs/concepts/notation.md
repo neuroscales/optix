@@ -370,8 +370,9 @@ The shifted Poisson law of $\tilde{\mathbf{y}}$ is $\tilde{y} + \tilde\sigma^2 \
 Poisson-Gaussian model. The letters $\rho$ and $\nu$ have other meanings in the
 sections on morphology and distributions (the radius of a ball, the shape of a
 Gamma); the context always tells which is meant. $\mu_\pm$ are eigenvalues of a
-Hessian matrix, not a mean, and $\tau$, here the weight of a penalty, is also the
-truncation level of Nagy and O'Leary and the precision of a Normal. $\mathbf{H}$ in bold is the
+Hessian matrix, not a mean; $m$ and $r$ there are the centre and half-gap of the
+eigenvalues, not the mean of a Normal; and $\tau$, here the weight of a penalty, is also
+the truncation level of Nagy and O'Leary and the precision of a Normal. $\mathbf{H}$ in bold is the
 Hessian operator, $H$ in plain type a count of rows.
 
 ## Indices and layouts

@@ -19,9 +19,10 @@ direction method of multipliers (ADMM). It differs in two ways. The noise model 
 plain Poisson law, so read noise is ignored. And the penalty is a *Schatten norm*
 of the $2 \times 2$ Hessian matrix at every pixel, of order $p = 1$ (nuclear norm),
 $p = 2$ (Frobenius norm, the penalty of Ikoma) or $p = \infty$ (spectral norm).
-The nuclear and spectral norms act on the two eigenvalues of the Hessian (the
-principal curvatures) rather than on all its entries at once, and they are
-invariant to a rotation of the image. In the simulations of the paper the Hessian
+All three are functions of the two eigenvalues of the Hessian (the principal
+curvatures) and are invariant to a rotation of the image; they differ in how they
+combine them: their sum ($p = 1$), their root sum of squares ($p = 2$) or the larger
+one ($p = \infty$). In the simulations of the paper the Hessian
 Schatten penalties almost always beat total variation and wavelet penalties, with
 $p = 1$ slightly ahead of $p = 2$; $p = \infty$ is behind the other two but still
 ahead of the alternatives in most cases (Table I of the paper, which reports the
@@ -227,7 +228,7 @@ Input: data y (counts), PSF h, sensor and shading estimates (optional), tau (opt
 Preprocess: ỹ = (y − d) / f / g, clipped at 0 (or y itself without estimates)
             h ← h / sum(h)
 For each image:
-    τ = tau, or κ / q(ỹ) with κ = 1.4 and q the 99.9th percentile
+    τ = tau, or κ / (q₉₉.₉(ỹ) − q₅₀(ỹ)) with κ = 1.6 (99.9th percentile minus median)
     ρ = 60 τ / max(ỹ)
     Initialise x = ỹ, u1 = u2 = u3 = 0, on the grid of the block
     Repeat for k = 1 … 400:
@@ -243,7 +244,7 @@ Return x
 The number of iterations, the last relative change and the last primal and dual
 residuals of every block are recorded in `history.extras["iterations"]`,
 `["change"]`, `["primal_residual"]` and `["dual_residual"]`. The values of $\tau$,
-$\rho$, $\max \tilde{y}$ and the 99.9th percentile of $\tilde{y}$ used for each image
+$\rho$, $\max \tilde{y}$ and the 99.9th percentile and median of $\tilde{y}$ used for each image
 are the attributes `tau`, `rho`, `peak` and `robust_peak` after `fit`.
 
 ## Faithful mode and extensions
@@ -252,7 +253,7 @@ are the attributes `tau`, `rho`, `peak` and `robust_peak` after `fit`.
 from $\mathbf{x}^0 = \tilde{\mathbf{y}}$, the splits-first order of the updates, the
 stopping rule of Section IV-B (a relative change of $10^{-5}$, or 400 iterations),
 the periodic boundary, and the result $\mathbf{x}^t$ of the last iteration (not
-projected onto $\mathbf{x} \ge 0$). The defaults of `faithful=False` are the same.
+projected onto $\mathbf{x} \ge 0$). The defaults of `faithful=False` are the same, except for the boundary, which is `"unknown"`.
 The weight `tau` is tuned per image in the paper, and the three values of `p` are all
 the method of the paper, so any of them keeps the estimate faithful. `halo` and
 `block` are memory settings and keep it faithful too, even when they split an
@@ -265,7 +266,7 @@ image. Any other option marks the estimate as not faithful.
 | `rho` | ADMM penalty $\rho > 0$ | `None` ($60\tau/M$) | `None` |
 | `max_iter` | iteration cap | 400 | 400 |
 | `tol` | relative-change tolerance; `None` runs `max_iter` iterations | $10^{-5}$ | $10^{-5}$ |
-| `boundary` | `"periodic"`: blur and differences wrap around the block; `"unknown"`: $\mathbf{x}$ lives on a larger grid, extension | `"periodic"` | `"periodic"` |
+| `boundary` | `"periodic"`: blur and differences wrap around the block; `"unknown"`: $\mathbf{x}$ lives on a larger grid, extension | `"periodic"` | `"unknown"` |
 | `halo` | halo width per spatial axis, at least the PSF size (memory setting, faithful) | `None` (twice the PSF size) | `None` |
 | `block` | core block size per spatial axis (memory setting, faithful) | `None` (memory budget) | `None` |
 
@@ -295,24 +296,34 @@ as such in the docstrings:
   norm of the $3 \times 3$ Hessian needs no eigenvalues); $p = 1$ and $p = \infty$ raise
   `NotImplementedError`.
 - **Default $\tau$.** The paper tunes $\tau$ per image for the best PSNR and gives no
-  default. The default is $\tau = \kappa / q_{99.9}(\tilde{y})$ with $\kappa = 1.4$,
-  per image, where $q_{99.9}$ is the 99.9th percentile of the prepared data (computed
-  exactly in the pass of `fit`, stored as `robust_peak`: unlike the maximum, a hot pixel
-  barely changes it). The $1/q$ scaling is that of a MAP estimate whose prior on the
-  normalised image $\mathbf{x}/s$, with $s$ the intensity scale, is the same at every
-  photon count. The Poisson likelihood is homogeneous,
+  default. The default is $\tau = \kappa / (q_{99.9}(\tilde{y}) - q_{50}(\tilde{y}))$ with
+  $\kappa = 1.6$, per image, where $q_{99.9}$ is the 99.9th percentile of the prepared data
+  (computed exactly in the pass of `fit`, stored as `robust_peak`: unlike the maximum, a
+  hot pixel barely changes it) and $q_{50}$ their median (from a uniform sample of 8192
+  pixels per image taken in the same pass, exact for smaller images, stored as `median`).
+  The difference is a robust range of the signal above the background: the Hessian ignores
+  a constant, so it is the signal amplitude, not the intensity, that sets the scale of the
+  prior. The $1/s$ scaling, with $s$ this range, is that of a MAP estimate whose prior on
+  the normalised image $\mathbf{x}/s$ is the same at every photon count. The Poisson
+  likelihood is homogeneous,
   $\ell(s\hat{\mathbf{x}}; s\hat{\mathbf{y}}) = s\,\ell(\hat{\mathbf{x}}; \hat{\mathbf{y}})$ up to a constant, so
   the objective is $\ell(\mathbf{x}) + (\kappa/s)\lVert \mathbf{H}\mathbf{x} \rVert$ and $\tau = \kappa/s$.
+  `fit` raises an error when $q_{99.9} \le q_{50}$; pass `tau` then.
   The constant $\kappa$ was calibrated for the rules of the paper ($\rho$, stop) on
-  simulated $64 \times 64$ images with circular blur (a Gaussian of standard deviation 2 on
+  simulated images with circular blur (a Gaussian of standard deviation 2 on
   $9 \times 9$ pixels, and a uniform $7 \times 7$ blur): four scene types (blobs,
-  filaments, their mixture and piecewise-smooth scenes), peaks of 10, 100 and 1000 photons
-  and three seeds, so 72 cases for each of $p = 1, 2, \infty$. The best $\kappa$ of a grid
-  hardly depends on the photon count, which supports the $1/q$ rule, but it depends on the
-  content: about 0.2 to 0.5 for thin filaments and 1 to 6 for smooth blobs. With
-  $\kappa = 1.4$ the PSNR is on average 0.5 dB below that of the best $\kappa$ (at most
-  2.0, 3.0 and 3.9 dB for $p = 1, 2, \infty$) and at least 2 dB above that of the data
-  (5.1 dB on average). Pass `tau` to set it.
+  filaments, their mixture and piecewise-smooth scenes), peaks of 10, 100 and 1000
+  photons on a constant background of 0, 1, 3 and 10 times the peak, $64 \times 64$ (two
+  seeds) and $128 \times 128$ (one seed) pixels, so 288 cases, against a grid of $\tau$
+  (factor $\sqrt{2}$, searched with $p = 1$). Of the scales $q_{99.9}$,
+  $q_{99.9} - q_1$ and $q_{99.9} - q_{50}$, the last gives the smallest mean and worst-case
+  loss; with $q_{99.9}$ alone the best $\kappa$ grows with the background (about 18 times
+  from no background to 10 times the peak), and the loss reaches 19.7 dB. For smooth
+  scenes the best $\kappa$ stays at about 1.3 to 2.9 at every photon count; for thin
+  filaments it falls by up to 5 times between 10 and 1000 photons. With $\kappa = 1.6$ the
+  PSNR is on average 0.41, 0.39 and 0.47 dB below that of the best $\tau$ of the grid, and
+  at most 2.4, 2.7 and 3.2 dB, for $p = 1, 2, \infty$; it is at least 1.3 dB above that of
+  the data (8 dB on average). Pass `tau` to set it.
 - **Camera.** The conversion to electrons with the `SensorEstimate` and the
   `ShadingEstimate`, the neglect of read noise and the clipping of negative values at 0
   are not in the paper, which takes photon counts. The dark field replaces the offset
@@ -321,10 +332,10 @@ as such in the docstrings:
 - **Halo.** Twice the PSF size.
 
 !!! warning "Periodic boundary"
-    With the default boundary the blur and the differences wrap around the image, so a
+    With the faithful boundary the blur and the differences wrap around the image, so a
     structure near one edge can leak to the opposite edge. This is the model of the
     paper and is exact for data simulated with a circular blur; for real images prefer
-    `boundary="unknown"`, at the price of a larger grid. Each block of a split image
+    `boundary="unknown"` (the default of `faithful=False`), at the price of a larger grid. Each block of a split image
     wraps around too, so seams are worse than with `"unknown"`.
 
 ## Memory and streaming
@@ -332,8 +343,9 @@ as such in the docstrings:
 Large images are cut into blocks with a halo and each block is solved as an image of
 its own, as for [Ikoma](ikoma.md#memory-and-streaming) and
 [Richardson–Lucy](richardson-lucy.md#memory-and-streaming) (`blocks`, halo streaming).
-`fit` makes one pass over the data to find, for every image, $\max\tilde{y}$ and the
-99.9th percentile (exactly, by keeping the largest 0.1 % of its values), from which
+`fit` makes one pass over the data to find, for every image, $\max\tilde{y}$, the
+99.9th percentile (exactly, by keeping the largest 0.1 % of its values) and the median (from
+a uniform sample of 8192 pixels), from which
 $\rho$ and $\tau$ follow, so that every block of an image shares them. `apply` makes a
 second pass. With the periodic boundary a block needs to be at least as large as the PSF
 along every axis.
@@ -374,13 +386,16 @@ with the Richardson–Lucy estimate for comparison.
 >>> x_hs = hspiral.apply(counts)
 >>> x_rl = RichardsonLucy(psf).fit(counts).apply(counts)
 
->>> # 3. The weights that were used, and the errors against the truth.
+>>> # 3. The weights that were used, and the PSNR (peak M = 20) against the truth.
 >>> round(float(hspiral.tau), 4), round(float(hspiral.rho), 4)
-(0.14, 0.7)
->>> hspiral.history.extras["iterations"], hspiral.is_faithful
-([390.0], True)
->>> [round(float((e - x).abs().mean()), 2) for e in (counts, x_hs, x_rl)]
-[1.53, 1.14, 1.13]
+(0.1778, 0.8889)
+>>> hspiral.history.extras["iterations"][0] <= 400, hspiral.is_faithful
+(True, True)
+>>> psnr = lambda e: round(
+...     float(10 * torch.log10(x.max() ** 2 / ((e - x) ** 2).mean())), 2
+... )
+>>> [psnr(e) for e in (counts, x_hs, x_rl)]  # data, HSPIRAL, Richardson-Lucy
+[16.04, 16.53, 16.26]
 
 >>> # 4. The other orders of the norm, and the proximity operator on its own.
 >>> HSPIRAL(psf, p=2).is_faithful, HSPIRAL(psf, boundary="unknown").is_faithful
@@ -404,7 +419,7 @@ The implementation is checked against the paper: `prox_schatten` against a
 singular-value decomposition for each $p$; Algorithm 2 written out line by line, with
 explicit FFTs, must give the same estimate as `admm_fft` for each $p$; the same
 minimiser as the $\mathbf{x}$-first ADMM of [Ikoma](ikoma.md); the optimality conditions of the solution;
-the ordering of the three norms of Table I at the setting of the paper; the default
+that each Hessian Schatten norm at its best $\tau$ beats the data and at least matches total variation, as in Table I of the paper; the default
 $\tau$ across intensity ranges; and 3-D, blocks, float32 and sensor units.
 
 ## References
