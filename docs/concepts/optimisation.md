@@ -7,7 +7,7 @@ that choose terms, and the numerical care is written once. It has three layers.
 
 | Layer | Names | What it is |
 |---|---|---|
-| Proximity operators and functions | `prox_box`, `prox_group_l2`, `project_group_l2`, `prox_squared_l2`, `prox_shifted_poisson`, `prox_schatten`, `schatten_norm`, `prox_conjugate`; `Box`, `GroupL2`, `SquaredL2`, `ShiftedPoisson`, `Schatten` | the building blocks of splitting algorithms |
+| Proximity operators and functions | `prox_box`, `prox_group_l2`, `project_group_l2`, `prox_squared_l2`, `prox_shifted_poisson`, `prox_schatten`, `schatten_norm`, `project_schatten`, `prox_hessian_schatten`, `HessianSchattenResult`, `prox_conjugate`; `Box`, `GroupL2`, `SquaredL2`, `ShiftedPoisson`, `Schatten`, `HessianSchatten` | the building blocks of splitting algorithms |
 | Smooth functions | `Smooth`, `PoissonGaussian` | a differentiable term with a Lipschitz gradient, for the primal–dual solver |
 | Linear operators | `LinearOperator`, `Circulant`; `Identity`, `Convolution`, `as_circulant`; `diff`, `diff_adjoint`, `Gradient`, `Hessian` | the operator protocols, a transfer function as an operator, and finite differences with their Fourier symbols |
 | Solvers | `Term`, `admm_fft`, `AdmmResult`; `primal_dual`, `primal_dual_step`, `PrimalDualResult` | ADMM for circulant operators, solved in the Fourier domain; primal–dual splitting with a smooth term, which needs no inversion |
@@ -57,6 +57,8 @@ the terms of imaging it has a closed form. The module provides the following.
 | $\tfrac{w}{2}\lVert \mathbf{z} - \mathbf{y} \rVert^2$ | $(\mathbf{v} + tw\mathbf{y}) / (1 + tw)$ | `prox_squared_l2`, `SquaredL2` |
 | $\sum_j z_j - (y_j + \tilde\sigma^2)\log(z_j + \tilde\sigma^2)$ | root of a quadratic, see below | `prox_shifted_poisson`, `ShiftedPoisson` |
 | $w\sum_j \lVert \mathbf{X}_j \rVert_{S_p}$ (Schatten norm of a field of symmetric matrices), $p \in \{1, 2, \infty\}$ | a shrinkage of the singular values, see below | `prox_schatten`, `Schatten` |
+| indicator of the unit $S_q$ ball | shrinkage of the singular values onto the $\ell_q$ ball, see below | `project_schatten` |
+| $w\sum_j \lVert (\mathbf{H}\mathbf{x})_j \rVert_{S_p} + \iota_{[l,u]}(\mathbf{x})$ (Hessian Schatten norm with a box) | iterative, by the dual algorithm, see below | `prox_hessian_schatten`, `HessianSchatten` |
 
 In the group norm, $\mathbf{z}_j$ collects the components of $\mathbf{z}$ along one
 axis (`dim`) at voxel $j$: the gradient for isotropic total variation, the packed
@@ -146,10 +148,12 @@ with the $\ell_p$ proxes of the paper (Eqs. 43–47):
 |---|---|
 | 1 | soft threshold, $\hat\sigma_i = \max(\sigma_i - t, 0)$ |
 | 2 | block soft threshold of the whole matrix, $\max(1 - t/\lVert\mathbf{Y}\rVert_F, 0)\,\mathbf{Y}$: `prox_group_l2` on the packed vector |
-| $\infty$ | $\hat\sigma_i = \min(\sigma_i, c)$, with $c = 0$ if $\sigma_1 + \sigma_2 \le t$, $c = (\sigma_1 + \sigma_2 - t)/2$ if $\lvert\sigma_1 - \sigma_2\rvert < t < \sigma_1 + \sigma_2$, and $c = \sigma_1 - t$ if $\sigma_1 - \sigma_2 \ge t$ ($\sigma_1 \ge \sigma_2$) |
+| $\infty$ | $\hat\sigma_i = \min(\sigma_i, c)$, with $c = \max\bigl(0, \max_k (S_k - t)/k\bigr)$ and $S_k$ the sum of the $k$ largest $\sigma_i$. For two singular values ($\sigma_1 \ge \sigma_2$): $c = 0$ if $\sigma_1 + \sigma_2 \le t$, $c = (\sigma_1 + \sigma_2 - t)/2$ if $\lvert\sigma_1 - \sigma_2\rvert < t < \sigma_1 + \sigma_2$, and $c = \sigma_1 - t$ if $\sigma_1 - \sigma_2 \ge t$ |
 
-The paper states the case $p = \infty$ for a threshold of 1; the form above is the
-same with the threshold written out ($c = t\,\gamma(\boldsymbol\sigma/t)$).
+The paper states the case $p = \infty$ for a threshold of 1 and two singular values; the
+form above is the same with the threshold written out ($c = t\,\gamma(\boldsymbol\sigma/t)$),
+and $\boldsymbol\sigma$ minus its projection onto the $\ell_1$ ball of radius $t$ for any
+number of singular values.
 
 For a symmetric $2 \times 2$ matrix, which is the Hessian of a 2-D image, no
 decomposition is computed. Its eigenvalues are $\mu_\pm = m \pm r$, with $m$ the
@@ -167,9 +171,26 @@ $$
 
 which keeps the eigenvectors of $\mathbf{X}$ ($\hat{\mathbf{X}} = \hat{m}\mathbf{I}$ where
 $r = 0$). The packing is an isometry for the Frobenius inner product, so this is
-exactly the matrix prox. The norms $p = 1$ and $p = \infty$ are available for
-$2 \times 2$ matrices (and $1 \times 1$ ones) only; $p = 2$ for any size, and a
-`NotImplementedError` says so otherwise.
+exactly the matrix prox.
+
+For a symmetric $3 \times 3$ matrix, the Hessian of a 3-D image, the eigenvalues and the
+eigenvector of the one farthest from the others are computed in closed form (a
+trigonometric solution of the characteristic cubic, refined by a Newton step; not in the
+papers, which are 2-D), the other two as a $2 \times 2$ problem on the plane orthogonal to
+that eigenvector, and $\hat{\mathbf{X}}$ is rebuilt from them. It is element-wise and
+differentiable without NaN at repeated eigenvalues. The norms $p = 1$ and $p = \infty$ are
+therefore available for matrices up to $3 \times 3$ (1-D, 2-D and 3-D images); $p = 2$ for any
+size, and a `NotImplementedError` says so for larger matrices.
+
+`project_schatten(v, r, q)` is the projection onto the ball $\lVert\mathbf{X}\rVert_{S_q} \le r$.
+By the same proposition
+([Lefkimmiatis, Ward and Unser 2013](https://doi.org/10.1109/TIP.2013.2237919), Eqs. 33–36)
+it projects the singular values onto the $\ell_q$ ball and keeps the singular vectors: a block
+rescaling for $q = 2$, a clip $\min(\sigma_i, r)$ for $q = \infty$ and a soft threshold
+$\max(\sigma_i - \gamma, 0)$ with $\gamma = \max\bigl(0, \max_k (S_k - r)/k\bigr)$ for
+$q = 1$. With $1/p + 1/q = 1$ it is the prox of the convex conjugate of $r\lVert\cdot\rVert_{S_p}$,
+so the Moreau identity holds, $\mathbf{X} = \mathrm{prox}_{r\lVert\cdot\rVert_{S_p}}(\mathbf{X})
++ P_{S_q,\,r}(\mathbf{X})$.
 
 ```pycon
 >>> from optix.optim import Schatten, prox_schatten, schatten_norm
@@ -182,6 +203,62 @@ tensor([[ 2.5000, -0.5000,  0.0000]])
 tensor([[ 2.5000, -1.0000,  0.0000]])
 >>> float(Schatten(0.5, 1).value(v))
 2.0
+>>> from optix.optim import project_schatten
+>>> project_schatten(v, 0.5, float("inf")).T  # eigenvalues clipped to [-0.5, 0.5]
+tensor([[ 0.5000, -0.5000,  0.0000]])
+>>> (prox_schatten(v, 0.5, 1) + project_schatten(v, 0.5, float("inf"))).T  # Moreau
+tensor([[ 3., -1.,  0.]])
+>>> v3 = torch.tensor(
+...     [[3.0], [-1.0], [0.2], [0.0], [0.0], [0.0]]
+... )  # diag(3, -1, 0.2)
+>>> prox_schatten(v3, 0.5, 1).T  # 3 × 3: the 3-D Hessian, six components
+tensor([[ 2.5000, -0.5000,  0.0000,  0.0000,  0.0000,  0.0000]])
+```
+
+### Hessian Schatten norm with a constraint
+
+The penalty $\tau\lVert\mathbf{H}\mathbf{x}\rVert_{1,p} = \tau\sum_j\lVert(\mathbf{H}\mathbf{x})_j\rVert_{S_p}$
+together with a box constraint $\mathbf{x} \in [l, u]$, applied to the image itself and not to
+$\mathbf{H}\mathbf{x}$, has no closed-form prox. `prox_hessian_schatten(z, tau, p)` computes
+it by the dual algorithm of
+[Lefkimmiatis, Ward and Unser (2013)](https://doi.org/10.1109/TIP.2013.2237919) (their
+Algorithm 2), a FISTA iteration ([Beck and Teboulle 2009](https://doi.org/10.1109/TIP.2009.2028250))
+on the dual problem. The mixed norm is a maximum over the dual ball, $\lVert\boldsymbol\Psi\rVert_{1,p} =
+\max_{\boldsymbol\Omega \in \mathcal{B}_{\infty,q}} \langle\boldsymbol\Omega, \boldsymbol\Psi\rangle$,
+with $1/p + 1/q = 1$ and $\mathcal{B}_{\infty,q}$ the fields whose matrices all lie in the unit
+$S_q$ ball, so each iteration needs `project_schatten` and $\mathbf{H}$, $\mathbf{H}^*$, with the
+step $1/(\tau\lVert\mathbf{H}\rVert^2)$ from `Hessian.norm2`. The result is
+`HessianSchattenResult(x, dual, n_iter)`: the estimate
+$\mathrm{P}_{[l,u]}(\mathbf{z} - \tau\mathbf{H}^*\boldsymbol\Omega)$, the last dual $\boldsymbol\Omega$,
+and the number of iterations. A fixed number of iterations is run (`max_iter`, default 10, the
+paper's deblurring setting), so the result is approximate. Passing the `dual` of a previous
+call warm-starts the iteration; the momentum restarts, which the paper does not specify.
+By default the Hessian has the mirror boundary of its Eq. 10 (`boundary="mirror"`).
+
+`HessianSchatten(weight, p, ndim=...)` is the function $w\lVert\mathbf{H}\mathbf{x}\rVert_{1,p} +
+\iota_{[l,u]}(\mathbf{x})$ with `value` and `prox`, for use as the function of a `Term` with
+no operator (HSPIRAL1). It keeps the dual of the previous `prox` call and starts the next one
+from it (`warm_start=True`, `n_iter=5` iterations per call), so its prox is inexact and depends
+on the calls before it: use one instance per problem, or `reset()`.
+
+```pycon
+>>> from optix.optim import HessianSchatten, prox_hessian_schatten
+>>> z = torch.zeros(16, 16)
+>>> z[4:12, 4:12] = 5.0
+>>> z = z + torch.sin(torch.arange(256.0)).reshape(16, 16)  # a ripple
+>>> res = prox_hessian_schatten(z, 0.5, 1, max_iter=10)
+>>> res.x.shape, res.dual.shape, res.n_iter, float(res.x.min())
+(torch.Size([16, 16]), torch.Size([3, 16, 16]), 10, 0.0)
+>>> penalty = HessianSchatten(0.5, 1, ndim=2)
+>>> x1 = penalty.prox(z, 1.0)  # starts from a zero dual, keeps it
+>>> (
+...     penalty.dual is not None,
+...     float(penalty.value(x1)) < float(penalty.value(z.clamp(min=0))),
+... )
+(True, True)
+>>> penalty.reset()
+>>> penalty.dual is None
+True
 ```
 
 ## Linear operators
@@ -226,7 +303,13 @@ Three small pieces make every operand of `admm_fft` a `Circulant`:
 `diff(x, dim)` is the forward difference $(\mathbf{D}x)_i = x_{i+1} - x_i$ along an
 axis and `diff_adjoint` its adjoint $(\mathbf{D}^\top y)_i = y_{i-1} - y_i$. The
 boundary is `"periodic"` (the image wraps around) or `"neumann"` (the image is
-extended by replication, the last difference is 0).
+extended by replication, the last difference is 0). `Hessian` also takes
+`boundary="mirror"`, the stencil of Eq. 10 of
+[Lefkimmiatis, Ward and Unser (2013)](https://doi.org/10.1109/TIP.2013.2237919): the image is
+extended by half-sample symmetry, $x_{N+k} = x_{N+1-k}$, before the stencils are applied.
+It differs from `"neumann"` in the diagonal terms at the last index: $(\mathbf{D}_{aa}\mathbf{x})_i
+= x_{N-1} - x_N$ at both of the last two indices. Its adjoint is that of Eq. 14 of that paper.
+The Fourier symbols need `boundary="periodic"`.
 
 `Gradient(ndim)` stacks the $d$ first differences of an image of $d$ trailing
 dimensions along a new axis, $\nabla\mathbf{x} = (\mathbf{D}_1\mathbf{x}, \dots,
@@ -267,7 +350,17 @@ $\mathbf{A}^\top\mathbf{A}$, $\sum_c |\hat{A}_c|^2$.
 True
 >>> D.norm2, H.norm2
 (8.0, 64.0)
+>>> ramp = torch.arange(6.0)  # second differences of a linear ramp, 1-D
+>>> [
+...     Hessian(1, boundary=b).forward(ramp)[0].tolist()
+...     for b in ("mirror", "neumann")
+... ]
+[[0.0, 0.0, 0.0, 0.0, -1.0, -1.0], [0.0, 0.0, 0.0, 0.0, -1.0, 0.0]]
 ```
+
+Away from the border the two stencils are the same, and vanish on a ramp. At the border
+the `"mirror"` stencil is $-1$ on the last two samples of the ramp, so a penalty built on it
+charges a linear ramp that reaches the edge of the image.
 
 ## ADMM for circulant operators
 
@@ -503,6 +596,13 @@ The exact likelihood of a small image, and its Lipschitz constant:
        Schatten-norm regularization.* IEEE Trans Image Process
        **22**(11):4314-4327, 2013.
        [doi:10.1109/TIP.2013.2271852](https://doi.org/10.1109/TIP.2013.2271852)
+    6. Lefkimmiatis S, Ward JP, Unser M. *Hessian Schatten-norm regularization for
+       linear inverse problems.* IEEE Trans Image Process **22**(5):1873-1888, 2013.
+       [doi:10.1109/TIP.2013.2237919](https://doi.org/10.1109/TIP.2013.2237919)
+    7. Beck A, Teboulle M. *Fast gradient-based algorithms for constrained total
+       variation image denoising and deblurring problems.* IEEE Trans Image Process
+       **18**(11):2419-2434, 2009.
+       [doi:10.1109/TIP.2009.2028250](https://doi.org/10.1109/TIP.2009.2028250)
 
     ??? quote "BibTeX"
 
@@ -555,5 +655,25 @@ The exact likelihood of a small image, and its Lipschitz constant:
           pages   = {4314--4327},
           year    = {2013},
           doi     = {10.1109/TIP.2013.2271852},
+        }
+        @article{lefkimmiatis2013hessian,
+          author  = {Lefkimmiatis, Stamatios and Ward, John Paul and Unser, Michael},
+          title   = {{Hessian} {Schatten}-Norm Regularization for Linear Inverse Problems},
+          journal = {IEEE Transactions on Image Processing},
+          volume  = {22},
+          number  = {5},
+          pages   = {1873--1888},
+          year    = {2013},
+          doi     = {10.1109/TIP.2013.2237919},
+        }
+        @article{beck2009fast,
+          author  = {Beck, Amir and Teboulle, Marc},
+          title   = {Fast Gradient-Based Algorithms for Constrained Total Variation Image Denoising and Deblurring Problems},
+          journal = {IEEE Transactions on Image Processing},
+          volume  = {18},
+          number  = {11},
+          pages   = {2419--2434},
+          year    = {2009},
+          doi     = {10.1109/TIP.2009.2028250},
         }
         ```
