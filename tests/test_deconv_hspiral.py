@@ -121,7 +121,7 @@ def test_defaults_and_paper_rules():
     assert float(est.peak) == float(y.max())
     q = float(torch.quantile(y.flatten(), 0.999))
     assert float(est.robust_peak) == pytest.approx(q, rel=1e-12)
-    tau = 0.03 / q
+    tau = 1.4 / q
     assert float(est.tau) == pytest.approx(tau)
     assert float(est.rho) == pytest.approx(60 * tau / float(y.max()))
     out = est.apply(y)
@@ -319,12 +319,17 @@ def test_blocks_and_memory():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         whole = HSPIRAL(psf, max_iter=50, dtype=F64).fit(y).apply(y)
-    est = HSPIRAL(psf, block=(32, 30), halo=14, max_iter=50, dtype=F64)
-    with pytest.warns(RuntimeWarning, match="blocks"):
-        out = est.fit(y).apply(y)
-    assert len(est.history.extras["iterations"]) == 4
+    diffs = []
+    for halo in (7, 21):
+        est = HSPIRAL(psf, block=(32, 30), halo=halo, max_iter=50, dtype=F64)
+        with pytest.warns(RuntimeWarning, match="blocks"):
+            out = est.fit(y).apply(y)
+        assert len(est.history.extras["iterations"]) == 4
+        inner = (slice(16, 48), slice(15, 45))  # around the seams
+        diffs.append(float((out - whole)[inner].abs().max()))
+    assert diffs[1] < diffs[0]
+    assert diffs[1] < 0.05 * float(whole.max()), diffs
     assert HSPIRAL(psf, block=(32, 30), halo=14).is_faithful
-    assert float((out - whole).abs().max()) < 0.2 * float(whole.max())
     # periodic: the FFT grid is the loaded block itself
     assert est._grid_shape((40, 44), (7, 7)) == (40, 44)
     unk = HSPIRAL(psf, boundary="unknown")

@@ -27,7 +27,7 @@ __all__ = ["HSPIRAL", "hspiral"]
 
 _BOUNDARY = ("periodic", "unknown")
 #: Constant κ of the default weight τ = κ / q₉₉.₉(y) (not in the paper).
-_KAPPA = 0.03
+_KAPPA = 1.4
 #: Working buffers of `admm_fft` per voxel of the FFT grid (measured
 #: peak), per number of Hessian components C: base + per_component·C.
 _GRID_BASE = 21.0
@@ -114,7 +114,7 @@ class HSPIRAL(_Variational):
     - The regularisation weight τ: the paper tunes τ per image for the
       best PSNR. The default here is
 
-          τ = κ / q₉₉.₉(y),   κ = 0.03,
+          τ = κ / q₉₉.₉(y),   κ = 1.4,
 
       per image, with q₉₉.₉(y) the 99.9th percentile of the data
       (computed exactly in the one pass of `fit`; a hot pixel barely
@@ -122,12 +122,21 @@ class HSPIRAL(_Variational):
       prior on the normalised image x/s (s the intensity scale) is the
       same at every photon count: the Poisson log-likelihood is
       homogeneous, ℓ(s x̂; s ŷ) = s ℓ(x̂; ŷ) up to a constant, so
-      ℓ(x; y) + κ‖H x/s‖ has the weight τ = κ/s. κ was calibrated on
-      simulated 2-D data with circular Gaussian and uniform blurs,
-      blobs, filaments, mixtures and piecewise-smooth scenes, peaks of
-      10, 100 and 1000 photons, p = 1, 2, ∞ and several seeds per case.
-      Pass `tau` to set the weight; the values used are in `tau` and
-      `rho` after `fit`.
+      ℓ(x; y) + κ‖H x/s‖ has the weight τ = κ/s.
+
+      κ was calibrated for the paper's α rule and stopping rule on
+      simulated 64 × 64 images with circular blur (Gaussian, σ_b = 2,
+      9 × 9; uniform 7 × 7): blobs, filaments, their mixture and
+      piecewise-smooth scenes, peaks of 10, 100 and 1000 photons, three
+      seeds each (72 cases for each of p = 1, 2, ∞). The best κ of a
+      grid (0.004 to 8, factor √2) hardly depends on the photon count,
+      which supports the 1/scale rule, but depends on the content:
+      about 0.2 to 0.5 for thin filaments, 1 to 6 for smooth blobs.
+      With κ = 1.4 the PSNR is on average 0.5 dB below that of the best
+      κ (at most 2.0, 3.0 and 3.9 dB for p = 1, 2, ∞, on blobs or
+      filaments) and at least 2 dB above that of the data (5 dB on
+      average). Pass `tau` to set the weight; the values used are in
+      `tau` and `rho` after `fit`.
 
     **Camera calibration** (not in the paper, which takes photon
     counts). With a [`SensorEstimate`][optix.estimates.SensorEstimate]
@@ -266,7 +275,7 @@ class HSPIRAL(_Variational):
             of the spatial axes of the layout, centred at index
             `K // 2`. Normalised to unit sum.
         tau : float, optional
-            Regularisation weight τ ≥ 0. Default: 0.03 / q₉₉.₉(y) per
+            Regularisation weight τ ≥ 0. Default: 1.4 / q₉₉.₉(y) per
             image (see above; not in the paper).
         p : {1, 2, inf}
             Order of the Schatten norm. Default: 1 (all three are the
