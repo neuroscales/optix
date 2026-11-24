@@ -426,3 +426,177 @@ def test_rotated_measured_profile_matches_gaussian_sheet():
     a = lightsheet_psf(h, sheet=profile, spacing=(0.01, 0.01), **rot)
     b = lightsheet_psf(h, spacing=(0.01, 0.01), **rot, **kw)
     assert torch.allclose(a, b, atol=1e-6)
+
+
+def _grid_coords(shape, spacing):
+    """1-D physical coordinates, 0 at index n // 2, as broadcast views."""
+    out = []
+    for i, (n, s) in enumerate(zip(shape, spacing, strict=True)):
+        view = [1] * len(shape)
+        view[i] = n
+        out.append(((torch.arange(n, dtype=F64) - n // 2) * s).view(view))
+    return out
+
+
+def test_rotated_sheet_with_focus_and_offset():
+    # t = n · r − offset, z = p · r − focus at 30°, anisotropic spacing;
+    # focus ≠ 0 makes the sign of p = R e_prop observable
+    kw = {"waist": W0, "wavelength": LAMBDA, "refractive_index": N}
+    theta = math.radians(30)
+    shape, spacing = (17, 5, 23), (0.4, 1.0, 1.5)
+    offset, focus = 0.8, -4.0
+    out = gaussian_sheet(
+        shape,
+        detection=0,
+        propagation=2,
+        rotation=theta,
+        spacing=spacing,
+        offset=offset,
+        focus=focus,
+        dtype=F64,
+        **kw,
+    )
+    r0, _, r2 = _grid_coords(shape, spacing)
+    c, s = math.cos(theta), math.sin(theta)
+    t = c * r0 + s * r2 - offset
+    z = -s * r0 + c * r2 - focus
+    expected = sheet_intensity(t, z, **kw).expand(shape)
+    assert torch.allclose(out, expected, rtol=1e-12, atol=1e-15)
+    # the opposite sign of p (or of the angle) gives a different sheet
+    flipped = gaussian_sheet(
+        shape,
+        detection=0,
+        propagation=2,
+        rotation=-theta,
+        spacing=spacing,
+        offset=offset,
+        focus=focus,
+        dtype=F64,
+        **kw,
+    )
+    assert not torch.allclose(flipped, out, rtol=1e-3)
+
+
+def _orthogonal_3d():
+    # a non-planar rotation: about axis 2 by 25°, then about axis 0 by 40°
+    a, b = math.radians(40), math.radians(25)
+    rx = torch.tensor(
+        [
+            [1, 0, 0],
+            [0, math.cos(a), -math.sin(a)],
+            [0, math.sin(a), math.cos(a)],
+        ],
+        dtype=F64,
+    )
+    rz = torch.tensor(
+        [
+            [math.cos(b), -math.sin(b), 0],
+            [math.sin(b), math.cos(b), 0],
+            [0, 0, 1],
+        ],
+        dtype=F64,
+    )
+    return rx @ rz
+
+
+def test_non_planar_rotation_closed_form():
+    kw = {"waist": 1.0, "wavelength": LAMBDA, "refractive_index": N}
+    mat = _orthogonal_3d()
+    spacing = (0.15, 0.15, 0.15)
+    shape = (31, 31, 31)
+    q = torch.diag(
+        torch.tensor([1 / 0.9**2, 1 / 0.6**2, 1 / 0.5**2], dtype=F64)
+    )
+    h = gaussian_on_grid(shape, q, spacing)
+    out = lightsheet_psf(
+        h, detection=0, rotation=mat, spacing=spacing, position=1.5, **kw
+    )
+    w = float(beam_radius(torch.tensor(1.5, dtype=F64), **kw))
+    n = mat[:, 0]
+    assert int((n.abs() > 1e-3).sum()) == 3  # not in a coordinate plane
+    q_eff = q + (4 / w**2) * torch.outer(n, n)
+    expected = (1.0 / w) * gaussian_on_grid(shape, q_eff, spacing)
+    assert torch.allclose(out, expected, rtol=1e-10, atol=1e-15)
+
+
+def test_rotated_psf_with_offset_and_anisotropic_spacing():
+    kw = {"waist": 1.0, "wavelength": LAMBDA, "refractive_index": N}
+    mat = _orthogonal_3d()
+    shape, spacing = (21, 15, 11), (0.1, 0.2, 0.3)
+    h = detection_psf(shape, (4.0, 3.0, 2.0))
+    out = lightsheet_psf(
+        h,
+        detection=1,
+        rotation=mat,
+        spacing=spacing,
+        position=3.0,
+        offset=0.25,
+        **kw,
+    )
+    coords = _grid_coords(shape, spacing)
+    n = mat[:, 1]
+    t = sum(float(n[i]) * coords[i] for i in range(3)) - 0.25
+    expected = h * sheet_intensity(t, torch.tensor(3.0, dtype=F64), **kw)
+    assert torch.allclose(out, expected, rtol=1e-12, atol=1e-18)
+    # the offset moves the sheet along n, away from the point source
+    centred = lightsheet_psf(
+        h, detection=1, rotation=mat, spacing=spacing, position=3.0, **kw
+    )
+    assert not torch.allclose(out, centred, rtol=1e-3)
+
+
+def test_improper_rotation_is_accepted():
+    # det R = −1: negating an unused column leaves the sheet unchanged
+    kw = {"waist": W0, "wavelength": LAMBDA, "refractive_index": N}
+    mirror = torch.diag(torch.tensor([1.0, -1.0, 1.0], dtype=F64))
+    assert float(torch.linalg.det(mirror)) == pytest.approx(-1.0)
+    grid = {"detection": 0, "propagation": 2, "spacing": (0.5, 1.0, 2.0)}
+    ref = gaussian_sheet(
+        (9, 5, 11), offset=0.7, focus=-3.0, dtype=F64, **grid, **kw
+    )
+    out = gaussian_sheet(
+        (9, 5, 11),
+        offset=0.7,
+        focus=-3.0,
+        rotation=mirror,
+        dtype=F64,
+        **grid,
+        **kw,
+    )
+    assert torch.allclose(out, ref, rtol=1e-12)
+    h = detection_psf((15, 9, 9), (3.0, 1.5, 1.5))
+    base = lightsheet_psf(h, detection=0, position=4.0, offset=0.3, **kw)
+    out = lightsheet_psf(
+        h, detection=0, rotation=mirror, position=4.0, offset=0.3, **kw
+    )
+    assert torch.allclose(out, base, rtol=1e-12)
+
+
+def test_empty_sheet_raises():
+    h = detection_psf((9, 9), (2.0, 2.0))
+    for rot in (None, torch.eye(2)):
+        with pytest.raises(ValueError, match="empty"):
+            lightsheet_psf(h, detection=0, rotation=rot, sheet=torch.ones(0))
+
+
+def test_gradient_through_tensor_angle():
+    kw = {"waist": W0, "wavelength": LAMBDA, "refractive_index": N}
+    grid = {"detection": 0, "propagation": 1, "spacing": 0.5, "focus": 2.0}
+
+    def total(theta):
+        return gaussian_sheet(
+            (15, 15), rotation=theta, dtype=F64, **grid, **kw
+        ).sum()
+
+    theta = torch.tensor(0.3, dtype=F64, requires_grad=True)
+    (grad,) = torch.autograd.grad(total(theta), theta)
+    eps = 1e-6
+    numeric = (total(0.3 + eps) - total(0.3 - eps)) / (2 * eps)
+    assert float(grad) == pytest.approx(float(numeric), rel=1e-5)
+    h = detection_psf((15, 15), (3.0, 3.0))
+    theta = torch.tensor(0.3, dtype=F64, requires_grad=True)
+    out = lightsheet_psf(
+        h, detection=0, propagation=1, rotation=theta, spacing=0.5, **kw
+    )
+    (grad,) = torch.autograd.grad(out.sum(), theta)
+    assert torch.isfinite(grad) and float(grad) != 0.0

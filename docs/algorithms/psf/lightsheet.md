@@ -5,7 +5,7 @@
     - **Noise model:** none (a deterministic optical model)
     - **Streaming:** none: one PSF-sized tensor is computed from the optical parameters, not from data
     - **Needs many frames:** no
-    - **Reference:** Gaussian beam: Saleh and Teich, *Fundamentals of Photonics*, 2nd ed., Wiley, 2007, Sec. 3.1, [Wiley](https://www.wiley.com/en-us/Fundamentals+of+Photonics%2C+2nd+Edition-p-9780471358329); the sheet and the effective PSF are derived in optix
+    - **Reference:** Gaussian beam: Saleh and Teich, *Fundamentals of Photonics*, 2nd ed., Wiley, 2007, ISBN 978-0-471-35832-9; the sheet and the effective PSF are derived in optix
 
 ## Overview
 
@@ -41,33 +41,21 @@ effective PSF. Lengths share one unit (the unit of `spacing`). See
 [Image formation and noise](../../concepts/image-formation.md) for the imaging
 model the PSF enters.
 
-**Gaussian beam.** This part is taken from the reference
-([Saleh and Teich, Sec. 3.1](https://www.wiley.com/en-us/Fundamentals+of+Photonics%2C+2nd+Edition-p-9780471358329)).
+**Gaussian beam.** This part is taken from the reference (Saleh and Teich,
+*Fundamentals of Photonics*, 2nd ed., ISBN 978-0-471-35832-9).
 A beam of waist radius $W_0$ (the half-width at $1/e^2$ of the intensity at the
 focus) and vacuum wavelength $\lambda_0$, in a medium of index $n$, has the
 wavelength $\lambda = \lambda_0 / n$ and the Rayleigh range, the distance at
 which the beam radius reaches $\sqrt{2}\,W_0$,
 
-=== "optix"
+$$
+z_R = \frac{\pi W_0^2}{\lambda}, \qquad
+W(z) = W_0 \sqrt{1 + \left(\frac{z}{z_R}\right)^2}, \qquad
+\theta_0 = \frac{\lambda}{\pi W_0},
+$$
 
-    $$
-    z_R = \frac{\pi W_0^2}{\lambda}, \qquad
-    W(z) = W_0 \sqrt{1 + \left(\frac{z}{z_R}\right)^2}, \qquad
-    \theta_0 = \frac{\lambda}{\pi W_0},
-    $$
-
-    with $\lambda = \lambda_0 / n$ and $z$ the distance from the waist along the
-    propagation axis.
-
-=== "Saleh and Teich 2007"
-
-    $$
-    z_0 = \frac{\pi W_0^2}{\lambda}, \qquad
-    W(z) = W_0 \sqrt{1 + \left(\frac{z}{z_0}\right)^2}, \qquad
-    \theta_0 = \frac{\lambda}{\pi W_0},
-    $$
-
-    with $\lambda = \lambda_0 / n$ the wavelength in the medium.
+with $\lambda = \lambda_0 / n$ and $z$ the distance from the waist along the
+propagation axis.
 
 $\theta_0$ is the divergence half-angle of the beam. It is not needed to compute
 the PSF; [`rayleigh_range`][optix.psf.utils.rayleigh_range] and
@@ -99,43 +87,35 @@ distance from the central plane of the sheet. As the sheet (or the sample) is
 stepped along the detection axis, the image of the point is the detection PSF
 weighted by the excitation at each step:
 
-=== "optix"
+$$
+h_{\mathrm{eff}}(\mathbf{r}) = h_{\mathrm{det}}(\mathbf{r})\;
+I\bigl(\mathbf{n}\cdot\mathbf{r} - t_0,\; z_p\bigr),
+$$
 
-    $$
-    h_{\mathrm{eff}}(\mathbf{r}) = h_{\mathrm{det}}(\mathbf{r})\;
-    I\bigl(\mathbf{n}\cdot\mathbf{r} - t_0,\; z_p\bigr),
-    $$
+with $\mathbf{r}$ the offset from the point source, $\mathbf{n} = \mathbf{e}_{\mathrm{det}}$
+(the detection axis) when the sheet is not rotated, $t_0$ the position of the
+central plane relative to the point source (`offset`) and $z_p$ the distance
+of the point from the waist (`position`).
 
-    with $\mathbf{r}$ the offset from the point source, $\mathbf{n} = \mathbf{e}_{\mathrm{det}}$
-    (the detection axis) when the sheet is not rotated, $t_0$ the position of the
-    central plane relative to the point source (`offset`) and $z_p$ the distance
-    of the point from the waist (`position`).
+| Symbol | Meaning | Shape |
+|---|---|---|
+| $W_0$ | waist radius (`waist`) | scalar |
+| $\lambda_0$ | vacuum wavelength (`wavelength`) | scalar |
+| $n$ | refractive index of the medium (`refractive_index`) | scalar |
+| $\lambda$ | wavelength in the medium, $\lambda_0 / n$ | scalar |
+| $z_R$ | Rayleigh range | scalar |
+| $W(z)$ | beam radius at distance $z$ from the waist | scalar |
+| $\theta_0$ | divergence half-angle | scalar |
+| $I(t, z)$ | sheet intensity | scalar field |
+| $t$ | distance from the central plane of the sheet, along $\mathbf{n}$ | scalar |
+| $z$, $z_p$ | distance from the waist, along the propagation axis; of the point source | scalar |
+| $t_0$, $z_f$ | position of the central plane (`offset`); of the waist (`focus`) | scalar |
+| $\mathbf{h}_{\mathrm{det}}$, $\mathbf{h}_{\mathrm{eff}}$ | detection PSF; effective PSF, on a grid of $K$ voxels centred at index `K // 2` | $\mathbb{R}^{K}$ |
+| $\mathbf{n}$, $\mathbf{p}$ | normal of the sheet, propagation direction (unit vectors; not the index $n$ nor the dipole $\mathbf{p}$ of Richards–Wolf) | $\mathbb{R}^d$ |
+| $\mathbf{R}$ | rotation of the sheet frame on the grid | $\mathbb{R}^{d\times d}$ |
 
-=== "Saleh and Teich 2007"
-
-    The reference gives the beam only, so there is no second form of this
-    equation: $I$ is built from $W_0$, $W(z)$ and $z_0$ as above.
-
-| optix | Saleh and Teich 2007 | Meaning | Shape |
-|---|---|---|---|
-| $W_0$ | $W_0$ | waist radius (`waist`) | scalar |
-| $\lambda_0$ | | vacuum wavelength (`wavelength`) | scalar |
-| $n$ | | refractive index of the medium (`refractive_index`) | scalar |
-| $\lambda$ | $\lambda$ | wavelength in the medium, $\lambda_0 / n$ | scalar |
-| $z_R$ | $z_0$ | Rayleigh range | scalar |
-| $W(z)$ | $W(z)$ | beam radius at distance $z$ from the waist | scalar |
-| $\theta_0$ | $\theta_0$ | divergence half-angle | scalar |
-| $I(t, z)$ | | sheet intensity | scalar field |
-| $t$ | | distance from the central plane of the sheet, along $\mathbf{n}$ | scalar |
-| $z$, $z_p$ | $z$ | distance from the waist, along the propagation axis; of the point source | scalar |
-| $t_0$, $z_f$ | | position of the central plane (`offset`); of the waist (`focus`) | scalar |
-| $\mathbf{h}_{\mathrm{det}}$, $\mathbf{h}_{\mathrm{eff}}$ | | detection PSF; effective PSF, on a grid of $K$ voxels centred at index `K // 2` | $\mathbb{R}^{K}$ |
-| $\mathbf{n}$, $\mathbf{p}$ | | normal of the sheet, propagation direction (unit vectors; not the index $n$ nor the dipole $\mathbf{p}$ of Richards–Wolf) | $\mathbb{R}^d$ |
-| $\mathbf{R}$ | | rotation of the sheet frame on the grid | $\mathbb{R}^{d\times d}$ |
-
-There is no paper for the sheet and the effective PSF, so the second tab shows
-the notation of the reference for what it covers. The reference writes the
-Rayleigh range $z_0$; optix writes $z_R$.
+There is no paper for the sheet and the effective PSF; the equations are given
+in the optix notation only.
 
 **Rotation (not in any reference).** A view of a multiview acquisition is sampled
 on a common grid that is rotated relative to its sheet frame. The orientation is
@@ -165,6 +145,13 @@ grid and the propagation direction onto $-\mathbf{e}_{\mathrm{det}}$. The offset
 $t_0$ and the focus $z_f$ are measured along $\mathbf{n}$ and $\mathbf{p}$ from
 the grid origin (index `n // 2` of each axis), not from the point source.
 
+$\mathbf{R}$ maps view (sheet-frame) coordinates to grid coordinates, acts on
+physical coordinates (index times `spacing`, so with anisotropic voxels it is
+the rotation between physical coordinates, not voxel indices), and is written
+in the array-axis order of the grid. A registration transform that maps the
+grid to the view must be inverted (transposed), and one given in $xyz$ order
+must have its axes reversed for an array in $zyx$ order.
+
 ## Probabilistic model
 
 This is a deterministic optical model: no noise and no prior. The assumptions
@@ -192,6 +179,9 @@ sheet is Gaussian, with covariance
 $$
 \boldsymbol{\Sigma}_{\mathrm{eff}} = \left(\boldsymbol{\Sigma}^{-1} + \frac{4}{W^2}\,\mathbf{n}\mathbf{n}^\top\right)^{-1}, \qquad W = W(z_p).
 $$
+
+The covariance does not depend on $t_0$; with $t_0 \neq 0$ the mean of the
+product moves along $\mathbf{n}$ and its amplitude changes.
 
 Along the detection axis of a PSF with standard deviation $\sigma$ there, and for
 a sheet that is not rotated and centred on the point ($t_0 = 0$), this reads
@@ -235,9 +225,11 @@ $\mathbf{h}_{\mathrm{det}}$.
    with $\mathbf{n} = \mathbf{e}_{\mathrm{det}}$ (one 1-D coordinate) or
    $\mathbf{n} = \mathbf{R}\,\mathbf{e}_{\mathrm{det}}$ (a PSF-sized tensor).
 3. **Sheet factor**: $I(t, z_p) = (W_0/W)\exp(-2t^2/W^2)$, or the measured
-   profile read at $t$ (a 1-D profile along `detection`, with $K$ samples,
-   interpolated linearly with held ends when `rotation` is given; a tensor that
-   broadcasts to the PSF otherwise).
+   profile read at $t$. Without `rotation`, the profile is 1-D along
+   `detection` with exactly $K$ samples, or a tensor that broadcasts to the
+   PSF. With `rotation`, it must be 1-D, of any length $L$, sampled at
+   `spacing[detection]` and centred at index `L // 2`; it is interpolated
+   linearly, with held ends.
 4. **Multiply**: $\mathbf{h}_{\mathrm{eff}} = \mathbf{h}_{\mathrm{det}} \odot I$.
 5. **Normalise** to unit sum when `normalize=True`.
 
@@ -269,9 +261,14 @@ reference.
   the Rayleigh range $z_R$; evaluate at several positions otherwise. Only
   [`gaussian_sheet`][optix.psf.gaussian_sheet], which does not use a point
   source, varies the thickness with $\mathbf{p}\cdot\mathbf{r}$.
-- Reflections are accepted: the model is that of a Gaussian beam in a
-  homogeneous medium and does not describe reflections, scattering,
-  absorption or refraction of the sheet by the specimen.
+- `rotation` accepts any orthogonal matrix, including improper ones
+  (det **R** = −1, a mirror). Only the columns **n** = **R e**_det and
+  **p** = **R e**_prop are used, and any orthonormal pair is a valid sheet
+  frame, so a matrix with an axis flip (for example from a registration with a
+  mirrored camera) describes the same sheet as the proper rotation with that
+  axis negated.
+- The model is that of a Gaussian beam in a homogeneous medium: it does not
+  describe scattering, absorption or refraction of the sheet by the specimen.
 - A measured profile is a function of the distance to the central plane only; it
   does not change with $z_p$.
 
@@ -281,7 +278,8 @@ The effective PSF is computed on the grid of the detection PSF only. Without
 rotation the sheet factor is a 1-D vector along the detection axis, broadcast
 over the PSF; with a rotation it is one PSF-sized tensor ($K$ voxels, the cost of
 the PSF itself). [`gaussian_sheet`][optix.psf.gaussian_sheet] returns one tensor
-of the grid shape. Nothing is read in chunks: the PSFs are small compared to the
+of the grid shape; with a rotation its peak memory is about four to five
+grid-sized tensors (the coordinates $t$ and $z$, $W(z)$ and the exponential). Nothing is read in chunks: the PSFs are small compared to the
 data.
 
 ## Usage
@@ -369,9 +367,8 @@ frame differs from the grid by more than one angle; `dtype` and `device` of
 
 !!! references "References"
 
-    1. Saleh BEA, Teich MC. *Fundamentals of Photonics*, 2nd ed., chapter 3
-       (Beam Optics), section 3.1 (The Gaussian Beam). Wiley, 2007.
-       [Wiley](https://www.wiley.com/en-us/Fundamentals+of+Photonics%2C+2nd+Edition-p-9780471358329)
+    1. Saleh BEA, Teich MC. *Fundamentals of Photonics*, 2nd ed. Wiley, 2007.
+       ISBN 978-0-471-35832-9.
 
     ??? quote "BibTeX"
 
@@ -380,8 +377,8 @@ frame differs from the grid by more than one angle; `dtype` and `device` of
           author    = {Saleh, Bahaa E. A. and Teich, Malvin Carl},
           title     = {Fundamentals of Photonics},
           edition   = {2},
-          chapter   = {3},
           publisher = {Wiley},
           year      = {2007},
+          isbn      = {978-0-471-35832-9},
         }
         ```
