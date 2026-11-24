@@ -1,11 +1,11 @@
 # Denis
 
 !!! info "At a glance"
-    **Estimates:** the shift-variant blur operator of a field, `DenisPSF`, used as the `psf` of the Richardson–Lucy family (deconvolved image) \
-    **Noise model:** none (a blur model: the noise is that of the deconvolution it is given to) \
-    **Streaming:** halo \
-    **Needs many frames:** no \
-    **Reference:** Denis, Thiébaut, Soulez, Becker and Mourya, Int J Comput Vis, 2015, [doi:10.1007/s11263-015-0817-x](https://doi.org/10.1007/s11263-015-0817-x)
+    - **Estimates:** the shift-variant blur operator of a field, `DenisPSF`, used as the `psf` of the Richardson–Lucy family (deconvolved image)
+    - **Noise model:** none (a blur model: the noise is that of the deconvolution it is given to)
+    - **Streaming:** halo
+    - **Needs many frames:** no
+    - **Reference:** Denis, Thiébaut, Soulez, Becker and Mourya, Int J Comput Vis, 2015, [doi:10.1007/s11263-015-0817-x](https://doi.org/10.1007/s11263-015-0817-x)
 
 ## Overview
 
@@ -69,8 +69,13 @@ gives the operator as a sum of convolutions of weighted objects.
     \qquad \mathbf{W}_s = \operatorname{diag}(\mathbf{w}_s),
     $$
 
-    with $\mathbf{H}_s$ the convolution with the kernel $\mathbf{h}_s$, and
-    $\mathbf{w}_s$ the weights of the term, an image over the object pixels.
+    with $\mathbf{K} \in \mathbb{R}^{K \times Q}$ the un-shifted PSFs (one
+    column of $K$ PSF voxels per pixel of the extended object domain of $Q$
+    pixels), $\mathbf{h}_s \in \mathbb{R}^{K}$ the kernel of term $s$,
+    $\mathbf{H}_s$ the convolution with it, $\mathbf{w}_s \in \mathbb{R}^{Q}$
+    the weights of the term, an image over the object pixels, and
+    $\mathbf{A} \in \mathbb{R}^{\lvert\Omega\rvert \times Q}$ the blur onto the
+    $\lvert\Omega\rvert$ observed pixels.
 
 === "Denis et al. 2015"
 
@@ -80,15 +85,16 @@ gives the operator as a sum of convolutions of weighted objects.
     \mathbf{H} \approx \sum_{p} \operatorname{conv}(\mathbf{m}_p) \cdot \operatorname{diag}(\mathbf{w}_p) \quad (14).
     $$
 
-| optix | [Denis et al. 2015](https://doi.org/10.1007/s11263-015-0817-x) |
-|---|---|
-| $\mathbf{A}$ | $\mathbf{H}$ |
-| $\mathbf{K}$ | $\mathbf{K}$ |
-| $\mathbf{H}_s$, $\mathbf{h}_s$ | $\operatorname{conv}(\mathbf{m}_p)$, $\mathbf{m}_p$ (components of the PSF model) |
-| $\mathbf{W}_s$, $\mathbf{w}_s$ | $\operatorname{diag}(\mathbf{w}_p)$, $\mathbf{w}_p$ |
-| $S$, $s$ | $P$, $p$ |
-| $\boldsymbol{\varphi}_s$ | $\boldsymbol{\varphi}_p$ (interpolation weights) |
-| $L$ | $L$ (pixels of the PSF support) |
+| optix | [Denis et al. 2015](https://doi.org/10.1007/s11263-015-0817-x) | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{A}$ | $\mathbf{H}$ | shift-variant blur operator | $\lvert\Omega\rvert \times Q$, one for the whole stack |
+| $\mathbf{K}$ | $\mathbf{K}$ | un-shifted PSFs, one column per object pixel | $K \times Q$, one for the whole stack |
+| $\mathbf{H}_s$, $\mathbf{h}_s$ | $\operatorname{conv}(\mathbf{m}_p)$, $\mathbf{m}_p$ | convolution with kernel $s$; the kernel (a component of the PSF model) | $\lvert\Omega\rvert \times Q$ and $K$, one per term |
+| $\mathbf{W}_s$, $\mathbf{w}_s$ | $\operatorname{diag}(\mathbf{w}_p)$, $\mathbf{w}_p$ | weights of term $s$ over the object, as a diagonal matrix and as an image | $Q \times Q$ and $Q$, one per term |
+| $S$, $s$ | $P$, $p$ | number of terms; term index | scalars |
+| $\boldsymbol{\varphi}_s$ | $\boldsymbol{\varphi}_p$ | (multi)linear interpolation weights of node $s$ | $Q$, one per node |
+| $K$ | $L$ | voxels of the PSF support | scalar |
+| $Q$ | $M$ | pixels of the (extended) object domain | scalar |
 
 The order matters: the weights multiply the object, then the kernel is convolved
 (the adjoint is the convolution followed by the weights). The inverse order, in
@@ -99,8 +105,12 @@ interpolated PSF ([§2.2–2.3, Table 2](https://doi.org/10.1007/s11263-015-0817
 
 The three models differ in how the kernels and weights are obtained. The error of
 an approximation is the squared Frobenius norm on the un-shifted PSFs, $E^2 =
-\|\mathbf{K} - \sum_s \mathbf{h}_s \mathbf{w}_s^\top\|_F^2$ (Eq. 25), the sum of
+\lVert\mathbf{K} - \sum_s \mathbf{h}_s \mathbf{w}_s^\top\rVert_F^2$ (Eq. 25), the sum of
 squared distances between the true PSF and its approximation over all pixels.
+Statistically, every model is a least-squares fit of a low-rank, separable
+model to the PSFs: `"modes"` is a truncated SVD (principal component analysis
+without centring) of the sampled PSFs, and `"optimal"` is alternating least
+squares with a support constraint on the weights; no noise model is involved.
 
 **Interpolation** ([§2.3](https://doi.org/10.1007/s11263-015-0817-x), Eqs. 21–22).
 The PSFs are sampled at $S$ nodes of a rectangular grid. Each column of $\mathbf{K}$
@@ -121,12 +131,12 @@ the kernels of the nodes whose weights are non-zero in it.
 
 **Modes** ([§2.4](https://doi.org/10.1007/s11263-015-0817-x), Eqs. 26–28; this
 departs from the paper). In the paper, $\mathbf{K}$ holds the PSF of *every* pixel
-($L \times M$), its singular value decomposition
+($K \times Q$), its singular value decomposition
 $\mathbf{K} = \mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$ gives the closest rank-$R$
 approximation $\sum_{s \le R} \mathbf{u}_s\, \sigma_s \mathbf{v}_s^\top$ (Eq. 27, Eckart–Young),
 and $\sigma_s \mathbf{v}_s$ are the weights over the whole field (Eq. 28), with no
 interpolation. The model implements the practical scheme of Flicker and Rigaut
-(2005): the SVD is that of the matrix $\mathbf{K}_0 \in \mathbb{R}^{L \times S_0}$ of
+(2005): the SVD is that of the matrix $\mathbf{K}_0 \in \mathbb{R}^{K \times S_0}$ of
 the $S_0$ *sampled* PSFs, the kernels are the first $R$ modes
 $\mathbf{h}_s = \mathbf{u}_s$ (not positive nor normalised), and the weights are the
 mode coefficients $\sigma_s \mathbf{v}_s$ of the nodes, interpolated between nodes
@@ -137,13 +147,13 @@ weights are not localised: each mode is convolved over the whole field. With
 $R = S_0$ the model equals the interpolation.
 
 **Optimal local approximation** ([§2.5](https://doi.org/10.1007/s11263-015-0817-x),
-Eqs. 29–38). Kernels $\mathbf{C} = [\mathbf{c}_1 \cdots \mathbf{c}_S]$ and weights
-$\mathbf{W} = [\mathbf{w}_1 \cdots \mathbf{w}_S]$ solve
+Eqs. 29–38). Kernels $\mathbf{C} = [\mathbf{c}_1 \cdots \mathbf{c}_S] \in \mathbb{R}^{K \times S}$
+and weights $\mathbf{W} = [\mathbf{w}_1 \cdots \mathbf{w}_S] \in \mathbb{R}^{Q \times S}$ solve
 
 $$
-\min_{\mathbf{C}, \mathbf{W}} \|\mathbf{K} - \mathbf{C}\mathbf{W}^\top\|_F^2
+\min_{\mathbf{C}, \mathbf{W}} \lVert\mathbf{K} - \mathbf{C}\mathbf{W}^\top\rVert_F^2
 \quad\text{s.t.}\quad \operatorname{supp}(\mathbf{w}_s) \subset \operatorname{supp}(\boldsymbol{\varphi}_s)
-\qquad (30\text{–}31),
+\qquad (30, 31),
 $$
 
 where $\mathbf{K}$ holds the PSF of every pixel. This is biconvex, solved by
@@ -174,24 +184,35 @@ smaller.
 
 ## Algorithm
 
-```text
-Input: sampled PSFs on a grid (*G, *K) with node positions;
-       model = "interpolation", rank = None, n_alt = 10
-Build the terms (kernels h_s, weights w_s):
-    interpolation: h_s = PSF at node s; w_s = (multi)linear weights
-    modes:         SVD of the sampled PSFs; h_s = first `rank` modes u_s;
-                   w_s = interpolation of the mode coefficients σ_s v_s
-    optimal:       from psf_model (PSF at every pixel of `extent`)
-                   start from the interpolation terms
-                   repeat n_alt times:
-                       C = K W (W'W)⁻¹                         (Eq. 35)
-                       w_j = pinv(C'_j) K_j for every pixel j  (Eq. 37)
-                   one more pass: store w_j of every pixel (2^d values each)
-For a block at a global position: evaluate the weights at the global pixel
-positions and apply A = Σ H_s W_s with FFTs on a padded grid; adjoint:
-A' = Σ W_s H_s'
-Give the operator to the RL iteration (RichardsonLucy, BiggsAndrews or Snyder)
-```
+**Input:** PSFs sampled at the $S_0$ nodes of a grid, array `(*G, *K)`, and the
+node positions; `model="interpolation"`, `rank=None`, `n_alt=10`; for
+`"optimal"`, `psf_model` and `extent`. \
+**Output:** the operator $\mathbf{A} \approx \sum_s \mathbf{H}_s \mathbf{W}_s$ of
+any block, used as the `psf` of the Richardson–Lucy family.
+
+1. **Build the terms** (kernels $\mathbf{h}_s$, weights $\mathbf{w}_s$):
+    1. `"interpolation"`: $\mathbf{h}_s$ is the PSF at node $s$, and
+       $\mathbf{w}_s = \boldsymbol{\varphi}_s$, the (multi)linear weights;
+    2. `"modes"`: compute the SVD
+       $\mathbf{K}_0 = \mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$ of the sampled
+       PSFs; $\mathbf{h}_s = \mathbf{u}_s$ for the first `rank` modes, and
+       $\mathbf{w}_s$ interpolates the coefficients $\sigma_s \mathbf{v}_s$
+       between nodes;
+    3. `"optimal"`: start from the interpolation terms, evaluate `psf_model` at
+       every pixel of `extent`, and repeat `n_alt` times:
+        1. **Kernels:** $\mathbf{C} = \mathbf{K}\mathbf{W}(\mathbf{W}^\top\mathbf{W})^{+}$ (Eq. 35);
+        2. **Weights:** $\boldsymbol{\omega}_j = (\mathbf{C}'_j)^{+}\, \mathbf{K}_{\cdot j}$ for every pixel $j$ (Eq. 37);
+
+        then one more weight pass stores the $2^d$ weights of every pixel.
+2. **Apply** for a block at a global position: evaluate the weights at the
+   global pixel positions and compute
+   $\mathbf{A}\mathbf{x} = \sum_s \mathbf{H}_s (\mathbf{w}_s \odot \mathbf{x})$
+   by FFT on a padded grid; the adjoint is
+   $\mathbf{A}^\top \mathbf{v} = \sum_s \mathbf{w}_s \odot (\mathbf{H}_s^\top \mathbf{v})$.
+3. **Deconvolve:** give the operator to `RichardsonLucy`, `BiggsAndrews` or
+   `Snyder`.
+
+Here $^{+}$ is the pseudo-inverse (see the choices below).
 
 ## Faithful mode and extensions
 
@@ -231,8 +252,8 @@ Choices that the paper does not specify:
     built, and stored ($2^d$ values per pixel of `extent`); operators only slice
     them, and `psf_model` is not called again. The fit evaluates `psf_model`
     $(n_\text{alt} + 1)$ times at every pixel, in batches sized from the memory
-    budget, at a cost of about $(n_\text{alt} + 1)\, M L\, 2^d$ operations ($M$
-    pixels, $L$ pixels of the PSF support): fine in 2-D, heavy for a large volume
+    budget, at a cost of about $(n_\text{alt} + 1)\, Q K\, 2^d$ operations ($Q$
+    pixels, $K$ voxels of the PSF support): fine in 2-D, heavy for a large volume
     with large 3-D PSFs. The model can be saved without `psf_model`.
 
 The paper's restoration (a total-variation penalty minimised by L-BFGS) is not

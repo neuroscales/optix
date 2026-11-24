@@ -132,8 +132,8 @@ The fields minimise an energy, not a likelihood:
     regulariser $E_r$ (Eq. 11), the zero-light term $E_z$ (Eq. 12) and the
     barrier $E_b$ (Eqs. 13–14).
 
-Here $\mathbf{r}$ runs over the $P_w \le 128^2$ pixels of the working grid,
-on which $\mathbf{f}, \mathbf{c} \in \mathbb{R}^{P_w}$; $\lvert T \rvert$ is
+Here $\mathbf{r}$ runs over the $\lvert\Omega_w\rvert \le 128^2$ pixels of the working grid $\Omega_w$,
+on which $\mathbf{f}, \mathbf{c} \in \mathbb{R}^{\lvert\Omega_w\rvert}$; $\lvert T \rvert$ is
 the number of scales.
 
 - $E_f$ is a robust (Cauchy, width $w$) fit of the $K$ quantiles at every pixel.
@@ -148,7 +148,7 @@ the number of scales.
 |---|---|---|---|
 | $\mathbf{q}(\mathbf{r})$ | $q(x)$ | sorted intensities (quantiles) at pixel $\mathbf{r}$ | $\mathbb{R}^K$, per pixel |
 | $\mathbf{Q}$ | $Q$ | target distribution common to all pixels | $\mathbb{R}^K$, per group |
-| $\mathbf{c}$ | $b$ | intercept of the per-pixel line | $\mathbb{R}^{P_w}$, per group |
+| $\mathbf{c}$ | $b$ | intercept of the per-pixel line | $\mathbb{R}^{\lvert\Omega_w\rvert}$, per group |
 | $(Z_Q, Z_q)$ | $(Z_Q, Z_q)$ | zero-light point shared by all lines | two scalars, per group |
 | $\omega$ | $\omega$ | half-width of the central band of pixel means | scalar |
 | $w$, $w_b$ | | widths of the Cauchy fit and of the barrier | scalars |
@@ -190,7 +190,7 @@ optionally in groups. \
 
 For each group:
 
-1. **Resample** each frame to the working grid (long side 128, $P_w$ pixels).
+1. **Resample** each frame to the working grid (long side 128, $\lvert\Omega_w\rvert$ pixels).
 2. **Summarise** each pixel by $K = 100$ quantiles $\mathbf{q}(\mathbf{r})$
    (exact, or from per-pixel histograms) and divide by the maximum intensity.
 3. **Target** $\mathbf{Q}$: robust mean over the central band, $\omega = 0.25$.
@@ -237,8 +237,8 @@ Interpretations of the paper and choices it leaves open:
 CIDRE is tagged `per-pixel-stats`. The fit makes one pass over the data, plus
 a second one when the quantiles come from per-pixel histograms
 (`quantile_method="histogram"`, or `"auto"` when the resampled stack does not
-fit the memory budget). Memory is then $O(P_w \cdot \texttt{bins})$ on the
-working grid ($P_w \le 128^2$), independent of the number of frames; the
+fit the memory budget). Memory is then $O(\lvert\Omega_w\rvert \cdot \texttt{bins})$ on the
+working grid ($\lvert\Omega_w\rvert \le 128^2$), independent of the number of frames; the
 energy has at most $K$ terms per pixel. [`apply`](../../reference/shading.md)
 works on frame batches. Tune `working_size`, `quantiles` and `bins`.
 

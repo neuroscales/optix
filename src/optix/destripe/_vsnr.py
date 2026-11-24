@@ -242,11 +242,11 @@ def operator_norm(
     dtype: torch.dtype | None = None,
     device: torch.device | str | None = None,
 ) -> float:
-    """Norm L = |||A||| of A: λ ↦ ∇(∑ᵢ λᵢ ∗ kᵢ), Appendix B.
+    """Norm L = |||A||| of A: λ ↦ ∇(∑ⱼ λⱼ ∗ kⱼ), Appendix B.
 
     With periodic differences, AAᵀ is block-diagonalised by the DFT, and
 
-        L² = max over k of Σ(k) (|d̂₁(k)|² + |d̂₂(k)|²),  Σ(k) = ∑ᵢ |k̂ᵢ(k)|²,
+        L² = max over k of Σ(k) (|d̂₁(k)|² + |d̂₂(k)|²),  Σ(k) = ∑ⱼ |k̂ⱼ(k)|²,
 
     with |d̂ⱼ(k)|² = 4 sin²(π kⱼ / nⱼ) the transfer function of a forward
     difference. The value bounds the norm of A with the differences of
@@ -255,7 +255,7 @@ def operator_norm(
     Parameters
     ----------
     filters : Tensor or sequence of Tensor
-        Kernels kᵢ, `(h, w)` or `(m, h, w)`, centred on `(h // 2, w // 2)`.
+        Kernels kⱼ, `(h, w)` or `(m, h, w)`, centred on `(h // 2, w // 2)`.
     shape : (int, int)
         Frame shape.
     dtype, device : optional
@@ -305,7 +305,7 @@ def _huber(t: Tensor, eps: float) -> Tensor:
 
 
 class _Prior:
-    """φᵢ with its resolvent and the conjugate of φᵢ + χ_[−C, C] (App. A)."""
+    """φⱼ with its resolvent and the conjugate of φⱼ + χ_[−C, C] (App. A)."""
 
     def __init__(self, kind: str, alpha: float) -> None:
         if kind not in PRIORS:
@@ -323,7 +323,7 @@ class _Prior:
         return lam.new_zeros(lam.shape[:-2])
 
     def bound(self, p0: Tensor) -> Tensor:
-        """A bound on ‖λᵢ*‖∞ from φᵢ(λᵢ*) ≤ P(λ*) ≤ P(0) = `p0`."""
+        """A bound on ‖λⱼ*‖∞ from φⱼ(λⱼ*) ≤ P(λ*) ≤ P(0) = `p0`."""
         if self.kind == "l1":
             return p0 / self.alpha
         if self.kind == "l2":
@@ -383,7 +383,7 @@ class VSNRSolution(NamedTuple):
     image : Tensor
         Denoised frames x = y − s, `(..., H, W)`.
     noise : Tensor
-        Stationary noise s = ∑ᵢ λᵢ ∗ kᵢ, `(..., H, W)`.
+        Stationary noise s = ∑ⱼ λⱼ ∗ kⱼ, `(..., H, W)`.
     weights : Tensor
         Primal variables λ, `(..., m, H, W)`.
     dual : Tensor
@@ -436,18 +436,18 @@ def vsnr_solve(
 ) -> VSNRSolution:
     """Primal–dual VSNR solver (Algorithms 1 and 2), with diagnostics.
 
-    Notation follows the docs: y, x, s, kᵢ, h_ε and ϑₖ stand for the
+    Notation follows the docs: y, x, s, kⱼ, h_ε and ϑₖ stand for the
     paper's u₀, u, b, ψᵢ, φ_ε and θₖ.
 
     Solves, for each frame y independently, problem (11) of Fehrenbach
     et al. (2012),
 
-        min_{λ ∈ Ξ} P(λ) = ‖∇(y − ∑ᵢ λᵢ ∗ kᵢ)‖₂,₁^ε + ∑ᵢ φᵢ(λᵢ),
+        min_{λ ∈ Ξ} P(λ) = ‖∇(y − ∑ⱼ λⱼ ∗ kⱼ)‖₂,₁^ε + ∑ⱼ φⱼ(λⱼ),
         Ξ = {λ : ‖λ‖∞ ≤ C},
 
     through the saddle-point problem (13), min_λ max_q ⟨Aλ, q⟩ − F*(q) +
-    G(λ), with Aλ = ∇(∑ᵢ λᵢ ∗ kᵢ), F(g) = ‖∇y − g‖₂,₁^ε and
-    G = ∑ᵢ φᵢ + χ_Ξ. Each iteration of Algorithm 1 (Chambolle–Pock) is
+    G(λ), with Aλ = ∇(∑ⱼ λⱼ ∗ kⱼ), F(g) = ‖∇y − g‖₂,₁^ε and
+    G = ∑ⱼ φⱼ + χ_Ξ. Each iteration of Algorithm 1 (Chambolle–Pock) is
 
         qₖ₊₁ = (Id + σₖ∂F*)⁻¹(qₖ + σₖ A λ̄ₖ),
         λₖ₊₁ = (Id + τₖ∂G)⁻¹(λₖ − τₖ A* qₖ₊₁),
@@ -461,9 +461,9 @@ def vsnr_solve(
     difference of Section II (zero at the last row and column), and
     ∇ᵀ = −div its exact adjoint. The step sizes follow Algorithm 2:
 
-    - all φᵢ = αᵢ/2 ‖·‖² and ε > 0: constant steps with
-      μ = 2√(γε)/L, τ = μ/(2γ), σ = μ/(2ε), ϑ = 1/(1 + μ), γ = min αᵢ;
-    - all φᵢ = αᵢ/2 ‖·‖² and ε = 0: ϑₖ = 1/√(1 + 2γτₖ),
+    - all φⱼ = αⱼ/2 ‖·‖² and ε > 0: constant steps with
+      μ = 2√(γε)/L, τ = μ/(2γ), σ = μ/(2ε), ϑ = 1/(1 + μ), γ = min αⱼ;
+    - all φⱼ = αⱼ/2 ‖·‖² and ε = 0: ϑₖ = 1/√(1 + 2γτₖ),
       τₖ₊₁ = ϑₖ τₖ, σₖ₊₁ = σₖ/ϑₖ;
     - otherwise constant steps τ, σ and ϑ = 1;
 
@@ -509,14 +509,14 @@ def vsnr_solve(
           scales with the data and q does not, this makes the iterates
           equivariant to a rescaling of the intensities.
         - The box bound C must exceed ‖λ*‖∞ (Section V-A). Default: the
-          bound that follows from φᵢ(λᵢ*) ≤ P(λ*) ≤ P(0), i.e.
-          the maximum over i of P(0)/αᵢ (ℓ¹), √(2P(0)/αᵢ) (ℓ²) or αᵢ (ℓ∞
+          bound that follows from φⱼ(λⱼ*) ≤ P(λ*) ≤ P(0), i.e.
+          the maximum over j of P(0)/αⱼ (ℓ¹), √(2P(0)/αⱼ) (ℓ²) or αⱼ (ℓ∞
           ball), per frame. The box is then inactive at the minimiser.
           With ℓ¹ priors this bound is loose; it does not enter the
           stopping rule (see the next item).
         - For ℓ¹ components, D is evaluated at the dual-feasible point
-          q/κ, κ = max(1, maxᵢ ‖(A*q)ᵢ‖∞/αᵢ) over those components, with
-          the conjugate of φᵢ alone (the indicator of |ηᵢ| ≤ αᵢ), which
+          q/κ, κ = max(1, maxⱼ ‖(A*q)ⱼ‖∞/αⱼ) over those components, with
+          the conjugate of φⱼ alone (the indicator of |ηⱼ| ≤ αⱼ), which
           is then zero. The gap is still an upper bound on P(λₖ) − P*,
           and it does not depend on C.
         - A `RuntimeWarning` is emitted when frames reach `max_iter`
@@ -524,7 +524,7 @@ def vsnr_solve(
           priors and ε = 0 the rate is only O(1/k) (Proposition 5.3),
           so this is common.
         - Appendix A writes F*(q) = ε/2 ‖q‖² − ⟨∇y, q⟩, which goes with
-          x = y + ∑ᵢ λᵢ ∗ kᵢ. The sign used here,
+          x = y + ∑ⱼ λⱼ ∗ kⱼ. The sign used here,
           F*(q) = ε/2 ‖q‖² + ⟨∇y, q⟩ (for ‖q‖∞ ≤ 1), goes with model (6),
           x = y − s; the two differ only by the sign of λ, as all the
           priors are even.
@@ -534,17 +534,17 @@ def vsnr_solve(
     data : Tensor
         Frames y, `(..., H, W)`.
     filters : Tensor or sequence of Tensor
-        The m kernels kᵢ, `(m, h, w)`, `(h, w)` or a sequence of 2-D
+        The m kernels kⱼ, `(m, h, w)`, `(h, w)` or a sequence of 2-D
         kernels of any size up to `(H, W)`, each centred on
         `(h // 2, w // 2)` (see [`dirac`][optix.destripe.utils.dirac],
         [`line`][optix.destripe.utils.line],
         [`gaussian_stripe`][optix.destripe.utils.gaussian_stripe]).
     alpha : float or sequence of float
-        Weights αᵢ > 0 of the priors (one value, or one per filter).
+        Weights αⱼ > 0 of the priors (one value, or one per filter).
     prior : str or sequence of str, default `"l1"`
-        φᵢ, one value or one per filter (Section III-C):
-        `"l1"`: αᵢ‖λᵢ‖₁ (Laplace noise); `"l2"`: αᵢ/2 ‖λᵢ‖₂² (Gaussian
-        noise); `"linf"`: the indicator of ‖λᵢ‖∞ ≤ αᵢ (uniform noise).
+        φⱼ, one value or one per filter (Section III-C):
+        `"l1"`: αⱼ‖λⱼ‖₁ (Laplace noise); `"l2"`: αⱼ/2 ‖λⱼ‖₂² (Gaussian
+        noise); `"linf"`: the indicator of ‖λⱼ‖∞ ≤ αⱼ (uniform noise).
         The default is not specified in the paper.
     eps : float, default 0
         Huber parameter ε ≥ 0 of ‖·‖₂,₁^ε (Eq. (8)); 0 is total variation.
@@ -610,9 +610,9 @@ def vsnr_solve(
     l1 = [i for i, p in enumerate(priors) if p.kind == "l1"]
 
     def dual(q: Tensor, ast: Tensor) -> Tensor:
-        # D at the dual-feasible q/κ, κ = max(1, maxᵢ ‖(A*q)ᵢ‖∞/αᵢ) over
+        # D at the dual-feasible q/κ, κ = max(1, maxⱼ ‖(A*q)ⱼ‖∞/αⱼ) over
         # the ℓ¹ components, so that their conjugate (the indicator of
-        # |η| ≤ αᵢ) is zero and the gap bounds P(λ) − P* without C.
+        # |η| ≤ αⱼ) is zero and the gap bounds P(λ) − P* without C.
         kappa = torch.ones_like(p0)
         for i in l1:
             peak = ast[:, i].abs().amax((-2, -1)) / priors[i].alpha
@@ -744,23 +744,23 @@ def vsnr(
 ) -> Tensor:
     """Remove stationary noise (stripes) with VSNR.
 
-    Notation follows the docs: y, x, s, kᵢ and h_ε stand for the paper's
+    Notation follows the docs: y, x, s, kⱼ and h_ε stand for the paper's
     u₀, u, b, ψᵢ and φ_ε.
 
     The variational stationary noise remover of Fehrenbach et al. (2012)
     models each frame as y = x + s (Eq. (6)), with a stationary noise
 
-        s = ∑ᵢ λᵢ ∗ kᵢ  (Eq. (4)),
+        s = ∑ⱼ λⱼ ∗ kⱼ  (Eq. (4)),
 
-    made of known patterns kᵢ (e.g. stripes) convolved with white noises
-    λᵢ of densities p(λᵢ) ∝ exp(−φᵢ(λᵢ)) (Eq. (5)). The MAP estimate
+    made of known patterns kⱼ (e.g. stripes) convolved with white noises
+    λⱼ of densities p(λⱼ) ∝ exp(−φⱼ(λⱼ)) (Eq. (5)). The MAP estimate
     under the image prior p(x) ∝ exp(−‖∇x‖₂,₁^ε) (Eq. (8)) solves (9),
 
-        min_λ ‖∇(y − ∑ᵢ λᵢ ∗ kᵢ)‖₂,₁^ε + ∑ᵢ φᵢ(λᵢ),
+        min_λ ‖∇(y − ∑ⱼ λⱼ ∗ kⱼ)‖₂,₁^ε + ∑ⱼ φⱼ(λⱼ),
 
-    where ‖g‖₂,₁^ε = ∑ₚ h_ε(‖gₚ‖₂) is the Huber-smoothed total variation
+    where ‖g‖₂,₁^ε = ∑_{i∈Ω} h_ε(‖gᵢ‖₂) is the Huber-smoothed total variation
     (h_ε(t) = t²/(2ε) for |t| ≤ ε, |t| − ε/2 otherwise; ε = 0 is the
-    total variation). The denoised frame is x = y − ∑ᵢ λᵢ ∗ kᵢ.
+    total variation). The denoised frame is x = y − ∑ⱼ λⱼ ∗ kⱼ.
     The problem is solved by the primal–dual algorithm of Chambolle and
     Pock (Algorithms 1 and 2), stopped on the duality gap; see
     [`vsnr_solve`][optix.destripe.utils.vsnr_solve] for the iteration,
@@ -802,13 +802,13 @@ def vsnr(
         periodic over the frame). The cost per iteration is 2m + 2 FFTs
         of the frame size; the paper reports fewer than 50 iterations to
         reduce the duality gap by 10³ with well-tuned steps
-        (Section VI-C). αᵢ sets the strength of each noise component and
-        depends on the amplitude of kᵢ: the paper leaves it to the user.
+        (Section VI-C). αⱼ sets the strength of each noise component and
+        depends on the amplitude of kⱼ: the paper leaves it to the user.
         With ℓ¹ priors and ε = 0, the solution is equivariant to a
-        rescaling of the intensities (y → c y gives λ → c λ), so αᵢ
+        rescaling of the intensities (y → c y gives λ → c λ), so αⱼ
         does not depend on the intensity unit. This does not hold for
         ε > 0 (the Huber function is not 1-homogeneous), nor for
-        `"linf"` priors, whose bound αᵢ is in intensity units.
+        `"linf"` priors, whose bound αⱼ is in intensity units.
 
     Parameters
     ----------
@@ -816,16 +816,16 @@ def vsnr(
         Frames `(..., H, W)` (floating point; other dtypes are converted
         to the configured dtype).
     filters : Tensor or sequence of Tensor
-        Noise patterns kᵢ: `(h, w)`, `(m, h, w)` or a sequence of 2-D
+        Noise patterns kⱼ: `(h, w)`, `(m, h, w)` or a sequence of 2-D
         kernels, each at most `(H, W)` and centred on `(h // 2, w // 2)`;
         e.g. [`gaussian_stripe`][optix.destripe.utils.gaussian_stripe],
         [`line`][optix.destripe.utils.line] or
         [`dirac`][optix.destripe.utils.dirac] (white noise).
     alpha : float or sequence of float
-        Prior weights αᵢ > 0, one value or one per filter.
+        Prior weights αⱼ > 0, one value or one per filter.
     prior : str or sequence of str, default `"l1"`
-        φᵢ: `"l1"` (αᵢ‖λᵢ‖₁, Laplace), `"l2"` (αᵢ/2 ‖λᵢ‖₂², Gaussian)
-        or `"linf"` (‖λᵢ‖∞ ≤ αᵢ, uniform); one value or one per filter.
+        φⱼ: `"l1"` (αⱼ‖λⱼ‖₁, Laplace), `"l2"` (αⱼ/2 ‖λⱼ‖₂², Gaussian)
+        or `"linf"` (‖λⱼ‖∞ ≤ αⱼ, uniform); one value or one per filter.
         The default is not specified in the paper.
     eps : float, default 0
         Huber parameter ε of the image prior; 0 is total variation.
@@ -871,7 +871,7 @@ class VSNR(Estimator):
     processed.
 
     !!! note
-        The noise patterns kᵢ, the priors φᵢ and their weights αᵢ describe
+        The noise patterns kⱼ, the priors φⱼ and their weights αⱼ describe
         the data and are chosen by the user (Section III); the paper gives
         no defaults for them. The filters are 2-D kernels over the two
         spatial axes of the layout, in layout order.
@@ -939,14 +939,14 @@ class VSNR(Estimator):
         Parameters
         ----------
         filters : Tensor or sequence of Tensor
-            Noise patterns kᵢ (required): `(h, w)`, `(m, h, w)` or a
+            Noise patterns kⱼ (required): `(h, w)`, `(m, h, w)` or a
             sequence of 2-D kernels over the two spatial axes, each
             centred on `(h // 2, w // 2)`; see
             [`vsnr`][optix.destripe.vsnr].
         alpha : float or sequence of float
-            Prior weights αᵢ > 0 (required), one value or one per filter.
+            Prior weights αⱼ > 0 (required), one value or one per filter.
         prior : str or sequence of str, default `"l1"`
-            φᵢ: `"l1"`, `"l2"` or `"linf"`, one value or one per filter.
+            φⱼ: `"l1"`, `"l2"` or `"linf"`, one value or one per filter.
         eps : float, default 0
             Huber parameter ε of the image prior (0: total variation).
         bound : float, optional

@@ -521,7 +521,7 @@ def general_stripe_remover(
         μ₁ does not, so 1/30 is read as a typographical error for 1/3; the
         authors' current code defaults to the same values (0.33, 0.003).
         Increase μ₁ for stronger removal, μ₂ for more caution. Each
-        iteration costs O(N·m) for N pixels and m stripe directions: on
+        iteration costs O(|Ω|·m) for |Ω| pixels and m stripe directions: on
         one CPU thread, about 1 ms at 256 × 256 and 25 ms at 1024 × 1024
         per iteration in float32 for one direction, i.e. about 10 min for
         a 1024 × 1024 frame at 25000 iterations and 25 s at 1000. On
