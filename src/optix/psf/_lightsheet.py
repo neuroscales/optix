@@ -219,6 +219,63 @@ def _coordinate(n: int, step: float, shift: float, backend: dict) -> Tensor:
     return (torch.arange(n, **backend) - n // 2) * step - shift
 
 
+def _rotation(
+    rotation: float | Tensor | Sequence[Sequence[float]],
+    ndim: int,
+    det: int,
+    prop: int | None,
+    backend: dict,
+) -> Tensor:
+    """Matrix R (ndim × ndim) of the sheet frame in grid coordinates.
+
+    A scalar is an angle θ (radians) in the (detection, propagation)
+    plane: R eₜ = cos θ eₜ + sin θ e_z, R e_z = −sin θ eₜ + cos θ e_z.
+    """
+    if isinstance(rotation, int | float) or (
+        isinstance(rotation, Tensor) and rotation.ndim == 0
+    ):
+        if prop is None:
+            raise ValueError(
+                "A rotation angle needs the `propagation` axis (the plane "
+                "of the rotation); give a matrix otherwise"
+            )
+        theta = float(rotation)
+        c, s = math.cos(theta), math.sin(theta)
+        mat = torch.eye(ndim, dtype=torch.float64)
+        mat[det, det], mat[prop, det] = c, s
+        mat[det, prop], mat[prop, prop] = -s, c
+        return mat.to(**backend)
+    mat = torch.as_tensor(rotation, dtype=torch.float64)
+    if mat.shape != (ndim, ndim):
+        raise ValueError(
+            f"rotation must be an angle or a ({ndim}, {ndim}) matrix, "
+            f"got shape {tuple(mat.shape)}"
+        )
+    if not torch.allclose(
+        mat.T @ mat, torch.eye(ndim, dtype=mat.dtype), atol=1e-5
+    ):
+        raise ValueError("rotation must be an orthogonal matrix")
+    return mat.to(**backend)
+
+
+def _project(
+    direction: Tensor, coords: Sequence[Tensor], shift: float
+) -> Tensor:
+    """d · r − shift on the grid, broadcast from the 1-D coordinates."""
+    ndim = len(coords)
+    out = None
+    for i, (d, r) in enumerate(zip(direction.tolist(), coords, strict=True)):
+        if d == 0:
+            continue
+        view = [1] * ndim
+        view[i] = -1
+        term = d * r.view(view)
+        out = term if out is None else out + term
+    if out is None:
+        out = coords[0].new_zeros([1] * ndim)
+    return out - shift
+
+
 def gaussian_sheet(
     shape: Sequence[int],
     *,
@@ -230,6 +287,7 @@ def gaussian_sheet(
     spacing: float | Sequence[float] = 1.0,
     offset: float = 0.0,
     focus: float = 0.0,
+    rotation: float | Tensor | Sequence[Sequence[float]] | None = None,
     axes: str | Sequence[str] | None = None,
     dtype: torch.dtype | str | None = None,
     device: torch.device | str | None = None,
@@ -243,6 +301,17 @@ def gaussian_sheet(
     `detection` axis, with a thickness that varies along the
     `propagation` axis; it is uniform along the other axes. Coordinates
     r are physical (index times `spacing`), with 0 at index `n // 2`.
+
+    With a `rotation` R, the sheet frame is rotated relative to the
+    grid (e.g. a view of a multiview acquisition sampled on the common
+    grid): its normal is n = R e_det and its propagation direction
+    p = R e_prop, and
+
+        t = n · r − `offset`,   z = p · r − `focus`.
+
+    R = 1 (or an angle 0) gives the sheet as without rotation; an angle of 90°
+    turns the sheet normal onto the `propagation` axis of the grid and
+    the propagation direction onto −e_det.
 
     Parameters
     ----------
@@ -262,6 +331,14 @@ def gaussian_sheet(
         Position of the sheet's central plane along `detection`.
     focus : float
         Position of the waist along `propagation`.
+    rotation : float or Tensor, optional
+        Orientation of the sheet frame on the grid: an angle θ (radians)
+        in the (`detection`, `propagation`) plane, from the detection
+        axis towards the propagation axis, or an orthogonal matrix R,
+        `(ndim, ndim)` in the order of the grid axes, whose columns are
+        the sheet-frame axes in grid coordinates (r = R s). `offset`
+        and `focus` are then measured along n and p from the grid
+        origin. Default: no rotation.
     axes : str or sequence of str, optional
         Axis labels (e.g. `"zyx"`), to name `detection` and
         `propagation`.
@@ -300,6 +377,20 @@ def gaussian_sheet(
         raise ValueError("The detection and propagation axes must differ")
     backend = resolve_backend(dtype, device)
     step = _spacing(spacing, ndim)
+    kw = {
+        "waist": waist,
+        "wavelength": wavelength,
+        "refractive_index": refractive_index,
+    }
+    if rotation is not None:
+        mat = _rotation(rotation, ndim, det, prop, backend)
+        coords = [
+            _coordinate(n, h, 0.0, backend)
+            for n, h in zip(shape, step, strict=True)
+        ]
+        t = _project(mat[:, det], coords, offset)
+        z = _project(mat[:, prop], coords, focus)
+        return sheet_intensity(t, z, **kw).expand(shape).contiguous()
     t = _coordinate(shape[det], step[det], offset, backend)
     z = _coordinate(shape[prop], step[prop], focus, backend)
     view_t = [1] * ndim
@@ -327,6 +418,8 @@ def lightsheet_psf(
     position: float = 0.0,
     offset: float = 0.0,
     sheet: Tensor | None = None,
+    rotation: float | Tensor | Sequence[Sequence[float]] | None = None,
+    propagation: int | str | None = None,
     axes: str | Sequence[str] | None = None,
     normalize: bool = False,
 ) -> Tensor:
@@ -345,6 +438,19 @@ def lightsheet_psf(
     varies only along the `detection` axis; for a field of view,
     evaluate the PSF at several positions.
 
+    **Rotated sheet** (multiview). When `psf` is sampled on a grid that
+    is rotated relative to the view (as the PSFs of
+    [`MultiviewRL`][optix.deconv.MultiviewRL], given in the
+    orientation of the common grid), the sheet factor varies along the
+    view's detection direction n = R e_det:
+
+        h_eff(r) = h_det(r) · I(n · r − `offset`, `position`).
+
+    It is evaluated on the grid of `psf` only, so its cost is that of
+    one PSF-sized tensor. With a Gaussian detection PSF of covariance Σ
+    and a Gaussian sheet, h_eff is Gaussian with covariance
+    (Σ⁻¹ + (4 / W²) n nᵀ)⁻¹, W = W(`position`).
+
     Parameters
     ----------
     psf : Tensor
@@ -359,7 +465,8 @@ def lightsheet_psf(
         [`rayleigh_range`][optix.psf.utils.rayleigh_range]); lengths in
         the units of `spacing`. Not used with `sheet`.
     spacing : float or sequence of float
-        Voxel size, per axis (only the `detection` entry is used).
+        Voxel size, per axis (only the `detection` entry is used
+        without `rotation`).
     position : float
         Distance z of the point source from the waist, along the
         propagation axis.
@@ -370,9 +477,22 @@ def lightsheet_psf(
         Measured sheet profile, used instead of the Gaussian sheet:
         either a 1-D profile along `detection` with `K` samples on the
         grid of `psf` (centred at `K // 2`), or a tensor that broadcasts
-        to `psf`.
+        to `psf`. With `rotation`, a 1-D profile is interpolated
+        linearly at t = n · r − `offset`, its end values held beyond its
+        range (not specified in any reference).
+    rotation : float or Tensor, optional
+        Orientation of the sheet frame relative to the axes of `psf`:
+        an angle θ (radians) in the (`detection`, `propagation`) plane,
+        or an orthogonal matrix R, `(ndim, ndim)`, whose columns are the
+        sheet-frame axes in grid coordinates (see
+        [`gaussian_sheet`][optix.psf.gaussian_sheet]). `detection` then
+        names the sheet-frame axis that R maps to n. Default:
+        no rotation.
+    propagation : int or str, optional
+        Propagation axis, needed only for a rotation angle.
     axes : str or sequence of str, optional
-        Axis labels of `psf` (e.g. `"zyx"`), to name `detection`.
+        Axis labels of `psf` (e.g. `"zyx"`), to name `detection` and
+        `propagation`.
     normalize : bool
         Rescale the result to unit sum.
 
@@ -404,7 +524,21 @@ def lightsheet_psf(
     det = _axis(detection, ndim, axes)
     view = [1] * ndim
     view[det] = -1
-    if sheet is not None:
+    if rotation is not None:
+        out = psf * _rotated_factor(
+            psf,
+            det,
+            None if propagation is None else _axis(propagation, ndim, axes),
+            rotation,
+            waist=waist,
+            wavelength=wavelength,
+            refractive_index=refractive_index,
+            spacing=spacing,
+            position=position,
+            offset=offset,
+            sheet=sheet,
+        )
+    elif sheet is not None:
         sheet = torch.as_tensor(sheet).to(psf)
         if sheet.ndim == 1:
             if len(sheet) != psf.shape[det]:
@@ -431,3 +565,55 @@ def lightsheet_psf(
     if normalize:
         out = out / out.sum()
     return out
+
+
+def _rotated_factor(
+    psf: Tensor,
+    det: int,
+    prop: int | None,
+    rotation: float | Tensor | Sequence[Sequence[float]],
+    *,
+    waist: float | None,
+    wavelength: float | None,
+    refractive_index: float,
+    spacing: float | Sequence[float],
+    position: float,
+    offset: float,
+    sheet: Tensor | None,
+) -> Tensor:
+    """Sheet factor I(n · r − offset, position) on the grid of `psf`."""
+    ndim = psf.ndim
+    if prop == det:
+        raise ValueError("The detection and propagation axes must differ")
+    backend = {"dtype": psf.dtype, "device": psf.device}
+    mat = _rotation(rotation, ndim, det, prop, backend)
+    step = _spacing(spacing, ndim)
+    coords = [
+        _coordinate(n, h, 0.0, backend)
+        for n, h in zip(psf.shape, step, strict=True)
+    ]
+    t = _project(mat[:, det], coords, offset)
+    if sheet is None:
+        if waist is None or wavelength is None:
+            raise TypeError("Give `waist` and `wavelength`, or a `sheet`")
+        return sheet_intensity(
+            t,
+            torch.tensor(float(position), **backend),
+            waist=waist,
+            wavelength=wavelength,
+            refractive_index=refractive_index,
+        )
+    sheet = torch.as_tensor(sheet).to(psf)
+    if sheet.ndim != 1:
+        raise ValueError(
+            "With `rotation`, `sheet` must be a 1-D profile along the "
+            "sheet normal"
+        )
+    k = len(sheet)
+    # profile samples at t_k = (k − K // 2) · spacing[det]
+    u = (t / step[det] + k // 2).clamp(0, k - 1)
+    lo = u.floor().clamp(max=k - 2) if k > 1 else u.floor()
+    frac = u - lo
+    lo = lo.long()
+    hi = (lo + 1).clamp(max=k - 1)
+    return sheet[lo] * (1 - frac) + sheet[hi] * frac

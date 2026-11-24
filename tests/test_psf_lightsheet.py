@@ -221,3 +221,208 @@ def test_with_bead_psf():
     )
     assert out.shape == measured.shape
     assert float(fwhm(out)[0]) < float(fwhm(measured)[0])
+
+
+def test_waist_is_the_minimum_radius_and_fixes_the_rayleigh_range():
+    # W(z) is smallest at z = 0, where it equals W₀; W(z_R)² = 2 W₀²
+    zr = rayleigh_range(W0, LAMBDA, N)
+    z = torch.linspace(-5 * zr, 5 * zr, 1001, dtype=F64)
+    kw = {"waist": W0, "wavelength": LAMBDA, "refractive_index": N}
+    w = beam_radius(z, **kw)
+    assert int(w.argmin()) == 500
+    assert float(w.min()) == pytest.approx(W0, rel=1e-12)
+    w_zr = beam_radius(torch.tensor(zr, dtype=F64), **kw)
+    assert float(w_zr) ** 2 == pytest.approx(2 * W0**2, rel=1e-12)
+    # far field: W(z) → θ₀ z with θ₀ = λ / (π W₀), λ = λ₀ / n
+    far = float(beam_radius(torch.tensor(1e6 * zr, dtype=F64), **kw))
+    theta = LAMBDA / N / (math.pi * W0)
+    assert far / (1e6 * zr) == pytest.approx(theta, rel=1e-9)
+
+
+def test_sheet_fwhm_closed_form_along_propagation():
+    zr = rayleigh_range(W0, LAMBDA, N)
+    positions = (0.0, 0.5, 2.0)
+    kw = {"waist": W0, "wavelength": LAMBDA, "refractive_index": N}
+    t = torch.linspace(-20, 20, 4001, dtype=F64)
+    k = math.sqrt(2 * math.log(2))
+    for p in positions:
+        profile = sheet_intensity(t, p * zr, **kw)
+        width = float(fwhm(profile, [2000])[0]) * 0.01
+        w = float(beam_radius(torch.tensor(p * zr, dtype=F64), **kw))
+        assert width == pytest.approx(k * w, rel=1e-5)
+
+
+def test_rotation_zero_is_identity():
+    kw = {"waist": W0, "wavelength": LAMBDA, "refractive_index": N}
+    grid = {"detection": 0, "propagation": 2, "spacing": (0.5, 1.0, 2.0)}
+    ref = gaussian_sheet(
+        (9, 5, 11), offset=0.7, focus=-3.0, dtype=F64, **grid, **kw
+    )
+    for rot in (0.0, torch.eye(3, dtype=F64)):
+        out = gaussian_sheet(
+            (9, 5, 11),
+            offset=0.7,
+            focus=-3.0,
+            rotation=rot,
+            dtype=F64,
+            **grid,
+            **kw,
+        )
+        assert torch.allclose(out, ref, rtol=1e-12)
+    h = detection_psf((15, 9, 9), (3.0, 1.5, 1.5))
+    base = lightsheet_psf(h, detection=0, position=4.0, offset=0.3, **kw)
+    for rot, prop in ((0.0, 2), (torch.eye(3), None)):
+        out = lightsheet_psf(
+            h,
+            detection=0,
+            propagation=prop,
+            rotation=rot,
+            position=4.0,
+            offset=0.3,
+            **kw,
+        )
+        assert torch.allclose(out, base, rtol=1e-12)
+    # a 1-D measured profile at the samples of the detection axis
+    profile = torch.linspace(0.1, 1.0, 15, dtype=F64)
+    out = lightsheet_psf(h, detection=0, sheet=profile, rotation=torch.eye(3))
+    assert torch.allclose(out, h * profile[:, None, None], rtol=1e-12)
+
+
+def test_rotation_by_90_degrees_swaps_the_axes():
+    kw = {"waist": W0, "wavelength": LAMBDA, "refractive_index": N}
+    shape = (21, 7, 21)
+    rotated = gaussian_sheet(
+        shape,
+        detection=0,
+        propagation=2,
+        rotation=math.pi / 2,
+        offset=0.5,
+        dtype=F64,
+        **kw,
+    )
+    swapped = gaussian_sheet(
+        shape, detection=2, propagation=0, offset=0.5, dtype=F64, **kw
+    )
+    # propagation turns onto −e_det: the waist is symmetric (focus = 0)
+    assert torch.allclose(rotated, swapped, rtol=1e-9, atol=1e-14)
+    # the same rotation as a matrix (columns: sheet axes in the grid)
+    mat = torch.zeros(3, 3, dtype=F64)
+    mat[2, 0], mat[1, 1], mat[0, 2] = 1.0, 1.0, -1.0
+    by_matrix = gaussian_sheet(
+        shape,
+        detection=0,
+        propagation=2,
+        rotation=mat,
+        offset=0.5,
+        dtype=F64,
+        **kw,
+    )
+    assert torch.allclose(by_matrix, swapped, rtol=1e-12)
+    # effective PSF: a 90° rotation moves the sheet factor to the other axis
+    h = detection_psf((15, 9, 15), (3.0, 1.5, 3.0))
+    a = lightsheet_psf(
+        h, detection=0, propagation=2, rotation=math.pi / 2, **kw
+    )
+    b = lightsheet_psf(h, detection=2, **kw)
+    assert torch.allclose(a, b, rtol=1e-9, atol=1e-16)
+
+
+def test_rotation_errors():
+    kw = {"waist": W0, "wavelength": LAMBDA}
+    h = detection_psf((9, 9), (2.0, 2.0))
+    with pytest.raises(ValueError, match="propagation"):
+        lightsheet_psf(h, detection=0, rotation=0.3, **kw)
+    with pytest.raises(ValueError, match="orthogonal"):
+        lightsheet_psf(h, detection=0, rotation=2 * torch.eye(2), **kw)
+    with pytest.raises(ValueError, match="matrix"):
+        gaussian_sheet(
+            (5, 5), detection=0, propagation=1, rotation=torch.eye(3), **kw
+        )
+    with pytest.raises(ValueError, match="1-D"):
+        lightsheet_psf(
+            h, detection=0, rotation=torch.eye(2), sheet=torch.ones(9, 9)
+        )
+
+
+def gaussian_on_grid(shape, precision, spacing):
+    """exp(−½ rᵀ Q r) on the physical grid, 0 at index n // 2."""
+    coords = torch.meshgrid(
+        *[
+            (torch.arange(n, dtype=F64) - n // 2) * s
+            for n, s in zip(shape, spacing, strict=True)
+        ],
+        indexing="ij",
+    )
+    r = torch.stack(coords, -1)
+    return torch.exp(-0.5 * torch.einsum("...i,ij,...j->...", r, precision, r))
+
+
+def test_product_with_gaussian_detection_psf_closed_form():
+    # σ_eff⁻² = σ⁻² + 4 / W(z)², amplitude W₀ / W(z)
+    kw = {"waist": 1.5, "wavelength": LAMBDA, "refractive_index": N}
+    zr = rayleigh_range(1.5, LAMBDA, N)
+    spacing = (0.1, 0.2, 0.2)
+    sigma = (0.8, 0.3, 0.3)
+    shape = (61, 15, 15)
+    q = torch.diag(torch.tensor([s**-2 for s in sigma], dtype=F64))
+    h = gaussian_on_grid(shape, q, spacing)
+    for z in (0.0, zr, 3 * zr):
+        w = float(beam_radius(torch.tensor(z, dtype=F64), **kw))
+        out = lightsheet_psf(h, detection=0, spacing=spacing, position=z, **kw)
+        q_eff = q.clone()
+        q_eff[0, 0] += 4 / w**2
+        expected = (1.5 / w) * gaussian_on_grid(shape, q_eff, spacing)
+        assert torch.allclose(out, expected, rtol=1e-10, atol=1e-15)
+        s_eff = (sigma[0] ** -2 + 4 / w**2) ** -0.5
+        width = float(fwhm(out)[0]) * spacing[0]
+        assert width == pytest.approx(
+            math.sqrt(8 * math.log(2)) * s_eff, rel=2e-3
+        )
+
+
+def test_rotated_product_closed_form():
+    # Σ_eff⁻¹ = Σ⁻¹ + (4 / W²) n nᵀ with n = R e_det
+    kw = {"waist": 1.0, "wavelength": LAMBDA, "refractive_index": N}
+    theta = math.radians(30)
+    spacing = (0.15, 0.15, 0.15)
+    shape = (31, 31, 9)
+    q = torch.diag(torch.tensor([1 / 0.9**2, 1 / 0.6**2, 4.0], dtype=F64))
+    h = gaussian_on_grid(shape, q, spacing)
+    out = lightsheet_psf(
+        h,
+        detection=0,
+        propagation=1,
+        rotation=theta,
+        spacing=spacing,
+        position=2.0,
+        **kw,
+    )
+    w = float(beam_radius(torch.tensor(2.0, dtype=F64), **kw))
+    n = torch.tensor([math.cos(theta), math.sin(theta), 0.0], dtype=F64)
+    q_eff = q + (4 / w**2) * torch.outer(n, n)
+    expected = (1.0 / w) * gaussian_on_grid(shape, q_eff, spacing)
+    assert torch.allclose(out, expected, rtol=1e-10, atol=1e-15)
+    # float32 agrees
+    out32 = lightsheet_psf(
+        h.float(),
+        detection=0,
+        propagation=1,
+        rotation=theta,
+        spacing=spacing,
+        position=2.0,
+        **kw,
+    )
+    assert torch.allclose(out32.double(), out, rtol=1e-5, atol=1e-8)
+
+
+def test_rotated_measured_profile_matches_gaussian_sheet():
+    # a 1-D profile of the Gaussian sheet, finely sampled, reproduces
+    # the rotated Gaussian factor up to the interpolation error
+    kw = {"waist": 1.0, "wavelength": LAMBDA, "refractive_index": N}
+    h = detection_psf((21, 21), (3.0, 3.0))
+    t = (torch.arange(401, dtype=F64) - 200) * 0.01
+    profile = sheet_intensity(t, 0.0, **kw)
+    rot = {"detection": 0, "propagation": 1, "rotation": 0.4}
+    a = lightsheet_psf(h, sheet=profile, spacing=(0.01, 0.01), **rot)
+    b = lightsheet_psf(h, spacing=(0.01, 0.01), **rot, **kw)
+    assert torch.allclose(a, b, atol=1e-6)
