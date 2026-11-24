@@ -64,6 +64,7 @@ nav = [
       "algorithms/psf/richards-wolf.md",
       "algorithms/psf/phase-retrieval.md",
       "algorithms/psf/gibson-lanni.md",
+      "algorithms/psf/lightsheet.md",
     ]},
     {"Fusion" = [
       "algorithms/fusion/intensity-adjustment.md",
