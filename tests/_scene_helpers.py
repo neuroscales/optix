@@ -94,7 +94,7 @@ def sample_scene(
     return tiles, dict(u=u, k=k, logm=logm, tile_gain=g, origin=lo)
 
 
-def _grid(n=20001, lo=-12.0, hi=9.0):
+def _grid(n=20001, lo=-30.0, hi=12.0):
     return torch.linspace(lo, hi, n, dtype=torch.float64)
 
 
@@ -111,22 +111,36 @@ def _log_integrand(Y, C, V, B, gain, mu, nu, dq, full, tau):
     return tot
 
 
+def _adaptive(Y, C, V, B, gain, mu, nu, dq, full, n):
+    """Grid in τ zoomed (three times) onto where the integrand has mass.
+
+    Each zoom keeps the span of the points within e⁻⁶⁰ of the maximum,
+    widened by one spacing, so that narrow peaks (low noise, bright
+    voxels) and several modes are all resolved.
+    """
+    tau = _grid(n)
+    for _ in range(3):
+        lt = _log_integrand(Y, C, V, B, gain, mu, nu, dq, full, tau)
+        keep = (lt > lt.max() - 60).nonzero()
+        step = (tau[1] - tau[0]).item()
+        lo = tau[keep.min()].item() - step
+        hi = tau[keep.max()].item() + step
+        tau = torch.linspace(lo, hi, n, dtype=torch.float64)
+    return tau, _log_integrand(Y, C, V, B, gain, mu, nu, dq, full, tau)
+
+
 def oracle_loglik(Y, C, V, B, gain, mu, nu, *, dq=0.0, full=True, n=20001):
     """log ∫ Gamma(u | ν, ν/μ) ∏_t N(y_t | c_t + b_t u, σ_t²(u)) du.
 
-    Dense trapezoid in τ = log u, float64; Y, C, V, B are sequences of
-    floats (one per tile seeing the voxel).
+    Dense trapezoid in τ = log u on an adaptive grid, float64; Y, C, V, B
+    are sequences of floats (one per tile seeing the voxel).
     """
-    tau = _grid(n)
-    lt = _log_integrand(Y, C, V, B, gain, mu, nu, dq, full, tau)
-    m = lt.max()
-    return (m + torch.trapezoid((lt - m).exp(), tau).log()).item()
+    return oracle_moments(Y, C, V, B, gain, mu, nu, dq=dq, full=full, n=n)[0]
 
 
 def oracle_moments(Y, C, V, B, gain, mu, nu, *, dq=0.0, full=True, n=20001):
     """(log p, E[u], E[log u]) of the voxel integral by the same rule."""
-    tau = _grid(n)
-    lt = _log_integrand(Y, C, V, B, gain, mu, nu, dq, full, tau)
+    tau, lt = _adaptive(Y, C, V, B, gain, mu, nu, dq, full, n)
     m = lt.max()
     w = (lt - m).exp()
     Z = torch.trapezoid(w, tau)

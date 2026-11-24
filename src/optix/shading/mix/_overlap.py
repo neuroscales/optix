@@ -73,6 +73,7 @@ from torch import Tensor
 from ...basis import project
 from ...io import ArrayLike, Layout
 from ...stats._base import state_dtype
+from ._scene import SceneIndex
 
 __all__ = ["TileOverlap", "overlap_slices", "tile_pairs"]
 
@@ -443,6 +444,8 @@ class Overlap:
     threshold: float
     ntiles: int = 0
     fit_gain: bool = False
+    positions: np.ndarray | None = None  # (ntiles, D) poses
+    scene: "SceneIndex | None" = None  # cells seen by several tiles
 
     @classmethod
     def build(
@@ -482,6 +485,8 @@ class Overlap:
             float(threshold),
             ntiles=int(raw_shape[axis]),
             fit_gain=spec.fit_gain,
+            positions=pos,
+            scene=SceneIndex(pos, tile),
         )
 
     def stats(

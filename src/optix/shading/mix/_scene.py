@@ -14,8 +14,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._overlap import tile_pairs
-
 __all__ = ["Cell", "SceneIndex"]
 
 
@@ -51,6 +49,8 @@ class SceneIndex:
     """
 
     def __init__(self, positions: np.ndarray, shape: Sequence[int]) -> None:
+        from ._overlap import tile_pairs
+
         self.pos = np.asarray(positions, dtype=np.int64)
         self.shape = tuple(int(n) for n in shape)
         T = len(self.pos)

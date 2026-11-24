@@ -13,6 +13,7 @@ from _scene_helpers import (
     oracle_loglik,
     oracle_moments,
     reference_fit,
+    sample_scene,
 )
 
 import optix
@@ -331,3 +332,188 @@ def test_scene_cells_match_voxel_brute_force(name):
         assert np.array_equal(idx.single_mask(t, part), (count == 1)[part])
         assert idx.covered(t) == bool((count > 1).any())
         assert {c for c in idx.cells if t in c.tiles} == set(idx.cells_of(t))
+
+
+# -- stage 3: the scene local step -------------------------------------------
+_TINY_POS = [[0, 0, 0], [0, 2, 1], [1, 3, 0]]  # a 3-fold corner, a frame shift
+
+
+def _tiny_fit(nclass=2, nodes=48, full=True, positions=_TINY_POS, gain=False):
+    """A MixtureFit on a tiny float64 mosaic, after its initialisation."""
+    import numpy as np
+
+    from optix.io import Layout
+    from optix.shading.mix import GammaMixture, TileOverlap
+    from optix.shading.mix._overlap import Overlap
+
+    pos = np.asarray(positions)
+    tiles, truth = sample_scene(
+        pos,
+        tile=(3, 5, 4),
+        seed=11,
+        mu=(60.0, 300.0)[:nclass],
+        nu=(3.0, 2.0)[:nclass],
+        frac=(0.4, 0.3)[:nclass],
+        tile_gain=[1.0, 0.8, 1.15][: len(pos)] if gain else None,
+    )
+    layout = Layout("txyz", spatial="yz")
+    est = GammaMixture(
+        nclass=nclass,
+        gain=2.0,
+        order=(3, 3),
+        nodes=nodes,
+        noise="full" if full else "constant",
+        v_dof=0.0,
+    )
+    est.options["dtype"] = torch.float64
+    spec = TileOverlap(positions=pos, axis="t", fit_gain=gain)
+    sub = Layout("txyz", spatial="yz")
+    ov = Overlap.build(spec, tuple(tiles.shape), sub, threshold=3.0)
+    backend = dict(dtype=torch.float64, device=torch.device("cpu"))
+    with optix.config(compile=False):
+        model = est._model(
+            tiles,
+            sub,
+            backend,
+            alpha=est._prior_alpha(backend),
+            gain=2.0,
+            quantization=1.0,
+            overlap=ov,
+        )
+        model.init()
+    return model, tiles, pos, layout
+
+
+def _scene_voxels(pos, shape):
+    import numpy as np
+
+    lo = pos.min(0)
+    for p in pos:
+        for q in np.ndindex(*shape):
+            yield p - lo + np.asarray(q)
+
+
+def _oracle_bound(model, tiles, pos):
+    """The bound of the scene model, voxel by voxel, by dense trapezoid."""
+    import math
+
+    import numpy as np
+
+    from optix.distributions import Dirichlet, kl_divergence
+
+    prm, prior, post = model.param, model.prior, model.post
+    elogpi = Dirichlet(post.alpha).mean_log  # (T, X, K+1)
+    shape = tiles.shape[1:]
+    lo = pos.min(0)
+    ext = pos.max(0) - lo + np.asarray(shape)
+    loga = model._log_tile_gain()
+    obs = {}
+    for t, p in enumerate(pos):
+        for q in np.ndindex(*shape):
+            z = tuple((p - lo + np.asarray(q)).tolist())
+            obs.setdefault(z, []).append((t, q))
+    assert len(obs) <= math.prod(ext)
+    dq = model.dq
+    total = 0.0
+    nk = model.nclass
+    for items in obs.values():
+        Y = [tiles[(t, *q)].item() for t, q in items]
+        C = [prm.C[q[1:]].item() for _, q in items]
+        V = [prm.V[q[1:]].item() for _, q in items]
+        B = [
+            (loga[t].exp() * prm.M[q[1:]]).item() for t, q in items
+        ]  # b = g·m
+        ep = torch.stack([elogpi[t, q[0]] for t, q in items])
+        logw = (torch.logsumexp(ep, 0) - math.log(len(items))).tolist()
+        terms = [
+            logw[nk]
+            + sum(
+                -0.5 * ((y - c) ** 2 + dq) / v
+                - 0.5 * math.log(2 * math.pi * v)
+                for y, c, v in zip(Y, C, V, strict=True)
+            )
+        ]
+        for k in range(nk):
+            mu, nu = prior.params[k].tolist()
+            terms.append(
+                logw[k]
+                + oracle_loglik(
+                    Y,
+                    C,
+                    V,
+                    B,
+                    prm.gain.item(),
+                    mu,
+                    nu,
+                    dq=dq,
+                    full=model.full,
+                    n=8001,
+                )  # fmt: skip
+            )
+        total += torch.logsumexp(torch.tensor(terms), 0).item()
+    total += model.numel * math.log(model.quantization)
+    kl = kl_divergence(Dirichlet(post.alpha), Dirichlet(prior.alpha))
+    total -= kl.sum().item()
+    total -= (
+        0.5 * prior.lam * (model.bending * prm.theta.square()).sum().item()
+    )
+    return total
+
+
+@pytest.mark.parametrize("full", [True, False])
+def test_scene_bound_matches_oracle(full):
+    model, tiles, pos, _ = _tiny_fit(full=full)
+    with optix.config(compile=False):
+        bound = model.update_latent()
+    ref = _oracle_bound(model, tiles, pos)
+    # Gauss-Hermite error per voxel well below 1e-3 with 48 nodes
+    assert bound == pytest.approx(ref, abs=0.02)
+    # every scene voxel has a total count of one
+    nvox = len({tuple(z) for z in _scene_voxels(pos, tiles.shape[1:])})
+    assert nvox < tiles.numel()
+    assert model._counts.sum().item() == pytest.approx(nvox, abs=1e-6)
+
+
+def test_scene_scores_are_finite_differences_of_the_bound():
+    from optix.basis import project
+
+    model, tiles, pos, _ = _tiny_fit(nclass=1)
+    prm = model.param
+    with optix.config(compile=False):
+        model.update_latent()
+        st = model._stats.clone()
+
+        def bound():
+            prm.M = model.modulation()
+            b = model.update_latent()
+            model.history.pop()
+            return b
+
+        eps = 1e-4
+        for p in [(0, 0), (2, 1), (4, 3)]:  # in 1, 2 and 3 tiles
+            for name, idx in (("C", 1), ("V", 6)):
+                field = getattr(prm, name)
+                h = eps * (1 if name == "C" else field[p].item())
+                field[p] += h
+                up = bound()
+                field[p] -= 2 * h
+                down = bound()
+                field[p] += h
+                num = (up - down) / (2 * h)
+                assert st[idx][p].item() == pytest.approx(num, rel=2e-3)
+        M = prm.M
+        Sm = M * st[3] + prm.gain * M * st[8]
+        g = project(Sm, [model.by, model.bx]).flatten()
+        lam = model.prior.lam * model.bending.flatten()
+        g = g - lam * prm.theta.flatten()
+        for k in (1, 3, 4):
+            d = torch.zeros_like(prm.theta).flatten()
+            d[k] = 1e-5
+            d = d.reshape(prm.theta.shape)
+            prm.theta += d
+            up = bound()
+            prm.theta -= 2 * d
+            down = bound()
+            prm.theta += d
+            num = (up - down) / 2e-5
+            assert g[k].item() == pytest.approx(num, rel=2e-3, abs=1e-3)

@@ -74,6 +74,8 @@ _MAX_SAMPLES = 1_000_000
 # (`_OVERHEAD_CLASS` per class).
 _OVERHEAD = 40.0
 _OVERHEAD_CLASS = 3.5
+# Elements of the temporaries of one block of the cell pass (overlaps)
+_CELL_READ = float(1 << 24)
 
 
 class Component(Protocol):
@@ -251,6 +253,8 @@ class MixtureFit:
         self._class_stats: tuple[Tensor, Tensor] | None = None
         self.overlap = overlap
         self._overlap: OverlapStats | None = None
+        if overlap is not None:
+            self._init_scene(source)
 
     # -- helpers -----------------------------------------------------------
     def modulation(self) -> Tensor:
@@ -300,6 +304,207 @@ class MixtureFit:
 
     def _elogpi(self, alpha: Tensor) -> Tensor:
         return Dirichlet(alpha).mean_log
+
+    # -- scene geometry (overlapping tiles) --------------------------------
+    def _init_scene(self, source: ArrayLike) -> None:
+        """Axes of the tiles: tile axis, the D other axes, their roles."""
+        ndim = len(source.shape)
+        _, sample, spatial = self.layout.positions(ndim)
+        axis = self.overlap.axis
+        other = [a for a in range(ndim) if a != axis]
+        self._sample_axes = tuple(sample)
+        self._tile_index = sample.index(axis)  # among the sample axes
+        self._other_axis_of_tile = axis
+        self._other = other
+        self._sp = [other.index(a) for a in spatial]  # layout order
+        self._rest = [a for a in range(len(other)) if a not in self._sp]
+
+    def _single_mask(self, chunk: object) -> Tensor | None:
+        """`(n, H, W)` mask of the voxels of a chunk seen by one tile only.
+
+        None when every voxel of the chunk is seen once.
+        """
+        scene = self.overlap.scene
+        samples = chunk.samples
+        tiles = range(*samples[self._tile_index].indices(self.overlap.ntiles))
+        if not any(scene.covered(t) for t in tiles):
+            return None
+        box = []
+        for a, n in zip(self._other, self._tile_shape(), strict=True):
+            if a in self._sample_axes:
+                box.append(samples[self._sample_axes.index(a)])
+            else:
+                box.append(slice(0, n))
+        perm = self._rest + self._sp
+        masks = [scene.single_mask(t, box).transpose(perm) for t in tiles]
+        mask = np.stack(masks, axis=self._tile_index)
+        if mask.all():
+            return None
+        mask = torch.from_numpy(mask).to(self.param.C.device)
+        return mask.reshape(-1, *mask.shape[-2:])
+
+    def _tile_shape(self) -> tuple[int, ...]:
+        shape = self.source.shape
+        return tuple(int(shape[a]) for a in self._other)
+
+    def _cell_pass(
+        self,
+        elogpi: Tensor,
+        stats: Tensor,
+        counts: Tensor,
+        class_stats: Tensor,
+    ) -> Tensor:
+        """Local step on the voxels seen by several tiles; the bound.
+
+        Each cell (a box of the scene seen by the same S tiles) is read
+        from the S tiles in blocks along its first sample axis, and its
+        voxels are integrated with one shared signal. Per-observation
+        statistics go to the pixel of each tile (u-weighted ones times
+        gₜ, gₜ²), the class counts of a voxel are split over its pictures
+        by the posterior of its (uniform) owner, and the class statistics
+        and the bound are counted once per voxel.
+        """
+        ov, prm = self.overlap, self.param
+        sdt = self.state_dtype
+        bound = torch.zeros((), dtype=sdt, device=prm.C.device)
+        sp, rest = self._sp, self._rest
+        sample_axes = self._sample_axes
+        loga = self._log_tile_gain()
+        for cell in ov.scene.cells:
+            S = len(cell.tiles)
+            local = [list(cell.local(ov.positions[t])) for t in cell.tiles]
+            pix = [tuple(loc[a] for a in sp) for loc in local]
+            npix = math.prod(cell.shape[a] for a in sp)
+            if rest:
+                lead = rest[0]
+                n = cell.shape[lead]
+                inner = math.prod(cell.shape[a] for a in rest[1:])
+                per = S * (NSTATS + 12) + _OVERHEAD_CLASS * self.nclass
+                step = max(1, int(_CELL_READ / (per * npix * max(inner, 1))))
+                blocks = [(b, min(b + step, n)) for b in range(0, n, step)]
+            else:
+                lead, blocks = None, [(0, 1)]
+            gains = loga[list(cell.tiles)].exp()
+            C = torch.stack([prm.C[p] for p in pix])[:, None]
+            V = torch.stack([prm.V[p] for p in pix])[:, None]
+            B = torch.stack([prm.M[p] for p in pix])[:, None]
+            B = B * gains.to(B)[:, None, None, None]
+            for b0, b1 in blocks:
+                idx = []
+                for loc in local:
+                    loc = list(loc)
+                    if lead is not None:
+                        s0 = loc[lead].start
+                        loc[lead] = slice(s0 + b0, s0 + b1)
+                    idx.append(loc)
+                Y = torch.stack(
+                    [
+                        ov._read(self.source, t, loc, sp, rest, self.backend)
+                        for t, loc in zip(cell.tiles, idx, strict=True)
+                    ]
+                )
+                where = []  # per tile, its pictures in the per-sample state
+                for t, loc in zip(cell.tiles, idx, strict=True):
+                    w = []
+                    for a in sample_axes:
+                        if a == self._other_axis_of_tile:
+                            w.append(t)
+                        else:
+                            w.append(loc[self._other.index(a)])
+                    where.append(tuple(w))
+                ep = torch.stack(
+                    [elogpi[w].reshape(-1, self.nclass + 1) for w in where]
+                )
+                st, bnd, cnt, cs = self._cell_chunk(Y, C, V, B, ep)
+                # statistics in terms of m: u-weighted ones times g, g²
+                g = gains.to(st)[:, None, None]
+                st[[XU, G1, WU, G2]] *= g
+                st[[AU, BU]] *= g.square()
+                for k, p in enumerate(pix):
+                    stats[(slice(None), *p)] += st[:, k]
+                for k, w in enumerate(where):
+                    view = counts[w]
+                    counts[w] = view + cnt[k].reshape(view.shape)
+                class_stats += cs
+                bound += bnd
+        return bound
+
+    def _cell_chunk(
+        self, Y: Tensor, C: Tensor, V: Tensor, B: Tensor, elogpi: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Local step on `(S, n, h, w)` observations of shared voxels.
+
+        `elogpi` is `(S, n, K+1)`: E[log π] of the picture of each
+        observation. The class prior of a voxel is the owner mixture
+        w̄ₖ = (1/S) ∑ₜ exp(E[log πₜₖ]).
+        """
+        nk, dq, prm = self.nclass, self.dq, self.param
+        S = Y.shape[0]
+        sdt = self.state_dtype
+        logw = torch.logsumexp(elogpi, 0) - math.log(S)  # (n, K+1)
+        R0 = Y - C
+        logZ = (
+            R0.square()
+            .add_(dq)
+            .div_(V)
+            .add_(V.log())
+            .sum(0)
+            .mul_(-0.5)
+            .add_(logw[:, -1, None, None] - 0.5 * S * math.log(2 * math.pi))
+        )
+        acc = Y.new_zeros((NSTATS, *Y.shape))
+        acc[HCC].copy_(V.reciprocal().expand_as(Y))
+        acc[GC].copy_(R0).div_(V)
+        acc[HVV].copy_(V.square().reciprocal().mul_(0.5).expand_as(Y))
+        acc[GV].copy_(R0).square_().add_(dq).sub_(V).div_(V.square())
+        acc[GV].mul_(0.5)
+        del R0
+        logjoint = [None] * (nk + 1)
+        logjoint[nk] = logZ
+        suffs = []
+        for k in range(nk):
+            logZ0 = logZ
+            logpY, suff, st = self.component.loglik_shared(
+                Y,
+                C,
+                V,
+                B,
+                prm.gain,
+                self.prior.params[k],
+                dq=dq,
+                full=self.full,
+            )
+            logZY = logw[:, k, None, None] + logpY
+            logZ = torch.logaddexp(logZ, logZY)
+            pz_prv = (logZ0 - logZ).exp_()
+            pz_new = (logZY - logZ).exp_()
+            acc.mul_(pz_prv).add_(st.mul_(pz_new))
+            logjoint[k] = logZY
+            suffs.append(suff)
+            del logZ0, logpY, suff, st, logZY, pz_prv, pz_new
+
+        # owner of the voxel: p(o = t | k) ∝ exp(E[log π_tk])
+        owner = torch.softmax(elogpi, 0)  # (S, n, K+1)
+        counts = Y.new_zeros((S, Y.shape[1], nk + 1))
+        class_stats = torch.zeros(
+            (nk, self.component.nstats), dtype=sdt, device=Y.device
+        )
+        for k in range(nk + 1):
+            Zk = logjoint[k].sub_(logZ).exp_()
+            logjoint[k] = None
+            counts[:, :, k] = owner[:, :, k] * Zk.sum((-2, -1))
+            if k < nk:
+                for j, t in enumerate(suffs[k]):
+                    class_stats[k, j] = t.mul_(Zk).sum().to(sdt)
+                suffs[k] = None
+            del Zk
+        stats = acc.sum(2).to(sdt)  # (NSTATS, S, h, w)
+        bound = logZ.sum().to(sdt)
+        return stats, bound, counts, class_stats
+
+    def _log_tile_gain(self) -> Tensor:
+        """log gₜ of every tile (zeros: the gains are fixed at one)."""
+        return torch.zeros(self.overlap.ntiles, **self.backend)
 
     # -- initialisation ----------------------------------------------------
     def init(
@@ -528,13 +733,17 @@ class MixtureFit:
         counts = prm.C.new_zeros((*self.sample_shape, nk + 1))
         class_stats = torch.zeros((nk, self.component.nstats), **acc)
         bound = torch.zeros((), **acc)
+        scene = self.overlap is not None
         for chunk in self.frames():
             ep = elogpi[chunk.samples].reshape(-1, nk + 1)
-            st, bnd, cnt, cs = self._latent_chunk(chunk.data, ep)
+            mask = self._single_mask(chunk) if scene else None
+            st, bnd, cnt, cs = self._latent_chunk(chunk.data, ep, mask)
             stats += st
             counts[chunk.samples] = cnt.reshape(*chunk.sample_shape, nk + 1)
             class_stats += cs
             bound += bnd
+        if scene:
+            bound += self._cell_pass(elogpi, stats, counts, class_stats)
         self._stats = stats.to(prm.C.dtype)
         self._counts = counts
         self._class_stats = class_stats
@@ -558,19 +767,18 @@ class MixtureFit:
         bound -= (
             0.5 * ((prm.gain / self.gain0).log().item() / prior.gain_sd) ** 2
         )
-        if self.overlap is not None:
-            # computed once, from the initial c and v: the term is then an
-            # exact quadratic in θ and the bound stays consistent
-            if self._overlap is None:
-                self._overlap = self.overlap_stats()
-            bound += self._overlap.bound(prm.M.log())
         self.history.append(bound)
         return bound
 
     def _latent_chunk(
-        self, Y: Tensor, elogpi: Tensor
+        self, Y: Tensor, elogpi: Tensor, mask: Tensor | None = None
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """Local step on `(n, H, W)` frames with `(n, K+1)` E[log π]."""
+        """Local step on `(n, H, W)` frames with `(n, K+1)` E[log π].
+
+        With a boolean `mask` `(n, H, W)`, only the voxels where it is
+        True contribute (the others are seen by several tiles and belong
+        to the cell pass).
+        """
         C, V = self.param.C, self.param.V
         nk = self.nclass
         dq = self.dq
@@ -618,6 +826,8 @@ class MixtureFit:
         for k in range(nk + 1):
             Zk = logjoint[k].sub_(logZ).exp_()
             logjoint[k] = None
+            if mask is not None:
+                Zk = torch.where(mask, Zk, 0)
             sum_Z[:, k] = Zk.sum((-2, -1))
             if k < nk:
                 for j, t in enumerate(suffs[k]):
@@ -627,6 +837,9 @@ class MixtureFit:
 
         # Sums over the chunk in the working dtype (a float64 sum would
         # first cast the whole chunk), accumulated across chunks in `sdt`
+        if mask is not None:
+            acc = torch.where(mask, acc, 0)
+            logZ = torch.where(mask, logZ, 0)
         stats = acc.sum(-3).to(sdt)  # sum over frames
         bound = logZ.sum().to(sdt)
         return stats, bound, sum_Z, class_stats
@@ -714,10 +927,6 @@ class MixtureFit:
             H.diagonal().add_(H.diagonal().mean(), alpha=1e-8)
             g = project(Sm, bases).flatten()
             g.addcmul_(weights, prm.theta.flatten(), value=-1)
-            if self._overlap is not None and self._overlap.terms:
-                Ho, go = self._overlap.system(M.log(), bases)
-                H += Ho
-                g += go
             # No DC term: the geometric mean of m stays at one
             H[0, :] = H[:, 0] = 0
             H[0, 0] = 1
