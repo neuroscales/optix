@@ -251,6 +251,24 @@ These follow [Bishop (2006)](https://www.microsoft.com/en-us/research/publicatio
 | $\theta$ | difference of two means, in the pairwise merge | |
 | $\mathbb{E}[\cdot]$, $\mathrm{KL}(q \Vert p)$ | expectation; Kullback-Leibler divergence | `kl_divergence(q, p)` |
 
+## Pupil function
+
+Used by the [phase retrieval](../algorithms/psf/phase-retrieval.md) page, with the
+[optics symbols](#optics) above: the normalised pupil radius $\rho$, the pupil phase
+$\psi$, the PSF $h$, the angles $\theta$, $\varphi$, the voxel size $d_z, d_y, d_x$ and the
+indices $n$, $n_s$, $n_i$. The symbols below are specific to it.
+
+| Symbol | Meaning | Unit | In code |
+|---|---|---|---|
+| $\boldsymbol{\nu}$, $\nu_z$ | lateral spatial frequency $(\nu_x, \nu_y)$, and axial frequency $\sqrt{(n/\lambda_0)^2 - \lvert\boldsymbol{\nu}\rvert^2}$, in cycles (not the wave number $k$) | 1 / length | |
+| $h_{\mathrm A}$ | amplitude PSF (complex), $h = \lvert h_{\mathrm A}\rvert^2$ | | `pupil_psf` |
+| $p(\boldsymbol{\nu})$, $\mathbf{p}$ | complex pupil function, $p = A\,e^{i\psi}$, non-zero for $\lvert\boldsymbol{\nu}\rvert \le \mathrm{NA}/\lambda_0$; its samples | | `PupilEstimate.pupil` |
+| $A$ | magnitude of the pupil | | |
+| $\mathbf{u}_j$ | defocus phase function $e^{2\pi i \nu_z z_j}$ of the section $z_j$ | | |
+| $Z_j$ | Zernike polynomial of Noll index $j$, with radial order $q$ and azimuthal frequency $l$ | | `zernike` |
+| $a_j$, $b_j$ | Zernike coefficients of $A$ and of $\psi$ | rad (for $b_j$) | `zernike_magnitude`, `zernike_phase` |
+| $\delta$ | phase of the index-mismatch aberration, $k_0\,\mathrm{OPD}$ | rad | `index_mismatch_aberration` |
+| $D$ | bead diameter | length | `bead_diameter` |
 ## Stationary noise
 
 Noise made of known patterns convolved with white noise, as in

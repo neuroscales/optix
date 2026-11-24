@@ -38,6 +38,7 @@ example. The sections follow the modules of the
 | | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |
 | | [VSNR](destripe/vsnr.md) (`VSNR`) | stripe-free image, variational |
 | [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
+| | [Phase retrieval](psf/phase-retrieval.md) (`PhaseRetrieval`) | pupil function and Zernike aberrations from a bead z-stack |
 | | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |
 
 The rest of this page explains how the section is organised and what an
