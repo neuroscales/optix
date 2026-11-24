@@ -34,10 +34,10 @@ $$
 \qquad \mathbf{x} \ge 0 ,
 $$
 
-with $\mathbf{y} \in \mathbb{R}^P$ one recorded image of $P$ pixels,
+with $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$ one recorded image of $\lvert\Omega\rvert$ pixels,
 $\mathbf{x} \in \mathbb{R}^Q$ the latent image on the extended domain of
-$Q \ge P$ pixels, $\mathbf{A} \in \mathbb{R}^{P \times Q}$ the blur by
-$\mathbf{h}$ (one for the whole stack) and $\mathbf{b} \in \mathbb{R}^P$ an
+$Q \ge \lvert\Omega\rvert$ pixels, $\mathbf{A} \in \mathbb{R}^{\lvert\Omega\rvert \times Q}$ the blur by
+$\mathbf{h}$ (one for the whole stack) and $\mathbf{b} \in \mathbb{R}^{\lvert\Omega\rvert}$ an
 optional background (none in the paper). The acceleration changes the path to the maximum-likelihood
 estimate, not the model.
 
@@ -78,7 +78,7 @@ agree, and to apply $\psi$ at the extrapolated point:
 
 | optix | [Biggs & Andrews 1997](https://doi.org/10.1364/AO.36.001766) | Meaning | Shape |
 |---|---|---|---|
-| $\mathbf{y}$ | $g$ | recorded image, in counts | $P$, one per image |
+| $\mathbf{y}$ | $g$ | recorded image, in counts | $\lvert\Omega\rvert$, one per image |
 | $\mathbf{x}_k$ | $\mathbf{x}_k$ | iterate after $k$ updates | $Q$, one per image |
 | $\mathbf{v}_k$ | $\mathbf{y}_k$ | extrapolated (predicted) point | $Q$, one per image |
 | $\mathbf{x}_k - \mathbf{x}_{k-1}$ | $\mathbf{h}_k$ | last step, the extrapolation direction | $Q$, one per image |
@@ -109,7 +109,7 @@ monotone increase of the likelihood that plain EM guarantees.
 
 ## Algorithm
 
-**Input:** an image $\mathbf{y} \in \mathbb{R}^P$ in counts, the PSF
+**Input:** an image $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$ in counts, the PSF
 $\mathbf{h}$; hyper-parameters `alpha` $= 0.05$ (χ² level), `max_iter`
 $= 100$, `n_iter` $=$ `None`, `alpha_scope` $=$ `"global"`. \
 **Output:** the deconvolved image $\hat{\mathbf{x}}$, cropped to the observed

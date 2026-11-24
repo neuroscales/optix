@@ -27,6 +27,8 @@ nav = [
     {"Shading" = [
       "algorithms/shading/basic.md",
       "algorithms/shading/cidre.md",
+      "algorithms/shading/likar-entropy.md",
+      "algorithms/shading/kask.md",
       "algorithms/shading/illumination-function.md",
       "algorithms/shading/gamma-mixture.md",
     ]},
@@ -37,6 +39,8 @@ nav = [
       "algorithms/deconv/richardson-lucy.md",
       "algorithms/deconv/biggs-andrews.md",
       "algorithms/deconv/snyder.md",
+      "algorithms/deconv/nagy-oleary.md",
+      "algorithms/deconv/denis.md",
       "algorithms/deconv/wiener.md",
       "algorithms/deconv/tikhonov.md",
       "algorithms/deconv/wiener-butterworth.md",
@@ -44,9 +48,12 @@ nav = [
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
+      "algorithms/destripe/general-stripe-remover.md",
+      "algorithms/destripe/vsnr.md",
     ]},
     {"Point-spread function" = [
       "algorithms/psf/bead-psf.md",
+      "algorithms/psf/phase-retrieval.md",
       "algorithms/psf/gibson-lanni.md",
     ]},
     {"Fusion" = [

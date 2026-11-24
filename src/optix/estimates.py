@@ -8,8 +8,8 @@ Conventions
 - `ShadingEstimate.dark` is the whole additive image of
   `x = (y - dark) / flat - baseline`: it **includes** the camera offset.
 - `ShadingEstimate.baseline` is in signal units, inside the flat
-  (y = f ⊙ (x + bᵢ) + d), unless `meta["baseline_units"] == "raw"`
-  (y = f · x + d + bᵢ, outside the flat).
+  (y = f ⊙ (x + bₙ) + d), unless `meta["baseline_units"] == "raw"`
+  (y = f · x + d + bₙ, outside the flat).
   `SensorEstimate.offset` is the camera offset alone. A model with a
   single additive term returns it in both; corrections never subtract
   both.
@@ -45,6 +45,7 @@ __all__ = [
     "Classification",
     "Estimate",
     "PSFEstimate",
+    "PupilEstimate",
     "SensorEstimate",
     "ShadingEstimate",
     "TileIntensityEstimate",
@@ -212,9 +213,9 @@ def _need(estimate: Estimate, *names: str) -> None:
 
 @dataclass(eq=False)
 class SensorEstimate(Estimate):
-    """Camera model `y = offset + gain * n + e`.
+    """Camera model `y = offset + gain * e + ε`.
 
-    `n ~ Poisson(electrons)` and `e ~ N(0, variance)`. The
+    `e ~ Poisson(electrons)` and `ε ~ N(0, variance)`. The
     [Foi et al. (2008)](https://doi.org/10.1109/TIP.2008.2001399)
     parametrisation is derived, not stored: `a = gain`,
     `b = variance - gain * offset`.
@@ -283,16 +284,16 @@ _BASELINE_UNITS = ("raw", "signal")
 class ShadingEstimate(Estimate):
     """Shading model with a per-frame baseline.
 
-    The baseline bᵢ is a scalar per frame, in one of two units, recorded
+    The baseline bₙ is a scalar per frame, in one of two units, recorded
     in `meta["baseline_units"]`:
 
     - `"signal"` (default, also when the key is absent): an offset of
       the signal before shading, so that it is shaded too,
-      y = f ⊙ (x + bᵢ) + d (as in BaSiC).
-    - `"raw"`: an offset of the measured frame, y = f · x + d + bᵢ.
+      y = f ⊙ (x + bₙ) + d (as in BaSiC).
+    - `"raw"`: an offset of the measured frame, y = f · x + d + bₙ.
 
-    The two agree only for a uniform flat field: a signal baseline bᵢ is
-    the raw offset f · bᵢ, which is not a scalar.
+    The two agree only for a uniform flat field: a signal baseline bₙ is
+    the raw offset f · bₙ, which is not a scalar.
 
     Attributes
     ----------
@@ -336,9 +337,9 @@ class ShadingEstimate(Estimate):
         Returns
         -------
         Tensor
-            f ⊙ (x + bᵢ) + d (signal) or f · x + d + bᵢ (raw).
+            f ⊙ (x + bₙ) + d (signal) or f · x + d + bₙ (raw).
             Fields that are None are absent terms (f = 1, d = 0,
-            bᵢ = 0).
+            bₙ = 0).
         """
         units = self.baseline_units if units is None else _check_units(units)
         b = self.baseline if baseline is None else baseline
@@ -378,8 +379,8 @@ class ShadingEstimate(Estimate):
         Returns
         -------
         Tensor
-            (y − d) / f − (bᵢ − norm) (signal) or
-            (y − d − (bᵢ − norm)) / f (raw).
+            (y − d) / f − (bₙ − norm) (signal) or
+            (y − d − (bₙ − norm)) / f (raw).
         """
         units = self.baseline_units if units is None else _check_units(units)
         b = self.baseline if baseline is None else baseline
@@ -401,9 +402,9 @@ class ShadingEstimate(Estimate):
 
         With c the mean (or geometric mean) of the flat, the flat becomes
         f / c and the scale c moves into the signal: x̂ = c · x.  The
-        dark is unchanged.  The baseline bᵢ becomes c · bᵢ when
-        `baseline_units == "signal"` (y = f ⊙ (x + bᵢ) + d), and is
-        unchanged when it is `"raw"` (y = f · x + d + bᵢ), so that
+        dark is unchanged.  The baseline bₙ becomes c · bₙ when
+        `baseline_units == "signal"` (y = f ⊙ (x + bₙ) + d), and is
+        unchanged when it is `"raw"` (y = f · x + d + bₙ), so that
         `shade` and `correct` stay consistent with x̂.  A baseline norm
         derived from the baseline (BaSiC's `baseline_norm="mean"`)
         follows automatically; a numeric `norm` passed to `correct` is
@@ -548,3 +549,29 @@ class TileIntensityEstimate(Estimate):
             c = self.shift[..., tile].to(y)
             x = x + c.reshape(*c.shape, *([1] * nsp))
         return x
+
+
+@dataclass(eq=False)
+class PupilEstimate(Estimate):
+    """Scalar pupil function of a microscope, and its Zernike expansion.
+
+    The pupil is sampled on the discrete Fourier grid of the lateral
+    image grid it was estimated from: k = (i − K // 2) / (K · Δ) along
+    each axis, so that k = 0 is at index `K // 2`. `meta` records the
+    optics (`wavelength`, `numerical_aperture`, `refractive_index`) and
+    the voxel size `spacing` `(Δz, Δy, Δx)` they refer to.
+
+    Attributes
+    ----------
+    pupil : Tensor, optional
+        (*group, Ky, Kx) complex pupil function, 0 outside |k| ≤ NA/λ.
+    zernike_magnitude : Tensor, optional
+        (*group, J) Zernike coefficients of the magnitude, Noll indices
+        1 … J (`meta["zernike"] == "noll"`).
+    zernike_phase : Tensor, optional
+        (*group, J) Zernike coefficients of the phase, in radians.
+    """
+
+    pupil: Tensor | None = None
+    zernike_magnitude: Tensor | None = None
+    zernike_phase: Tensor | None = None

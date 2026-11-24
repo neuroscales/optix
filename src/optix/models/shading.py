@@ -72,11 +72,11 @@ def random_shading(
 
 
 def simulate_shading(x: Tensor, shading: ShadingEstimate) -> Tensor:
-    """Apply a shading model: y = f ⊙ (x + bᵢ) + d.
+    """Apply a shading model: y = f ⊙ (x + bₙ) + d.
 
-    The baseline bᵢ is in the units of `shading.baseline_units` (see
+    The baseline bₙ is in the units of `shading.baseline_units` (see
     [`ShadingEstimate`][optix.estimates.ShadingEstimate]): with
-    `"raw"`, the model is y = f · x + d + bᵢ.
+    `"raw"`, the model is y = f · x + d + bₙ.
 
     Parameters
     ----------
