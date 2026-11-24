@@ -15,6 +15,12 @@ from ._dwt import (
     waverec2,
 )
 from ._munch import stripe_damping
+from ._rottmayer import (
+    general_stripe_objective,
+    lattice_diff,
+    lattice_diff_adjoint,
+    stripe_offset,
+)
 from ._vsnr import (
     VSNRSolution,
     dirac,
@@ -31,13 +37,17 @@ __all__ = [
     "dwt",
     "dwt2",
     "gaussian_stripe",
+    "general_stripe_objective",
     "get_wavelet",
     "idwt",
     "idwt2",
+    "lattice_diff",
+    "lattice_diff_adjoint",
     "line",
     "max_level",
     "operator_norm",
     "stripe_damping",
+    "stripe_offset",
     "vsnr_solve",
     "wavedec2",
     "waverec2",
