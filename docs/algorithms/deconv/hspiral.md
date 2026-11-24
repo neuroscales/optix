@@ -20,8 +20,8 @@ plain Poisson law, so read noise is ignored. And the penalty is a *Schatten norm
 of the Hessian matrix at every pixel ($2 \times 2$ for an image, $3 \times 3$ for a
 focal stack), of order $p = 1$ (nuclear norm),
 $p = 2$ (Frobenius norm, the penalty of Ikoma) or $p = \infty$ (spectral norm).
-All three are functions of the two eigenvalues of the Hessian (the principal
-curvatures) and are invariant to a rotation of the image; they differ in how they
+All three are functions of the eigenvalues of the Hessian (the principal
+curvatures: two for an image, three for a stack) and are invariant to a rotation of the image; they differ in how they
 combine them: their sum ($p = 1$), their root sum of squares ($p = 2$) or the larger
 one ($p = \infty$). In the simulations of the paper the Hessian
 Schatten penalties almost always beat total variation and wavelet penalties, with
@@ -95,7 +95,7 @@ the data to electrons and the neglect of read noise are the conventions of optix
 The counts are independent Poisson variables, so the penalised maximum-likelihood
 estimate minimises the negative log-likelihood plus a penalty on the Hessian
 (Eq. 12 of the paper). The Hessian at pixel $j$ is the symmetric $2 \times 2$ matrix
-$\mathbf{X}_j$ of the second differences of $\mathbf{x}$, and the penalty is the sum
+($3 \times 3$ in 3-D) $\mathbf{X}_j$ of the second differences of $\mathbf{x}$, and the penalty is the sum
 over the pixels of its Schatten norm:
 
 === "optix"
@@ -123,15 +123,17 @@ over the pixels of its Schatten norm:
 
 The Schatten norm of order $p$ of a matrix is the $\ell_p$ norm of its singular
 values (Eq. 5). The singular values of a symmetric matrix are the absolute values of
-its eigenvalues $\mu_\pm$, so for the Hessian
+its eigenvalues $\mu_i$, so for the Hessian
 
 $$
-\lVert \mathbf{X}_j \rVert_{S_1} = |\mu_+| + |\mu_-|,
+\lVert \mathbf{X}_j \rVert_{S_1} = \sum_i |\mu_i|,
 \qquad
-\lVert \mathbf{X}_j \rVert_{S_2} = \lVert \mathbf{X}_j \rVert_F = \sqrt{\mu_+^2 + \mu_-^2},
+\lVert \mathbf{X}_j \rVert_{S_2} = \lVert \mathbf{X}_j \rVert_F = \Bigl(\sum_i \mu_i^2\Bigr)^{1/2},
 \qquad
-\lVert \mathbf{X}_j \rVert_{S_\infty} = \max(|\mu_+|, |\mu_-|).
+\lVert \mathbf{X}_j \rVert_{S_\infty} = \max_i |\mu_i|,
 $$
+
+over the two eigenvalues $\mu_\pm$ of a 2-D Hessian or the three of a 3-D one.
 
 The second differences are forward stencils (Section IV of the paper: "defined as in"
 [Lefkimmiatis, Ward and Unser 2013](https://doi.org/10.1109/TIP.2013.2237919), whose Eq. 10
@@ -216,7 +218,7 @@ the problem is split.
 HSPIRAL1 (Algorithm 1) has two splits, $\mathbf{z}_1 = \mathbf{A}\mathbf{x}$ (fidelity) and
 $\mathbf{z}_2 = \mathbf{x}$, which carries the penalty and the non-negativity together,
 $f_2(\mathbf{z}_2) = \tau \lVert \mathbf{H}\mathbf{z}_2 \rVert_{1,p} + \iota_{\ge 0}(\mathbf{z}_2)$.
-It is the variant of the experiments of the paper (Section IV-B).
+It is the variant of the restoration results of the paper (Sections IV-B to IV-D).
 
 === "optix"
 
@@ -381,18 +383,18 @@ For each image:
     Initialise x = ỹ, all duals u_k = 0, on the grid of the block
     Repeat for k = 1 … 400:
         variant 1 (HSPIRAL1):
-        1. z1 ← Poisson prox of A x + u1 at step 1/ρ                       (Eq. 27)
-           z2 ← inner_iter iterations of the dual algorithm for the prox of
-                (τ/ρ)‖H·‖₁,ₚ + ι_{≥0} at x + u2, started from the dual of
-                the previous iteration, with mirror Hessian               (Eq. 28)
-        2. x  ← Fourier solve with |Â|² + 1                                (Eq. 29)
-        3. u_k ← u_k + A_k x − z_k, with A_1 = A, A_2 = I                  (Eq. 23)
+            1. z1 ← Poisson prox of A x + u1 at step 1/ρ                   (Eq. 27)
+               z2 ← inner_iter iterations of the dual algorithm for the prox of
+                    (τ/ρ)‖H·‖₁,ₚ + ι_{≥0} at x + u2, started from the dual of
+                    the previous iteration, with mirror Hessian           (Eq. 28)
+            2. x  ← Fourier solve with |Â|² + 1                            (Eq. 29)
+            3. u_k ← u_k + A_k x − z_k, with A_1 = A, A_2 = I              (Eq. 23)
         variant 2 (HSPIRAL2):
-        1. z1 ← Poisson prox of A x + u1 at step 1/ρ                       (Eq. 27)
-           z2 ← Schatten-p prox of H x + u2 at threshold τ/ρ               (Prop. 1)
-           z3 ← max(x + u3, 0)                                             (Eq. 32)
-        2. x  ← Fourier solve with |Â|² + ∑|Ĥ_c|² + 1                      (Eq. 42)
-        3. u_k ← u_k + A_k x − z_k
+            1. z1 ← Poisson prox of A x + u1 at step 1/ρ                   (Eq. 27)
+               z2 ← Schatten-p prox of H x + u2 at threshold τ/ρ           (Prop. 1)
+               z3 ← max(x + u3, 0)                                         (Eq. 32)
+            2. x  ← Fourier solve with |Â|² + ∑|Ĥ_c|² + 1                  (Eq. 42)
+            3. u_k ← u_k + A_k x − z_k
         stop if ‖x⁽ᵏ⁺¹⁾ − x⁽ᵏ⁾‖₂ ≤ 10⁻⁵ ‖x⁽ᵏ⁾‖₂
 Return x
 ```
@@ -410,8 +412,9 @@ are the attributes `tau`, `rho`, `peak` and `robust_peak` after `fit`.
 the splits-first order of the updates, the stopping rule of Section IV-B (a relative change
 of $10^{-5}$, or 400 iterations), the periodic boundary of the blur, and the result
 $\mathbf{x}^t$ of the last iteration (not projected onto $\mathbf{x} \ge 0$). The default
-variant is HSPIRAL1, with 5 inner iterations, because the results of Section IV of the paper
-(Table I and the figures) are those of HSPIRAL1; HSPIRAL2 is the other algorithm of the paper
+variant is HSPIRAL1, with 5 inner iterations, because the results of Sections IV-B to IV-D
+of the paper (Tables I and II and the figures) are those of HSPIRAL1 (Section IV-A, which
+compares the convergence of the two, is the one place both are run); HSPIRAL2 is the other algorithm of the paper
 and is equally faithful. The defaults of `faithful=False` are the same, except for the boundary, which is `"unknown"`.
 The weight `tau` is tuned per image in the paper, the three values of `p` are all
 the method of the paper, and so are the two variants, so any of them keeps the estimate faithful. `halo` and
@@ -432,7 +435,7 @@ image. Any other option marks the estimate as not faithful.
 | `block` | core block size per spatial axis (memory setting, faithful) | `None` (memory budget) | `None` |
 
 **Extension: `boundary="unknown"`.** The paper assumes periodic (or mirror)
-boundaries for the Fourier solve of Eq. 42 and does not say which its experiments
+boundaries for the Fourier solve of Eqs. 29 and 42 and does not say which its experiments
 use. With `boundary="unknown"`, $\mathbf{x}$ lives on a larger grid (the observed
 region plus the PSF size minus one, rounded up to a fast FFT size, as in
 [Ikoma](ikoma.md#probabilistic-model)), the Poisson term sums over the observed
@@ -455,12 +458,25 @@ as such in the docstrings:
   of the inner algorithm are initialised with those of the previous ADMM iteration
   (Section III-C). Here the dual $\boldsymbol\Omega$ is kept and the momentum is restarted
   at every iteration ($t_1 = 1$, $\boldsymbol\Psi_1 = \boldsymbol\Omega_0$). Each solve
-  (each block of each image) starts from $\boldsymbol\Omega_0 = 0$.
+  (each block of each image) starts from $\boldsymbol\Omega_0 = 0$. Of the readings of
+  "internal variables", this is the one that converged in a test of HSPIRAL1 on a
+  $48 \times 48$ scene ($p = 1$, peak 20, 5 inner iterations, against a reference from 30
+  inner and 3000 outer iterations): the objective fell from 0.42 above the minimum after 100
+  iterations to 0.006 after 1600. Restarting from $\boldsymbol\Omega = 0$ at every iteration
+  stalled 7 to 15 % (relative error) away from the minimiser while meeting the stopping rule
+  early, and carrying $\boldsymbol\Psi$ and $t$ over too never settled, because $t$ keeps
+  growing on a problem that changes at every iteration. The same order held at peak 500 and
+  for $p = \infty$. So `HessianSchatten(warm_start=False)` with few inner iterations is not
+  a safer setting.
 - **Hessian boundary.** The paper points to the stencil of Eq. 10 of its companion paper
   for the Hessian, and does not say which boundary its experiments use. HSPIRAL1 uses that
   stencil (`boundary="mirror"`); HSPIRAL2 needs the periodic one for its Fourier solve.
   The two variants therefore differ in the Hessian at the last two rows and columns of the
-  block, and minimise the same objective only up to that boundary.
+  block, and minimise the same objective only up to that boundary. On small blocks whose
+  content is not periodic the difference can reach a few dB: the periodic Hessian also charges
+  the wrap-around jumps of the scene (on a $24 \times 32 \times 32$ scene, 32.05 dB for
+  HSPIRAL1 against 29.84 dB for HSPIRAL2, both run to convergence with the same $\tau$; within
+  0.1 to 0.3 dB on a $48 \times 48$ image).
 - **Default $\tau$.** The paper tunes $\tau$ per image for the best PSNR and gives no
   default. The default is $\tau = \kappa / (q_{99.9}(\tilde{y}) - q_{50}(\tilde{y}))$ with
   $\kappa = 1.6$, per image, where $q_{99.9}$ is the 99.9th percentile of the prepared data
@@ -489,7 +505,8 @@ as such in the docstrings:
   filaments it falls by up to 5 times between 10 and 1000 photons. With $\kappa = 1.6$ the
   PSNR is on average 0.41, 0.39 and 0.47 dB below that of the best $\tau$ of the grid, and
   at most 2.4, 2.7 and 3.2 dB, for $p = 1, 2, \infty$; it is at least 1.3 dB above that of
-  the data (8 dB on average). Pass `tau` to set it. It was not recalibrated for HSPIRAL1 (see
+  the data (8 dB on average). Pass `tau` to set it. This is a 2-D calibration: HSPIRAL1 and
+  HSPIRAL2 have the same best $\kappa$ in 2-D, but in 3-D it is too large (see
   [known limits](#known-limits)).
 - **Camera.** The conversion to electrons with the `SensorEstimate` and the
   `ShadingEstimate`, the neglect of read noise and the clipping of negative values at 0
@@ -517,11 +534,18 @@ as such in the docstrings:
 - **Linear ramps at the border.** The mirror stencil is not zero on a linear ramp at the
   last two samples of an axis, where $(\mathbf{D}_{aa}\mathbf{x})_i = x_{N-1} - x_N$ is minus
   the slope, while it vanishes inside. A ramp that reaches the border is therefore
-  penalised there. The periodic stencil of HSPIRAL2 penalises the
-  jump at the wrap-around in the same way.
-- **Default $\tau$ calibrated with HSPIRAL2.** The constant $\kappa$ was found with HSPIRAL2
-  on 2-D simulations. On one 3-D scene the default was about 4 times too large for HSPIRAL1,
-  so check the result on a new kind of data, and pass `tau` to set it.
+  penalised there. This follows from Eq. 10a of the companion paper and is not stated in
+  it: the continuous penalty does not charge first-order polynomials (the Introduction of
+  [Lefkimmiatis, Ward and Unser 2013](https://doi.org/10.1109/TIP.2013.2237919)), while its
+  discretisation in Eq. 10 does, at the last two samples of each axis. The periodic stencil of
+  HSPIRAL2 penalises the jump at the wrap-around in the same way.
+- **Default $\tau$ calibrated in 2-D.** The constant $\kappa = 1.6$ was found on 2-D
+  simulations, where it suits both variants (at most 0.17 dB below the best $\tau$ on a
+  $48 \times 48$ scene). In 3-D it was about 2 to 4 times too large for both variants on the
+  scenes tried ($24 \times 32 \times 32$, peaks 30 and 300: 0.55 to 1.24 dB below the best
+  $\tau$), plausibly because the $3 \times 3$ Hessian has three eigenvalues and six components
+  per voxel, so the same $\kappa$ weighs the prior more. In 3-D, try a smaller `tau` and check
+  the result on a new kind of data.
 
 ## Memory and streaming
 
@@ -538,7 +562,14 @@ along every axis.
 The solver holds about $21 + 3.5C$ buffers per voxel of the FFT grid for HSPIRAL2 and
 $27 + 3C$ for HSPIRAL1 (which includes the dual of the inner algorithm), with $C$ the Hessian
 components: 31.5 and 36 for the 2-D Hessian ($C = 3$), 42 and 45 for the 3-D one
-($C = 6$), measured on the peak use of the solver. The grid of a block is the loaded block (core and halo) for
+($C = 6$), measured on the peak use of the solver. For $p = 1$ and $p = \infty$ the
+closed-form eigenvalue solver adds a fixed term, whatever the block size: its temporaries are
+processed in chunks of 65 536 voxels, about 36 buffers of a chunk in 2-D and 110 in 3-D
+(9 and 27 MB in float32), which the block size from the memory budget includes. On blocks
+of a few hundred thousand voxels this term, with the allocator overhead, dominates: a
+$48 \times 64 \times 64$ float32 block was measured at about 117 buffers per voxel. The chunks
+are skipped when the input requires a gradient, so these counts do not hold under
+autograd. The grid of a block is the loaded block (core and halo) for
 the periodic boundary, and that block plus the PSF, rounded up, for
 `boundary="unknown"`. The block size is chosen from the memory budget
 (`optix.config(memory=...)`), or set with `block`; the rules of

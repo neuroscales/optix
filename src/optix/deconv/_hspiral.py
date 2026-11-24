@@ -2,6 +2,7 @@
 Schatten-norm prior (HSPIRAL)."""
 
 import math
+import numbers
 from collections.abc import Sequence
 
 import torch
@@ -18,6 +19,7 @@ from ..optim import (
     Schatten,
     ShiftedPoisson,
     Term,
+    _spectral,
     admm_fft,
 )
 from ._fft import PaddedConvolution, transfer_function
@@ -36,6 +38,16 @@ _KAPPA = 1.6
 #: for HSPIRAL2 and HSPIRAL1 (with its inner dual algorithm).
 _GRID_BASE = {2: 21.0, 1: 27.0}
 _GRID_COMPONENT = {2: 3.5, 1: 3.0}
+#: Temporaries of the closed-form eigenvalue solver used for p ∈ {1, ∞}, in
+#: buffers of min(grid, `_spectral._CHUNK`) voxels (measured peak), per
+#: spatial dimension: a fixed term of about 9 MB (2-D) and 27 MB (3-D)
+#: in float32, whatever the block size.
+_SPECTRAL_BUFFERS = {2: 36.0, 3: 110.0}
+
+
+def _is_int(value: object) -> bool:
+    """An integer, not a bool or a float."""
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
 
 
 class _CircularConvolution:
@@ -92,13 +104,14 @@ class HSPIRAL(_Variational):
     change and last primal and dual residuals in `history.extras`.
 
     - **HSPIRAL1** (Algorithm 1, `variant=1`, the default: the variant
-      of the paper's experiments, Section IV-B). Splits z₁ = K x and
-      z₂ = x (Eqs. 24–25): z₁ by the closed-form Poisson prox (Eq. 27),
-      z₂ = prox of (τ/α)‖H·‖₁,ₚ + ι_C (Eq. 28), x = (KᵀK + I)⁻¹(Kᵀ(z₁ −
-      s₁) + z₂ − s₂) (Eq. 29, in the Fourier domain), then the dual
-      updates (Eq. 23). The prox of Eq. (28) has no closed form: it is
-      computed by 5 iterations (Section IV-B) of the dual algorithm of
-      Lefkimmiatis, Ward & Unser (2013, Algorithm 2; see
+      of the paper's restoration results, Sections IV-B to IV-D).
+      Splits z₁ = K x and z₂ = x (Eqs. 24–25): z₁ by the closed-form
+      Poisson prox (Eq. 27), z₂ = prox of (τ/α)‖H·‖₁,ₚ + ι_C (Eq. 28),
+      x = (KᵀK + I)⁻¹(Kᵀ(z₁ − s₁) + z₂ − s₂) (Eq. 29, in the Fourier
+      domain), then the dual updates (Eq. 23). The prox of Eq. (28) has
+      no closed form: it is computed by 5 iterations (Section IV-B) of
+      the dual algorithm of Lefkimmiatis, Ward & Unser (2013,
+      Algorithm 2; see
       [`prox_hessian_schatten`][optix.optim.prox_hessian_schatten] and
       [`HessianSchatten`][optix.optim.HessianSchatten]), started from
       its dual of the previous ADMM iteration (Section III-C). H has
@@ -159,10 +172,11 @@ class HSPIRAL(_Variational):
       up to a constant, so ℓ(x; y) + κ‖H x/s‖ has the weight τ = κ/s.
       The rule needs q₉₉.₉(y) > q₅₀(y) (pass `tau` otherwise).
 
-      κ was calibrated with HSPIRAL2 (both variants minimise Eq. 12,
-      with Hessians that differ only at the last two rows and columns),
-      for the paper's α rule and stopping rule, on
-      simulated images with circular blur (Gaussian, σ_b = 2, 9 × 9;
+      κ is a 2-D calibration. It was found with HSPIRAL2 (in 2-D both
+      variants have the same best κ: they minimise Eq. 12 with Hessians
+      that differ only at the last two rows and columns), for the
+      paper's α rule and stopping rule, on 2-D simulated images with
+      circular blur (Gaussian, σ_b = 2, 9 × 9;
       uniform 7 × 7): blobs, filaments, their mixture and
       piecewise-smooth scenes, peaks of 10, 100 and 1000 photons on a
       constant background of 0, 1, 3 and 10 times the peak, 64 × 64
@@ -178,8 +192,11 @@ class HSPIRAL(_Variational):
       average 0.4 dB below that of the best τ of the grid (at most 2.4,
       2.7 and 3.2 dB for p = 1, 2, ∞; the grid was searched with p = 1)
       and at least 1.3 dB above that of the data (8 dB on average).
-      Pass `tau` to set the weight; the values used are in `tau` and
-      `rho` after `fit`.
+      In 3-D the same κ was about 2 to 4 times too large for both
+      variants on the scenes tried (24 × 32 × 32, peaks 30 and 300:
+      0.55 to 1.24 dB below the best τ), so a smaller τ is worth trying
+      there. Pass `tau` to set the weight; the values used are in `tau`
+      and `rho` after `fit`.
 
     **Camera calibration** (not in the paper, which takes photon
     counts). With a [`SensorEstimate`][optix.estimates.SensorEstimate]
@@ -349,7 +366,8 @@ class HSPIRAL(_Variational):
             are faithful.
         inner_iter : int
             Iterations of the inner prox of HSPIRAL1 per ADMM iteration.
-            Default (paper): 5. Unused by HSPIRAL2.
+            Default (paper): 5. Unused by HSPIRAL2, where it does not
+            change `is_faithful`.
         rho : float, optional
             ADMM penalty α > 0. Default (paper): 60τ / max y per image.
         max_iter : int
@@ -389,10 +407,13 @@ class HSPIRAL(_Variational):
 
     def _resolve(self, faithful: bool, params: object) -> None:
         super()._resolve(faithful, params)
+        free = self._free
+        if self.options.get("variant") == 2:  # HSPIRAL2 has no inner loop
+            free = (*free, "inner_iter")
         self.is_faithful = all(
             _same(value, self.paper.get(name))
             for name, value in self.options.items()
-            if name not in self._free
+            if name not in free
         )
 
     def _check(self) -> None:
@@ -404,12 +425,15 @@ class HSPIRAL(_Variational):
         if p not in (1.0, 2.0, math.inf):
             raise ValueError(f"p must be 1, 2 or inf, got {opts['p']!r}")
         opts["p"] = p
-        if opts["variant"] not in _VARIANTS:
+        if not _is_int(opts["variant"]) or opts["variant"] not in _VARIANTS:
             raise ValueError(
                 f"variant must be 1 or 2, got {opts['variant']!r}"
             )
-        if int(opts["inner_iter"]) < 1:
-            raise ValueError("inner_iter must be positive")
+        if not _is_int(opts["inner_iter"]) or opts["inner_iter"] < 1:
+            raise ValueError(
+                f"inner_iter must be a positive integer, got "
+                f"{opts['inner_iter']!r}"
+            )
         psf = self.psf
         if psf is not None and torch.as_tensor(psf).ndim not in (2, 3):
             raise ValueError("psf must be 2-D or 3-D")
@@ -468,6 +492,25 @@ class HSPIRAL(_Variational):
             raise ValueError("rho must be positive: give tau > 0 or rho")
         self.tau = tau
         self.rho = rho
+
+    def _block_bytes(
+        self,
+        core: Sequence[int],
+        extents: Sequence[int],
+        halo: Sequence[int],
+        psf: Tensor,
+        itemsize: int,
+    ) -> float:
+        nbytes = super()._block_bytes(core, extents, halo, psf, itemsize)
+        if self.options["p"] == 2:
+            return nbytes
+        loaded = [
+            min(c + 2 * h, e)
+            for c, e, h in zip(core, extents, halo, strict=True)
+        ]
+        grid = math.prod(self._grid_shape(loaded, tuple(psf.shape)))
+        chunk = min(grid, _spectral._CHUNK)
+        return nbytes + itemsize * _SPECTRAL_BUFFERS[psf.ndim] * chunk
 
     def _grid_buffers(self) -> float:
         psf = self.psf

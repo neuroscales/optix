@@ -41,8 +41,22 @@ Then X̂ = ĝ_u·u uᵀ + m̂·P + (r̂/r)·s·D, with m̂ and r̂ from the pair
 A double eigenvalue is always the pair, which is solved by the 2 × 2
 formula and needs no eigenvectors; the vector u belongs to a simple
 eigenvalue separated from the others by at least half the spread, so
-every step is accurate to a few ulps of s. X = m·I (s below
-`tiny/eps`) maps to g(m)·I.
+every step is accurate to a few ulps of |m| + s.
+
+Two cases map X to g(m)·I:
+
+- *s below `tiny/eps`* (about 1e-31 in float32, 1e-292 in float64),
+  where B could not be formed to full precision. The absolute error is
+  then below that threshold, so the "few ulps" bound holds relative to
+  |m| + s only above it: a float32 matrix diag(1e-33, 0, 0) gets the
+  eigenvalues (m, m, m).
+- *A rounding breakdown.* The rounded mean m leaves tr B = O(eps·|m|/s),
+  which is not small when s is a few ulps of |m|. λ is then not an
+  eigenvalue of B, and B − λI can have rank 1 (B = c·(I − w wᵀ), every
+  cross product 0). For an exact λ the largest cross product has squared
+  norm (β₂ − λ)²(β₃ − λ)²·maxₖ uₖ² ≥ gap⁴/3 ≥ 1/12, so a squared norm
+  below 10⁻³ only occurs in this case. There s = O(eps·|m|) and g(m)·I is
+  within a few ulps of |m| + s of the exact map, which is non-expansive.
 
 !!! note "Why a closed form and not `torch.linalg.eigh`"
     The map is applied at every iteration of the Hessian–Schatten
@@ -77,6 +91,11 @@ _SQ2 = math.sqrt(2)
 #: Voxels per chunk of the element-wise eigen-decomposition (bounds its
 #: few dozen temporaries to about this many voxels each).
 _CHUNK = 1 << 16
+#: Squared norm of the largest cross product of the rows of B − λI below
+#: which the 3 × 3 solver treats the matrix as m·I. An exact isolated
+#: eigenvalue gives at least 1/12; the value only falls below this when
+#: the rounding of m leaves B far from traceless (module docstring).
+_BREAKDOWN = 1e-3
 
 #: A scalar map of the eigenvalues: `fn(mu, t)` with `mu` `(d, n)` and
 #: `t` a float or `(n,)` tensor returns `(g, slope, piece)`, the mapped
@@ -140,7 +159,7 @@ class _Eig3(NamedTuple):
 
     X = m·I + s·(λ u uᵀ + m₂ P + D + E), with P = I − u uᵀ, D the
     traceless part of P B P on the plane (eigenvalues ±r₂) and E ≈ 0
-    the rounding of the eigenvector. `s` is 0 for X = m·I.
+    the rounding of the eigenvector. `s` is 0 where X is mapped as m·I.
     """
 
     m: Tensor
@@ -216,11 +235,23 @@ def eig3(v: Tensor) -> _Eig3:
             [sum(e.square() for e in w) for w in crosses]  # type: ignore[misc]
         )
         best = norms.argmax(0)
+        # Breakdown of the rounded mean: if s is a few ulps of |m|, B is
+        # not traceless, λ need not be an eigenvalue of B and B − λI can
+        # have rank 1 (B = c·(I − w wᵀ) makes every cross product 0). For
+        # an exact λ the largest squared cross product is at least
+        # gap⁴/3 ≥ 1/12, so a value below _BREAKDOWN only occurs there,
+        # where X maps to g(m)·I within O(s) = O(eps·|m|).
+        bad = norms.amax(0) < _BREAKDOWN
+        s = _where(bad, 0.0, s)
     w = [
-        torch.where(
-            best == 0,
-            crosses[0][i],
-            torch.where(best == 1, crosses[1][i], crosses[2][i]),
+        _where(
+            bad,
+            1.0 if i == 0 else 0.0,
+            torch.where(
+                best == 0,
+                crosses[0][i],
+                torch.where(best == 1, crosses[1][i], crosses[2][i]),
+            ),
         )
         for i in range(3)
     ]

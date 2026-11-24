@@ -257,12 +257,15 @@ class Hessian(_Differences):
 
     The second differences are forward stencils, D_aa xᵢ = xᵢ₊₂ − 2xᵢ₊₁ +
     xᵢ and D_ab xᵢ = xᵢ₊ₐ₊ᵦ − xᵢ₊ₐ − xᵢ₊ᵦ + xᵢ (i + a: one step along
-    axis a), as in Ikoma et al. (2018, Eq. S5). In 2-D this is also the
-    stencil of Lefkimmiatis, Bourquard & Unser (2012, Eq. 21) and of
-    Lefkimmiatis, Ward & Unser (2013, Eq. 10), used by Lefkimmiatis &
-    Unser (2013): f_xx[i, j] = f[i, j] − 2f[i+1, j] + f[i+2, j] and
-    f_xy[i, j] = f[i, j] − f[i+1, j] − f[i, j+1] + f[i+1, j+1]. The
-    boundary sets the samples past the last index:
+    axis a), as in Ikoma et al. (2018, Eq. S5). In 2-D and away from the
+    border this is also the stencil of Lefkimmiatis, Bourquard & Unser
+    (2012, Eq. 21) and of Lefkimmiatis, Ward & Unser (2013, Eq. 10),
+    used by Lefkimmiatis & Unser (2013): f_xx[i, j] = f[i, j] −
+    2f[i+1, j] + f[i+2, j] and f_xy[i, j] = f[i, j] − f[i+1, j] −
+    f[i, j+1] + f[i+1, j+1]. Eq. 10 as a whole, its border rows
+    included, is `boundary="mirror"` (below); the default `"periodic"`
+    differs from it at the last two indices of every axis. The boundary
+    sets the samples past the last index:
 
     - `"periodic"`: wrap-around; D_ab = D_a D_b with periodic forward
       differences, diagonal in Fourier (the HSPIRAL2 solve).

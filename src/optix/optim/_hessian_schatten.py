@@ -231,6 +231,16 @@ class HessianSchatten:
     (t₁ = 1, Ψ₁ = Ω; not specified in the paper). The prox is therefore
     inexact and depends on the call history: use one instance per
     problem, or `reset()`.
+
+    !!! note "Warm start"
+        Inside ADMM, the warm-started inexact prox lets the outer
+        iteration converge to the minimiser, as the inner error shrinks
+        while the dual settles. `warm_start=False` with a small `n_iter`
+        does not converge to the prox, and ADMM then stalls away from
+        the minimiser while still meeting a relative-change stopping
+        rule: it is not a safer setting. Carrying Ψ and t over as well
+        does not settle either, because t keeps growing on a problem
+        that changes at every call.
     """
 
     def __init__(

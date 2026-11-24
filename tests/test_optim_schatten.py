@@ -307,6 +307,85 @@ def test_derivatives_are_finite():
             )
 
 
+def ulp_steps(x, k):
+    """x moved by k ulps (k an integer tensor of the shape of x)."""
+    out = x.clone()
+    for step in range(1, int(k.abs().max()) + 1):
+        up = torch.nextafter(out, torch.full_like(out, math.inf))
+        down = torch.nextafter(out, torch.full_like(out, -math.inf))
+        out = torch.where(k >= step, up, torch.where(-k >= step, down, out))
+    return out
+
+
+def near_identity(m, dtype, n=4000, seed=0):
+    """Packed m·I plus 0 to 2 ulps of m on the diagonal and, for half of
+    the matrices, on the entries above it (the rounded mean then leaves
+    B = (X − m·I)/s far from traceless)."""
+    g = gen(seed)
+    k = torch.randint(-2, 3, (6, n), generator=g)
+    diag = ulp_steps(torch.full((3, n), m, dtype=dtype), k[:3])
+    m_ = torch.tensor(m, dtype=dtype)
+    ulp = torch.nextafter(m_.abs(), torch.tensor(math.inf, dtype=dtype))
+    ulp = ulp - m_.abs()
+    off = k[3:].to(dtype) * ulp * SQ2
+    off[:, : n // 2] = 0
+    return torch.cat([diag, off])
+
+
+@pytest.mark.parametrize("dtype", [F32, F64])
+@pytest.mark.parametrize("m", [1.0, 2.0, 0.5, 1024.0, -4.0, 3.0, 0.1, -7.3])
+def test_within_ulps_of_identity(m, dtype):
+    """Regression: matrices within 2 ulps of m·I gave NaN when the
+    rounded mean made B − λI rank 1 (e.g. diag(1 + eps, 1, 1 + eps))."""
+    v = near_identity(m, dtype)
+    e = torch.finfo(dtype).eps
+    if m == 1.0:  # the minimal case
+        v[:, 0] = torch.tensor([1 + e, 1, 1 + e, 0, 0, 0], dtype=dtype)
+    sc = scale_of(v)
+    tol = 16 * e * sc
+    mu = _spectral.eigenvalues(v).T.double().sort(-1).values
+    assert bool(mu.isfinite().all())
+    ref = torch.linalg.eigvalsh(unpack(v.double()))
+    assert bool(((mu - ref).abs().amax(-1) <= tol).all())
+    for p in (1, INF):
+        n = schatten_norm(v, p)
+        s = torch.linalg.svdvals(unpack(v.double()))
+        norm_ref = s.sum(-1) if p == 1 else s.amax(-1)
+        assert bool(((n.double() - norm_ref).abs() <= 3 * tol).all()), p
+        for frac in (0.3, 2.0):
+            r = frac * abs(m)
+            for op, fn in (
+                ("prox", prox_schatten),
+                ("proj", project_schatten),
+            ):
+                z = fn(v, r, p)
+                assert bool(z.isfinite().all()), (p, op)
+                err = (z.double() - reference(v, op, r, p)).abs().amax(0)
+                assert bool((err <= tol).all()), (p, op, float(err.max()))
+    w = v[:, :400].clone().requires_grad_()
+    for p in (1, INF):
+        for out in (
+            schatten_norm(w, p).sum(),
+            prox_schatten(w, 0.3 * abs(m), p).square().sum(),
+            project_schatten(w, 0.3 * abs(m), p).square().sum(),
+        ):
+            (grad,) = torch.autograd.grad(out, w)
+            assert bool(grad.isfinite().all()), p
+
+
+@pytest.mark.parametrize("p", [1, INF])
+def test_prox_hessian_schatten_of_paraboloid(p):
+    """Regression: the Hessian of 0.1·r² on a 48³ grid is 0.2·I up to
+    rounding, which made the 3 × 3 solver return NaN voxels that the
+    dual iteration spread."""
+    i = torch.arange(48, dtype=F64) - 23.5
+    r2 = i[:, None, None] ** 2 + i[None, :, None] ** 2 + i[None, None, :] ** 2
+    x = 0.1 * r2
+    res = prox_hessian_schatten(x, 0.5, p, max_iter=5)
+    assert bool(res.x.isfinite().all())
+    assert bool(res.dual.isfinite().all())
+
+
 def test_chunks_and_component_dim(monkeypatch):
     v = torch.randn(4, 6, 5, 7, generator=gen(14), dtype=F64)
     t = torch.rand(4, 1, 5, 7, generator=gen(15), dtype=F64)

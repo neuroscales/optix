@@ -622,6 +622,21 @@ def test_layout_and_state(tmp_path):
     torch.testing.assert_close(new.tau, est.tau)
 
 
+def test_block_bytes_count_the_eigenvalue_solver():
+    """p ∈ {1, ∞} adds the fixed temporaries of the 3 × 3 (or 2 × 2)
+    eigenvalue solver, min(grid, chunk) voxels each, to the block estimate."""
+    psf = torch.ones(3, 3, 3) / 27
+    core, ext, halo = (48, 64, 64), (48, 64, 64), (0, 0, 0)
+    two = HSPIRAL(psf, p=2)._block_bytes(core, ext, halo, psf, 4)
+    for p in (1, math.inf):
+        one = HSPIRAL(psf, p=p)._block_bytes(core, ext, halo, psf, 4)
+        assert one - two == 4 * 110 * 2**16
+    small = (8, 8, 8)
+    diff = HSPIRAL(psf, p=1)._block_bytes(small, small, halo, psf, 8)
+    diff -= HSPIRAL(psf, p=2)._block_bytes(small, small, halo, psf, 8)
+    assert diff == 8 * 110 * 8**3
+
+
 def test_options_and_faithfulness():
     psf = gaussian2d(5, 1.0)
     assert HSPIRAL(psf).is_faithful
@@ -636,6 +651,7 @@ def test_options_and_faithfulness():
         dict(p=math.inf),
         dict(variant=2),
         dict(variant=2, p=2),
+        dict(variant=2, inner_iter=10),  # unused by HSPIRAL2
         dict(halo=12),
         dict(block=(8, None)),
     ):
@@ -653,7 +669,11 @@ def test_options_and_faithfulness():
         dict(p="nuclear"),
         dict(variant=3),
         dict(variant="1"),
+        dict(variant=1.0),
+        dict(variant=True),
         dict(inner_iter=0),
+        dict(inner_iter=5.9),
+        dict(inner_iter=True),
         dict(boundary="mirror"),
         dict(tau=-1.0),
         dict(rho=0.0),

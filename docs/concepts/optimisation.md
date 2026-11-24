@@ -190,7 +190,7 @@ rescaling for $q = 2$, a clip $\min(\sigma_i, r)$ for $q = \infty$ and a soft th
 $\max(\sigma_i - \gamma, 0)$ with $\gamma = \max\bigl(0, \max_k (S_k - r)/k\bigr)$ for
 $q = 1$. With $1/p + 1/q = 1$ it is the prox of the convex conjugate of $r\lVert\cdot\rVert_{S_p}$,
 so the Moreau identity holds, $\mathbf{X} = \mathrm{prox}_{r\lVert\cdot\rVert_{S_p}}(\mathbf{X})
-+ P_{S_q,\,r}(\mathbf{X})$.
++ P_{r\mathcal{B}_q}(\mathbf{X})$, with $r\mathcal{B}_q$ the $S_q$ ball of radius $r$.
 
 ```pycon
 >>> from optix.optim import Schatten, prox_schatten, schatten_norm
@@ -239,7 +239,10 @@ By default the Hessian has the mirror boundary of its Eq. 10 (`boundary="mirror"
 \iota_{[l,u]}(\mathbf{x})$ with `value` and `prox`, for use as the function of a `Term` with
 no operator (HSPIRAL1). It keeps the dual of the previous `prox` call and starts the next one
 from it (`warm_start=True`, `n_iter=5` iterations per call), so its prox is inexact and depends
-on the calls before it: use one instance per problem, or `reset()`.
+on the calls before it: use one instance per problem, or `reset()`. Inside ADMM this warm start
+is what lets the outer iteration converge with so few inner iterations (see the
+[HSPIRAL page](../algorithms/deconv/hspiral.md#faithful-mode-and-extensions)); `warm_start=False`
+with a small `n_iter` does not converge to the prox, so it is not a safer setting.
 
 ```pycon
 >>> from optix.optim import HessianSchatten, prox_hessian_schatten
@@ -360,7 +363,11 @@ True
 
 Away from the border the two stencils are the same, and vanish on a ramp. At the border
 the `"mirror"` stencil is $-1$ on the last two samples of the ramp, so a penalty built on it
-charges a linear ramp that reaches the edge of the image.
+charges a linear ramp that reaches the edge of the image. This follows from Eq. 10a of
+[Lefkimmiatis, Ward and Unser (2013)](https://doi.org/10.1109/TIP.2013.2237919) and is not
+stated in the paper: the continuous penalty does not charge first-order polynomials (the
+Introduction of that paper), while its discretisation in Eq. 10 does, at the last two samples
+of each axis.
 
 ## ADMM for circulant operators
 
