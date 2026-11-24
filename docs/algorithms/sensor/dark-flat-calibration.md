@@ -109,20 +109,30 @@ held in memory at once.
 
 ## Usage
 
+The flats are lit by a linear [ramp](../../reference/models.md#phantoms),
+the known illumination gradient.
+
 ```python
 import torch
-from optix.models import random_sensor, simulate_sensor
+from optix.models import phantoms, random_sensor, simulate_sensor
 from optix.sensor import DarkFlatCalibration
 
+# 1. Dark frames, and flats of a known illumination gradient.
 camera = random_sensor((32, 32), seed=0)
-illumination = torch.linspace(0.5, 1.0, 32).expand(32, 32)
+illumination = phantoms.ramp((32, 32), low=0.5, high=1.0)
 darks = simulate_sensor(torch.zeros(500, 32, 32), camera, seed=1)
 flats = simulate_sensor(1000 * illumination.expand(50, 32, 32), camera, seed=2)
 
+# 2. Fit: a flat with mean 1, plus offset and read variance.
 cal = DarkFlatCalibration().fit(flats, dark=darks)
-shading = cal.estimates["shading"]  # flat has mean 1
-sensor = cal.estimates["sensor"]  # offset and read variance
-corrected = cal.apply(flats)  # about uniform
+flat = cal.estimates["shading"].flat
+
+# 3. Correct.
+corrected = cal.apply(flats)
+
+# 4. Compare to the truth.
+truth = illumination / illumination.mean()
+print(float(((flat - truth).abs() / truth).max()))  # about 0.02
 ```
 
 Variations: pass a precomputed dark map, or a `SensorEstimate` from an

@@ -167,21 +167,25 @@ The ML fit works on the pairs only (a few hundred numbers).
 
 ## Usage
 
+The example images an intensity [ramp](../../reference/models.md#phantoms)
+through a simulated camera with known gain and read noise.
+
 ```python
-import torch
-from optix.models import random_sensor, simulate_sensor
+from optix.models import phantoms, random_sensor, simulate_sensor
 from optix.sensor import PoissonGaussian
 
+# 1. Four frames of an intensity ramp through a camera with known noise.
 truth = random_sensor(
     (128, 128), offset=100.0, offset_sd=0.0, read_sd=2.0, gain=0.5, seed=0
 )
-ramp = 20.0 + 3000.0 * torch.linspace(0, 1, 128).expand(128, 128)
-y = simulate_sensor(ramp.expand(4, 128, 128), truth, seed=1)
+x = phantoms.ramp((4, 128, 128), low=20.0, high=3020.0)
+y = simulate_sensor(x, truth, seed=1)
 
-est = PoissonGaussian(faithful=False).fit(y)  # pooled over the 4 frames
-s = est.estimates["sensor"]
-print(float(s.gain))  # about 0.5
-print(float(s.variance), 2.0**2 - 0.5 * 100.0)  # b = sigma^2 - g o, about -46
+# 2. Fit (pooled over the 4 frames).
+s = PoissonGaussian(faithful=False).fit(y).estimates["sensor"]
+
+# 3. Compare to the truth: gain g = 0.5 and b = sigma^2 - g o = -46.
+print(float(s.gain), float(s.variance))  # about 0.50 and -44
 ```
 
 Pass `data_range=(0, 4095)` (or `"auto"`) for integer data. To obtain the

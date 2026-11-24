@@ -134,21 +134,29 @@ $D$ for per-pixel maps, one row otherwise) is computed once and reused.
 
 ## Usage
 
+The example images an intensity [ramp](../../reference/models.md#phantoms)
+through a simulated camera with known gain and read noise.
+
 ```python
-import torch
-from optix.models import random_sensor, simulate_sensor
+from optix.models import phantoms, random_sensor, simulate_sensor
 from optix.sensor import GeneralizedAnscombe
 
+# 1. Four frames of an intensity ramp through a known camera.
 truth = random_sensor(
     (128, 128), offset=100.0, offset_sd=0.0, read_sd=2.0, gain=0.5, seed=0
 )
-ramp = 20.0 + 3000.0 * torch.linspace(0, 1, 128).expand(128, 128)
-y = simulate_sensor(ramp.expand(4, 128, 128), truth, seed=1)
+x = phantoms.ramp((4, 128, 128), low=20.0, high=3020.0)
+y = simulate_sensor(x, truth, seed=1)
 
+# 2. Build the transform from the known noise parameters.
 vst = GeneralizedAnscombe().fit(None, init=truth)
+
+# 3. Stabilise, and map a mean back to ADU.
 d = vst.apply(y)
-print(float(d.std(0).mean()))  # about 1: stabilised noise
-mean = vst.inverse(d.mean(0, keepdim=True))  # back to ADU
+mean = vst.inverse(d.mean(0, keepdim=True))
+
+# 4. The noise is now close to 1 everywhere along the ramp.
+print(float(d.std(0).mean()))  # about 0.92
 ```
 
 ## References
