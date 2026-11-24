@@ -255,3 +255,79 @@ def test_shared_kernel_compiled_matches_eager():
         compiled = _shared(y, c, v, b, gam, mu, nu, True, compile=True)
     for a, e in zip(compiled, eager, strict=True):
         assert torch.allclose(a, e, rtol=1e-9, atol=1e-12)
+
+
+# -- stage 2: scene geometry -------------------------------------------------
+def _brute_cover(pos, shape):
+    """Scene array of the sorted tuples of tiles covering each voxel."""
+    import numpy as np
+
+    pos = np.asarray(pos)
+    lo = pos.min(0)
+    ext = pos.max(0) - lo + np.asarray(shape)
+    cover = np.empty(tuple(ext.tolist()), dtype=object)
+    for idx in np.ndindex(*cover.shape):
+        cover[idx] = ()
+    for t, p in enumerate(pos):
+        box = tuple(
+            slice(int(a - b), int(a - b + n))
+            for a, b, n in zip(p, lo, shape, strict=True)
+        )
+        sub = cover[box]
+        for idx in np.ndindex(*sub.shape):
+            sub[idx] = sub[idx] + (t,)
+    return cover, lo
+
+
+_POSES = {
+    "frame shifts": ([[0, 0, 0], [2, 5, 0], [3, 9, 1], [5, 14, 0]], (6, 8, 5)),
+    "grid corners": (
+        [[0, 0, 0], [0, 0, 5], [0, 6, 0], [0, 6, 5], [0, 3, 2]],
+        (3, 8, 7),
+    ),
+    "components": ([[0, 0, 0], [0, 4, 0], [0, 30, 0], [0, 33, 1]], (2, 6, 4)),
+    "isolated": ([[0, 0, 0], [0, 50, 0]], (2, 6, 4)),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_POSES))
+def test_scene_cells_match_voxel_brute_force(name):
+    import numpy as np
+
+    from optix.shading.mix._scene import SceneIndex
+
+    pos, shape = _POSES[name]
+    pos = np.asarray(pos)
+    idx = SceneIndex(pos, shape)
+    cover, lo = _brute_cover(pos, shape)
+    seen = np.zeros(cover.shape, dtype=np.int64)
+    for c in idx.cells:
+        assert len(c.tiles) >= 2 and list(c.tiles) == sorted(c.tiles)
+        box = tuple(
+            slice(a - b, h - b) for a, h, b in zip(c.lo, c.hi, lo, strict=True)
+        )
+        assert all(s == c.tiles for s in cover[box].ravel())
+        seen[box] += 1
+        for t in c.tiles:  # the local slices lie in the tile
+            loc = c.local(pos[t])
+            assert all(
+                0 <= s.start < s.stop <= n
+                for s, n in zip(loc, shape, strict=True)
+            )
+    multi = np.vectorize(len)(cover) >= 2
+    # every multiply-seen voxel in exactly one cell, nothing else
+    assert np.array_equal(seen, multi.astype(np.int64))
+    for t, p in enumerate(pos):
+        box = tuple(
+            slice(int(a - b), int(a - b + n))
+            for a, b, n in zip(p, lo, shape, strict=True)
+        )
+        count = np.vectorize(len)(cover[box])
+        assert np.array_equal(idx.cover_count(t), count)
+        full = tuple(slice(0, n) for n in shape)
+        assert np.array_equal(idx.single_mask(t, full), count == 1)
+        # a sub-box of the mask is the mask of the sub-box
+        part = (slice(1, shape[0]), slice(2, shape[1] - 1), slice(0, 3))
+        assert np.array_equal(idx.single_mask(t, part), (count == 1)[part])
+        assert idx.covered(t) == bool((count > 1).any())
+        assert {c for c in idx.cells if t in c.tiles} == set(idx.cells_of(t))
