@@ -32,6 +32,9 @@ nav = [
       "algorithms/shading/illumination-function.md",
       "algorithms/shading/gamma-mixture.md",
     ]},
+    {"Attenuation" = [
+      "algorithms/attenuation/depth-resolved.md",
+    ]},
     {"Background" = [
       "algorithms/background/rolling-ball.md",
     ]},
@@ -81,6 +84,7 @@ nav = [
     "reference/deconv.md",
     "reference/destripe.md",
     "reference/psf.md",
+    "reference/attenuation.md",
     "reference/fusion.md",
     "reference/models.md",
     "reference/distributions.md",
