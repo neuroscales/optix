@@ -1,6 +1,6 @@
 # Optimisation (`optix.optim`)
 
-Proximity operators, finite-difference operators and an ADMM solver, the building
+Proximity operators, finite-difference operators and ADMM and primal–dual solvers, the building
 blocks of the regularised estimators. See [Optimisation tools](../concepts/optimisation.md).
 
 !!! warning "No stability promise"
@@ -37,6 +37,8 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - Schatten
         - SquaredL2
         - ShiftedPoisson
+        - Smooth
+        - PoissonGaussian
 
 ## Linear operators
 
@@ -77,3 +79,6 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - admm_fft
         - Term
         - AdmmResult
+        - primal_dual
+        - primal_dual_step
+        - PrimalDualResult

@@ -343,3 +343,84 @@ def test_poisson_normal_batches_and_dtypes():
     )
     with pytest.raises(ValueError, match="variance"):
         poisson_normal_mean(r, mu, -var)
+
+
+# -- ratio of Poisson–Gaussian series (Chouzenoux et al. 2015, Eq. 2.10) ----
+def _poisson_normal_ratio_brute(r, mu, var):
+    """s(μ, r − 1)/s(μ, r) by direct summation, 50 digits."""
+    mpmath = pytest.importorskip("mpmath")
+    mp = mpmath.mp.clone()
+    mp.dps = 50
+    r, mu, var = mp.mpf(r), mp.mpf(mu), mp.mpf(var)
+    spread = 60 * mp.sqrt(var + mu) + 60
+    hi = int(max(r, mu) + spread)
+
+    def s(b):
+        return mp.fsum(
+            mp.exp(
+                n * mp.log(mu) - mp.loggamma(n + 1) - (b - n) ** 2 / (2 * var)
+            )
+            for n in range(hi)
+        )
+
+    return float(s(r - 1) / s(r))
+
+
+def test_poisson_normal_ratio_against_brute_force():
+    from optix.special import poisson_normal_ratio
+
+    cases = [
+        *_PN_CASES[:-2],  # the last two need 10⁵-term sums
+        (12.0, 12.0, 9.0),
+        (40.0, 0.5, 9.0),
+        (-8.0, 3.0, 36.0),
+        (60.0, 1e-12, 36.0),
+    ]
+    t = torch.tensor(cases, dtype=torch.float64)
+    ratio = poisson_normal_ratio(*t.unbind(1))
+    for i, case in enumerate(cases):
+        ref = _poisson_normal_ratio_brute(*case)
+        assert float(ratio[i]) == pytest.approx(ref, rel=1e-12), case
+
+
+def test_poisson_normal_ratio_identities():
+    from optix.special import (
+        poisson_normal_logpdf,
+        poisson_normal_mean,
+        poisson_normal_ratio,
+    )
+
+    gen = torch.Generator().manual_seed(3)
+    f64 = torch.float64
+    mu = 0.05 + 30 * torch.rand(300, generator=gen, dtype=f64)
+    var = 0.5 + 40 * torch.rand(300, generator=gen, dtype=f64)
+    r = torch.poisson(mu, generator=gen) + var.sqrt() * torch.randn(
+        300, generator=gen, dtype=f64
+    )
+    ratio = poisson_normal_ratio(r, mu, var)
+    # ξ = exp(log p(r − 1) − log p(r)) = E[n | r]/μ
+    diff = poisson_normal_logpdf(r - 1, mu, var) - poisson_normal_logpdf(
+        r, mu, var
+    )
+    torch.testing.assert_close(ratio, diff.exp(), rtol=1e-11, atol=0)
+    torch.testing.assert_close(
+        ratio, poisson_normal_mean(r, mu, var) / mu, rtol=1e-11, atol=0
+    )
+    # offset: a shift of the data
+    torch.testing.assert_close(
+        poisson_normal_ratio(r + 4, mu, var, offset=4),
+        ratio,
+        rtol=1e-12,
+        atol=0,
+    )
+    # μ = 0: Eq. (2.29), and continuity as μ → 0
+    zero = poisson_normal_ratio(r, 0.0, var)
+    torch.testing.assert_close(zero, torch.exp((2 * r - 1) / (2 * var)))
+    near = poisson_normal_ratio(r, 1e-200, var)
+    torch.testing.assert_close(near, zero, rtol=1e-12, atol=0)
+    # σ² = 0: the Poisson ratio r/μ
+    torch.testing.assert_close(poisson_normal_ratio(r, mu, 0.0), r / mu)
+    # float32 in, float32 out, computed in float64
+    r32 = poisson_normal_ratio(r.float(), mu.float(), var.float())
+    assert r32.dtype == torch.float32
+    torch.testing.assert_close(r32.double(), ratio, rtol=1e-5, atol=0)

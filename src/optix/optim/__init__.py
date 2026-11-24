@@ -9,12 +9,13 @@ regularised estimators (for example
   `prox_schatten` (with `schatten_norm`), `prox_squared_l2`,
   `prox_shifted_poisson`, `prox_conjugate`.
 - Functions pairing a value and a prox: `Box`, `GroupL2`, `Schatten`,
-  `SquaredL2`, `ShiftedPoisson`.
+  `SquaredL2`, `ShiftedPoisson`; smooth functions (value, gradient,
+  Lipschitz constant): the protocol `Smooth` and `PoissonGaussian`.
 - Linear operators: the protocols `LinearOperator` (forward, adjoint,
   norm2) and `Circulant` (adds the Fourier symbols); `Identity`,
   `Convolution` (a transfer function), the finite differences `diff`,
   `diff_adjoint`, `Gradient` and `Hessian`; `as_circulant`.
-- Solvers: `admm_fft`.
+- Solvers: `admm_fft`; `primal_dual` (with `primal_dual_step`).
 """
 
 from ._admm import AdmmResult, Term, admm_fft
@@ -23,8 +24,10 @@ from ._functions import (
     Box,
     Function,
     GroupL2,
+    PoissonGaussian,
     Schatten,
     ShiftedPoisson,
+    Smooth,
     SquaredL2,
 )
 from ._operators import (
@@ -34,6 +37,7 @@ from ._operators import (
     LinearOperator,
     as_circulant,
 )
+from ._primal_dual import PrimalDualResult, primal_dual, primal_dual_step
 from ._prox import (
     project_group_l2,
     prox_box,
@@ -56,14 +60,19 @@ __all__ = [
     "Hessian",
     "Identity",
     "LinearOperator",
+    "PoissonGaussian",
+    "PrimalDualResult",
     "Schatten",
     "ShiftedPoisson",
+    "Smooth",
     "SquaredL2",
     "Term",
     "admm_fft",
     "as_circulant",
     "diff",
     "diff_adjoint",
+    "primal_dual",
+    "primal_dual_step",
     "project_group_l2",
     "prox_box",
     "prox_conjugate",

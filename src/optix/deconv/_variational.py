@@ -81,12 +81,12 @@ class _Variational(_BlockDeconvolution):
     `fit` makes one pass over the prepared data and stores, per image
     `(*group, *sample)`, its maximum (`peak`), its 99.9th percentile
     (`robust_peak`), its median (`median`, from a uniform sample of
-    8192 voxels, exact for smaller images) and the mean read-noise
-    variance (`noise`);
-    subclasses derive their per-image parameters from them in
-    `_setup_images`. `apply` solves each block with `_solve(blk, op,
-    index, trace)`, where `index` selects the image in those per-image
-    tensors.
+    8192 voxels, exact for smaller images), its mean (`mean`) and the
+    mean read-noise variance (`noise`); subclasses can collect more in
+    `_observe(index, blk)` (called on every prepared chunk) and derive
+    their per-image parameters in `_setup_images`. `apply` solves each
+    block with `_solve(blk, op, index, trace)`, where `index` selects
+    the image in those per-image tensors.
 
     The block size counts the solver's buffers on the padded FFT grid of
     a block (`_grid_buffers()` per grid voxel), not on the loaded block.
@@ -95,9 +95,15 @@ class _Variational(_BlockDeconvolution):
     """
 
     _warn_split = True
+    #: Whether `_prepare` clips the data at −σ̃² (needed by the shifted
+    #: Poisson likelihood).
+    _clip_data = True
 
     def _setup_images(self, psf: Tensor) -> None:
         """Per-image parameters from `peak`, `robust_peak` and `noise`."""
+
+    def _observe(self, index: tuple, blk: _Problem) -> None:
+        """Called by `fit` on every prepared chunk of image `index`."""
 
     def _grid_buffers(self) -> float:
         """Working buffers of the solver per voxel of the FFT grid."""
@@ -181,7 +187,8 @@ class _Variational(_BlockDeconvolution):
             var = v if gain is None else v / gain.square()
             if flat is not None:
                 var = var / flat.square()
-        y = torch.maximum(y, -torch.as_tensor(var).to(y))
+        if self._clip_data:
+            y = torch.maximum(y, -torch.as_tensor(var).to(y))
         return _Problem(y, variance=var)
 
     # -- hooks of _BlockDeconvolution --------------------------------------
@@ -322,6 +329,7 @@ class _Variational(_BlockDeconvolution):
         group, sample, spatial = data.layout.shape_of(data.array)
         f64 = torch.float64
         count = torch.zeros(group + sample, dtype=f64)
+        total = torch.zeros(group + sample, dtype=f64)
         peak = torch.full(group + sample, -torch.inf, dtype=f64)
         noise = torch.zeros(group + sample, dtype=f64)
         # keyed by (start, stop) pairs: slices are unhashable before 3.12
@@ -333,6 +341,8 @@ class _Variational(_BlockDeconvolution):
             blk = self._prepare(chunk, maps)
             index = chunk.group + chunk.samples
             count[index] += blk.data.numel()
+            total[index] += float(blk.data.sum(dtype=f64))
+            self._observe(index, blk)
             peak[index] = torch.maximum(
                 peak[index], torch.tensor(float(blk.data.max()), dtype=f64)
             )
@@ -358,6 +368,7 @@ class _Variational(_BlockDeconvolution):
         self.peak = peak
         self.robust_peak = robust
         self.median = median
+        self.mean = total / count.clamp(min=tiny)
         self.noise = noise / count.clamp(min=tiny)
         self._setup_images(psf)
         self.history.extras["iterations"] = []
@@ -370,6 +381,7 @@ class _Variational(_BlockDeconvolution):
         state["peak"] = getattr(self, "peak", None)
         state["robust_peak"] = getattr(self, "robust_peak", None)
         state["median"] = getattr(self, "median", None)
+        state["mean"] = getattr(self, "mean", None)
         state["noise"] = getattr(self, "noise", None)
         sensor = getattr(self, "sensor", None)
         shading = getattr(self, "shading", None)
@@ -382,6 +394,7 @@ class _Variational(_BlockDeconvolution):
         self.peak = state.get("peak")
         self.robust_peak = state.get("robust_peak")
         self.median = state.get("median")
+        self.mean = state.get("mean")
         self.noise = state.get("noise")
         sensor = state.get("sensor")
         if sensor is not None:

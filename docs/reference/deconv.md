@@ -21,6 +21,7 @@ Deconvolution with a known point spread function.
         - Tikhonov
         - Ikoma
         - HSPIRAL
+        - Chouzenoux
 
 ## Shift-variant PSF models
 
@@ -51,6 +52,7 @@ Deconvolution with a known point spread function.
         - tikhonov
         - ikoma
         - hspiral
+        - chouzenoux
 
 ## Utilities
 
