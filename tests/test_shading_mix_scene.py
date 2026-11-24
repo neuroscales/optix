@@ -610,3 +610,47 @@ def test_coarse_start_option():
     est = _tile_fit(data, spec, it=5)
     assert est.tile_gain_.shape == (4,)
     assert torch.isfinite(torch.tensor(est.history.objective)).all()
+
+
+# -- stage 5: options --------------------------------------------------------
+@pytest.fixture(scope="module")
+def _gain_fit():
+    from test_shading_mix import _tile_fit, _tiles
+
+    from optix.shading.mix import TileOverlap
+
+    data, _ = _tiles(seed=0, X=6, bright=0.0, fade=0.1)
+    est = _tile_fit(data, TileOverlap(step=(0, 16, 0), fit_gain=True), it=8)
+    return est, data
+
+
+def test_apply_divides_by_tile_gain(_gain_fit):
+    est, data = _gain_fit
+    plain = est.apply(data)
+    eq = est.apply(data, tile_gain=True)
+    g = est.tile_gain_
+    for t in range(4):
+        assert torch.allclose(eq[t], plain[t] / g[t], rtol=1e-5, atol=1e-4)
+    # without fitted gains
+    est2 = type(est)(**{**est.options, "overlap": None})
+    est2.estimates = est.estimates
+    est2.tile_gain_ = None
+    with pytest.raises(ValueError, match="fit_gain"):
+        est2.apply(data, tile_gain=True)
+
+
+def test_joint_classify_shares_the_posterior(_gain_fit):
+    est, data = _gain_fit
+    p0, _ = est.classify(data)
+    pj, uj = est.classify(data, joint=True, mean=True)
+    assert pj.shape == data.shape and uj.shape == data.shape
+    assert ((pj >= 0) & (pj <= 1)).all()
+    # tile t's rows 16: are tile t+1's rows :16 (step 16 along y)
+    for t in range(3):
+        assert torch.equal(pj[t, :, 16:], pj[t + 1, :, :16])
+        assert torch.allclose(uj[t, :, 16:], uj[t + 1, :, :16])
+    # not the per-picture posterior there
+    assert not torch.equal(pj[0, :, 16:], p0[0, :, 16:])
+    per, _ = est.classify(data, joint=True, per_class=True)
+    assert per.shape == (1, *data.shape)
+    assert torch.allclose(per.sum(0), pj, atol=1e-5)

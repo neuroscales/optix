@@ -1,65 +1,32 @@
-"""Overlapping tiles: a consistency term on the flat field.
+"""Overlapping tiles: poses, pairs, and the log-ratio initialiser.
 
-When consecutive tiles of a mosaic overlap, the same piece of the scene is
-seen at two positions of the field of view. Its signal u is the same in
-both, so for a voxel p of tile i and the matching voxel p − s of tile j,
+When consecutive tiles of a mosaic overlap, the same piece of the scene
+is seen at several positions of the field of view. The model of
+`_model.MixtureFit` treats each scene voxel as one latent signal u
+(and one class) shared by every tile that sees it (see `_scene` for the
+geometry); this module holds the poses and pairs of the tiles, and the
+statistics used to **initialise** the flat field and the tile gains.
 
-    yᵢ(p) − c(p) ≈ m(p)·u,    yⱼ(p − s) − c(p − s) ≈ m(p_s)·u
+Initialiser. For a voxel p of tile i and the matching voxel p − s of
+tile j, both tissue, the log-ratio of the excesses
 
-and the log-ratio of the two excesses measures a difference of the log
-flat field, free of u:
+    d = log(yᵢ − c) − log(yⱼ − c) ≈ log m(p) − log m(p − s) + aᵢ − aⱼ
 
-    d = log(yᵢ − c) − log(yⱼ − c) ≈ log m(p) − log m(p − s).
-
-`MixtureFit` adds the Gaussian pseudo-likelihood of these log-ratios to
-its bound (a composite likelihood: the mixture term treats the tiles as
-independent pictures, this term restores the information carried by the
-shared signal),
-
-    −½ ∑ w·(d − log m(p) + log m(p − s))²,
-
-over the voxels that are foreground in both tiles (both excesses more
-than `threshold` standard deviations of an empty pixel), with the delta-
-method weight w = 1 / (Var[yᵢ]/(yᵢ − c)² + Var[yⱼ]/(yⱼ − c)²), scaled by
-`weight`. Because log m = Φ·θ, the term is a quadratic in θ that enters
-the Fisher-scoring system of θ (its curvature is exact).
-
-d and w are computed once, from the initial c and v (the background
-quantiles of the initialisation, which depend on `bg_fraction`), and
-are then frozen for the whole fit: the term stays an exact quadratic in
-θ and the bound consistent across steps. An error in the initial offset
-c therefore biases d (more so at low signal) and is not corrected by
-later updates of c. The weight uses the same noisy excesses as d, which
-attenuates d toward 0 at low signal.
+is free of u. `OverlapStats` holds the delta-method weighted sums of d
+over every pair (w = 1 / (Var yᵢ/(yᵢ − c)² + Var yⱼ/(yⱼ − c)²), voxels
+more than `threshold` background standard deviations above c in both
+tiles), from which the initial θ is fitted (with the moment term,
+`fit_modulation(extra=…)`) and the initial log gains a are profiled
+(weighted Laplacian of the overlap graph, ∑ a = 0 per connected group).
+These statistics do not enter the bound.
 
 Conventions. Each tile has a pose: an integer position in a common
 voxel frame, with one signed component per axis of the (group-free) data
 other than the tile axis, in storage order (for data stored as
 (tile, x, y, z), with pictures in the (y, z) plane indexed by x, a
-position is (x, y, z)). Every pair i < j whose boxes intersect is used,
-with s = positionⱼ − positionᵢ: voxel p of tile i shows the same scene
-point as voxel p − s of tile j. A shift along a sample axis (x here)
-pairs frame k of tile i with frame k − sx of tile j.
-
-Per-tile gain (`TileOverlap(fit_gain=True)`, off by default). Tiles may
-also differ by a uniform factor (bleaching, lamp drift): the effective
-flat field of tile t is g_t·m, and the residual becomes
-
-    d − (log m(p) − log m(p − s)) − (log gᵢ − log gⱼ).
-
-The term is exactly quadratic in a = log g with d and w fixed, so a is
-profiled out in closed form: at every θ, a*(θ) solves the weighted
-Laplacian system L·a = b of the tile-overlap graph (an edge per pair with
-at least one matched voxel), normalised by ∑ a = 0 within each connected
-component (geometric mean of the gains one; isolated tiles get g = 1).
-The θ system receives the Schur complement H_θθ − U·L⁺·Uᵀ and the score at
-a*(θ) (envelope theorem); the bound uses a*(θ), its maximum over a, so it
-is the same quadratic in θ that the step solves. Profiling rather than
-carrying a as a parameter keeps the step, its halving and the bound free
-of extra state. A linear log m (exp(k·p)) is indistinguishable from the
-gains g_t ∝ exp(−k·position_t): with fit_gain the overlap term says
-nothing about the linear part of log m along the tile steps, which then
-rests on the mixture term and the prior alone.
+position is (x, y, z)). Tile t's voxel q is the scene voxel
+position_t + q; a shift along a sample axis (x here) pairs frame k of
+tile i with frame k − sx of tile j.
 """
 
 import math
@@ -104,17 +71,18 @@ class TileOverlap:
         Tile axis of the data (position, or label of a labelled layout).
         It must be a sample axis: the tiles share the flat field.
         Default 0.
-    weight : float
-        Scale of the overlap term relative to the mixture likelihood.
-        Default 1.
     fit_gain : bool
-        Also fit one gain g_t per tile (effective flat g_t·m), so that a
-        uniform per-tile fade is not mistaken for a ramp of the flat
-        field. The gains are normalised to a geometric mean of one in
-        each connected group of overlapping tiles (isolated tiles: 1).
-        They enter only the overlap term: the mixture term, the fitted
-        flat field and `predict`/correction do not use them; the fitted
-        values are `GammaMixture.tile_gain_`. Default False.
+        Also fit one gain g_t per tile: tile t sees the scene through
+        b_t = g_t·m, so that a uniform per-tile fade (bleaching, lamp
+        drift) is not mistaken for a ramp of the flat field. The gains
+        have a geometric mean of one over the tiles that overlap another
+        (the common scale of the gains is that of the class means);
+        a tile that overlaps no other keeps g = 1. Fitted values:
+        `GammaMixture.tile_gain_`. Default False.
+    coarse : int, optional
+        Start from a fit on the data averaged over `coarse` × `coarse`
+        pixels (positions scaled): its flat field and gains initialise
+        the full fit. Default None (no coarse fit).
 
     Notes
     -----
@@ -130,7 +98,6 @@ class TileOverlap:
         steps: object = None,
         step: object = None,
         axis: int | str = 0,
-        weight: float = 1.0,
         fit_gain: bool = False,
         coarse: int | None = None,
     ) -> None:
@@ -141,13 +108,10 @@ class TileOverlap:
         self.steps = None if steps is None else _ints(steps, 2)
         self.step = None if step is None else _ints(step, 1)
         self.axis = axis
-        self.weight = float(weight)
         self.fit_gain = bool(fit_gain)
         self.coarse = None if coarse is None else int(coarse)
         if self.coarse is not None and self.coarse < 2:
             raise ValueError("coarse must be an integer factor of at least 2")
-        if not self.weight >= 0:
-            raise ValueError("overlap weight must be non-negative")
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TileOverlap):
@@ -163,7 +127,6 @@ class TileOverlap:
             and same(self.steps, other.steps)
             and same(self.step, other.step)
             and self.axis == other.axis
-            and self.weight == other.weight
             and self.fit_gain == other.fit_gain
             and self.coarse == other.coarse
         )
@@ -175,8 +138,7 @@ class TileOverlap:
             v = getattr(self, name)
             if v is not None:
                 return (
-                    f"TileOverlap({name}={v.tolist()}, axis={self.axis!r}, "
-                    f"weight={self.weight}"
+                    f"TileOverlap({name}={v.tolist()}, axis={self.axis!r}"
                     + (", fit_gain=True" if self.fit_gain else "")
                     + (f", coarse={self.coarse}" if self.coarse else "")
                     + ")"
@@ -446,7 +408,6 @@ class Overlap:
 
     axis: int  # tile axis of the group-free data
     pairs: list  # [(i, j, shift)] of intersecting tiles, from the poses
-    weight: float
     threshold: float
     ntiles: int = 0
     fit_gain: bool = False
@@ -488,7 +449,6 @@ class Overlap:
         return cls(
             sub_axis,
             pairs,
-            float(spec.weight),
             float(threshold),
             ntiles=int(raw_shape[axis]),
             fit_gain=spec.fit_gain,
@@ -520,8 +480,6 @@ class Overlap:
         out = OverlapStats(
             ntiles=self.ntiles, fit_gain=self.fit_gain, dtype=dtype
         )
-        if not self.weight > 0:
-            return out
         sd = V.sqrt()
         for i, j, shift in self.pairs:
             sl = overlap_slices(shift, shape_o)
@@ -559,7 +517,7 @@ class Overlap:
                 if full:
                     vi, vj = Vi + gain * ri, Vj + gain * rj
                 var = vi / ri.square() + vj / rj.square()
-                w = torch.where(ok, self.weight / var, 0)
+                w = torch.where(ok, 1 / var, 0)
                 d = torch.where(ok, ri.log() - rj.log(), 0)
                 wd = w * d
                 acc[0] += w.sum(0, dtype=dtype)

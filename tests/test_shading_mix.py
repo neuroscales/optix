@@ -921,7 +921,7 @@ def test_overlap_stats_match_voxel_brute_force(full):
     V = 4 + torch.rand((H, W), generator=gen).double()
     logm = 0.1 * torch.randn((H, W), generator=gen).double()
     layout = Layout("xytz", spatial="yz")
-    spec = TileOverlap(positions=pos, axis="t", weight=1.7)
+    spec = TileOverlap(positions=pos, axis="t")
     ov = Overlap.build(spec, tuple(data.shape), layout, 1.5)
     st = ov.stats(data, layout, C, V, 2.0, full, dict(dtype=torch.float64))
     count, total, bound = _brute_overlap(
@@ -933,7 +933,7 @@ def test_overlap_stats_match_voxel_brute_force(full):
         2.0,
         full,
         1.5,
-        1.7,
+        1.0,
         logm,
     )
     assert 0 < st.count == count
@@ -961,7 +961,7 @@ def test_overlap_stats_match_voxel_brute_force(full):
             2.0,
             full,
             1.5,
-            1.7,
+            1.0,
             reconstruct(t, [by, bx]),
         )[2]
 
@@ -976,21 +976,6 @@ def test_overlap_stats_match_voxel_brute_force(full):
     d = 0.05 * torch.randn(6, generator=gen, dtype=torch.float64)
     pred = f(theta) + g @ d - 0.5 * d @ Hs @ d
     assert abs(f(theta + d.reshape(3, 2)) - pred) < 1e-8 * abs(pred) + 1e-8
-
-
-def test_overlap_weight_scales_the_term():
-    st1, logm, _ = _profiled_grid(fit_gain=False)
-    st2, _, _ = _profiled_grid(fit_gain=False, weight=2.5)
-    assert st1.count == st2.count
-    for k, (_, _, m1, *_) in st1.terms.items():
-        assert torch.allclose(st2.terms[k][2], 2.5 * m1)
-    zero = torch.zeros_like(logm)
-    assert math.isclose(st2.bound(zero), 2.5 * st1.bound(zero), rel_tol=1e-12)
-    from optix.basis import dct_basis
-
-    bases = [dct_basis(6, 3, dtype=torch.float64)] * 2
-    (H1, g1), (H2, g2) = st1.system(zero, bases), st2.system(zero, bases)
-    assert torch.allclose(H2, 2.5 * H1) and torch.allclose(g2, 2.5 * g1)
 
 
 def test_tile_pairs_scale_and_errors():
@@ -1156,7 +1141,7 @@ def test_overlap_with_groups_fits_each_group():
         assert torch.allclose(flat[k], ref, rtol=1e-4, atol=1e-6)
 
 
-def _profiled_grid(fit_gain=True, weight=1.0):
+def _profiled_grid(fit_gain=True):
     """Noise-free 2x2 grid of tiles with per-tile gains, and its stats."""
     gen = torch.Generator().manual_seed(0)
     H = W = 6
@@ -1176,7 +1161,7 @@ def _profiled_grid(fit_gain=True, weight=1.0):
     C = torch.zeros(H, W, dtype=torch.float64)
     V = torch.ones(H, W, dtype=torch.float64)
     layout = Layout(spatial=(-2, -1))
-    spec = TileOverlap(positions=pos, fit_gain=fit_gain, weight=weight)
+    spec = TileOverlap(positions=pos, fit_gain=fit_gain)
     ov = Overlap.build(spec, tiles.shape, layout, 0.0)
     st = ov.stats(tiles, layout, C, V, 1.0, False, dict(dtype=torch.float64))
     return st, logm, gains

@@ -382,28 +382,17 @@ class MixtureFit:
         shape = self.source.shape
         return tuple(int(shape[a]) for a in self._other)
 
-    def _cell_pass(
-        self,
-        elogpi: Tensor,
-        stats: Tensor,
-        counts: Tensor,
-        class_stats: Tensor,
-    ) -> Tensor:
-        """Local step on the voxels seen by several tiles; the bound.
+    def _cell_blocks(self) -> object:
+        """Blocks of the cells seen by several tiles, read from each tile.
 
-        Each cell (a box of the scene seen by the same S tiles) is read
-        from the S tiles in blocks along its first sample axis, and its
-        voxels are integrated with one shared signal. Per-observation
-        statistics go to the pixel of each tile (u-weighted ones times
-        gₜ, gₜ²), the class counts of a voxel are split over its pictures
-        by the posterior of its (uniform) owner, and the class statistics
-        and the bound are counted once per voxel.
+        Yields `(tiles, gains, pix, where, idx, Y, C, V, B)`: the tiles of
+        the cell, their gains, the pixel slices of each tile (layout
+        order), the per-sample index of each tile's pictures, the local
+        index of the block in each tile, and the `(S, n, h, w)`
+        observations with their offsets, variances and b = g·m.
         """
         ov, prm = self.overlap, self.param
-        sdt = self.state_dtype
-        bound = torch.zeros((), dtype=sdt, device=prm.C.device)
         sp, rest = self._sp, self._rest
-        sample_axes = self._sample_axes
         loga = self._log_tile_gain()
         for cell in ov.scene.cells:
             S = len(cell.tiles)
@@ -441,30 +430,144 @@ class MixtureFit:
                 where = []  # per tile, its pictures in the per-sample state
                 for t, loc in zip(cell.tiles, idx, strict=True):
                     w = []
-                    for a in sample_axes:
+                    for a in self._sample_axes:
                         if a == self._other_axis_of_tile:
                             w.append(t)
                         else:
                             w.append(loc[self._other.index(a)])
                     where.append(tuple(w))
-                ep = torch.stack(
-                    [elogpi[w].reshape(-1, self.nclass + 1) for w in where]
-                )
-                st, bnd, cnt, cs = self._cell_chunk(Y, C, V, B, ep)
-                # statistics in terms of m: u-weighted ones times g, g²
-                g = gains.to(st)[:, None, None]
-                st[[XU, G1, WU, G2]] *= g
-                st[[AU, BU]] *= g.square()
-                for k, p in enumerate(pix):
-                    stats[(slice(None), *p)] += st[:, k]
-                    if prm.A is not None:
-                        self._gain_add(cell.tiles[k], st[:, k], p)
-                for k, w in enumerate(where):
-                    view = counts[w]
-                    counts[w] = view + cnt[k].reshape(view.shape)
-                class_stats += cs
-                bound += bnd
+                yield cell.tiles, gains, pix, where, idx, Y, C, V, B
+
+    def _cell_pass(
+        self,
+        elogpi: Tensor,
+        stats: Tensor,
+        counts: Tensor,
+        class_stats: Tensor,
+    ) -> Tensor:
+        """Local step on the voxels seen by several tiles; the bound.
+
+        Each cell (a box of the scene seen by the same S tiles) is read
+        from the S tiles in blocks along its first sample axis, and its
+        voxels are integrated with one shared signal. Per-observation
+        statistics go to the pixel of each tile (u-weighted ones times
+        gₜ, gₜ²), the class counts of a voxel are split over its pictures
+        by the posterior of its (uniform) owner, and the class statistics
+        and the bound are counted once per voxel.
+        """
+        prm = self.param
+        bound = torch.zeros((), dtype=self.state_dtype, device=prm.C.device)
+        for tiles, gains, pix, where, _, Y, C, V, B in self._cell_blocks():
+            ep = torch.stack(
+                [elogpi[w].reshape(-1, self.nclass + 1) for w in where]
+            )
+            st, bnd, cnt, cs = self._cell_chunk(Y, C, V, B, ep)
+            # statistics in terms of m: u-weighted ones times g, g²
+            g = gains.to(st)[:, None, None]
+            st[[XU, G1, WU, G2]] *= g
+            st[[AU, BU]] *= g.square()
+            for k, p in enumerate(pix):
+                stats[(slice(None), *p)] += st[:, k]
+                if prm.A is not None:
+                    self._gain_add(tiles[k], st[:, k], p)
+            for k, w in enumerate(where):
+                view = counts[w]
+                counts[w] = view + cnt[k].reshape(view.shape)
+            class_stats += cs
+            bound += bnd
         return bound
+
+    def scene_posterior(
+        self,
+        alpha: Tensor,
+        *,
+        out: object,
+        out_mean: object,
+        per_class: bool,
+    ) -> None:
+        """Class probabilities (and E[u | y]) of the training mosaic.
+
+        As `posterior` with fixed q(π) (`alpha`), but every observation of
+        a voxel seen by several tiles gets the joint posterior of that
+        voxel (shared class and signal, owner-mixture prior), and tile t
+        has the flat field b = gₜ·m.
+        """
+        from ...io._arrays import store
+
+        mean = out_mean is not None
+        nk = self.nclass
+        elogpi = self._elogpi(alpha)
+        gains = self.param.A is not None
+        for chunk in self.frames():
+            y = chunk.data
+            M = None
+            if gains:
+                g = self.param.A[self._frame_tiles(chunk)].exp()
+                M = self.param.M * g[:, None, None]
+            logbg, logfg, EU = self.class_loglik(y, mean, M)
+            ep = elogpi[chunk.samples].reshape(-1, nk + 1)
+            logbg.add_(ep[:, -1, None, None])
+            logfg.add_(ep[:, :-1].T[..., None, None])
+            self._store_posterior(chunk.store, logbg, logfg, EU, out,
+                                  out_mean, per_class)  # fmt: skip
+        perm = self._rest + self._sp
+        inv = [perm.index(a) for a in range(len(perm))]
+        for tiles, _, _, where, idx, Y, C, V, B in self._cell_blocks():
+            ep = torch.stack([elogpi[w].reshape(-1, nk + 1) for w in where])
+            logw = torch.logsumexp(ep, 0) - math.log(len(tiles))
+            logbg = (
+                (Y - C).square().add_(self.dq).div_(V).add_(V.log())
+                .add_(math.log(2 * math.pi)).sum(0).mul_(-0.5)
+            )  # fmt: skip
+            logfg, EU = [], []
+            for k in range(nk):
+                logp, suff, _ = self.component.loglik_shared(
+                    Y, C, V, B, self.param.gain, self.prior.params[k],
+                    dq=self.dq, full=self.full,
+                )  # fmt: skip
+                logfg.append(logp)
+                EU.append(suff[self.component.mean_index])
+            logbg.add_(logw[:, -1, None, None])
+            logfg = torch.stack(logfg).add_(logw[:, :-1].T[..., None, None])
+            EU = torch.stack(EU) if mean else None
+            shape = [idx[0][a].stop - idx[0][a].start for a in self._rest]
+
+            def put(
+                target: object,
+                value: Tensor,
+                idx: list = idx,
+                tiles: tuple = tiles,
+                shape: list = shape,
+            ) -> None:
+                v = value.reshape(*shape, *value.shape[-2:]).permute(inv)
+                for t, loc in zip(tiles, idx, strict=True):
+                    full = list(loc)
+                    full.insert(self._other_axis_of_tile, t)
+                    store(target, tuple(full), v)
+
+            self._store_posterior(put, logbg, logfg, EU, out, out_mean,
+                                  per_class)  # fmt: skip
+
+    @staticmethod
+    def _store_posterior(
+        put: Callable,
+        logbg: Tensor,
+        logfg: Tensor,
+        EU: Tensor | None,
+        out: object,
+        out_mean: object,
+        per_class: bool,
+    ) -> None:
+        logtissue = torch.logsumexp(logfg, 0)
+        logZ = torch.logaddexp(logtissue, logbg)
+        z = logfg.sub(logZ).exp_()
+        if per_class or out is None:
+            for k, target in enumerate(out or ()):
+                put(target, z[k])
+        else:
+            put(out, logtissue.sub_(logZ).exp_())
+        if EU is not None:
+            put(out_mean, z.mul_(EU).sum(0))
 
     def _cell_chunk(
         self, Y: Tensor, C: Tensor, V: Tensor, B: Tensor, elogpi: Tensor
@@ -1339,7 +1442,7 @@ class MixtureFit:
 
     # -- responsibilities --------------------------------------------------
     def class_loglik(
-        self, Y: Tensor, mean: bool
+        self, Y: Tensor, mean: bool, M: Tensor | None = None
     ) -> tuple[Tensor, Tensor, Tensor | None]:
         """log p(y | background), log p(y | z = k), and E[u | y, z = k]."""
         prm = self.param
@@ -1355,7 +1458,7 @@ class MixtureFit:
         )
         logfg, EU = [], []
         for k in range(self.nclass):
-            logpY, suff, _ = self._loglik(Y, k)
+            logpY, suff, _ = self._loglik(Y, k, M)
             logfg.append(logpY)
             if mean:
                 EU.append(suff[self.component.mean_index])

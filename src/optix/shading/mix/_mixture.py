@@ -160,31 +160,27 @@ class GammaMixture(Estimator):
 
     Overlapping tiles. When the pictures are tiles of a mosaic whose
     neighbours overlap (`overlap`, a
-    [`TileOverlap`][optix.shading.mix.TileOverlap] of integer
-    tile positions), a voxel seen in two tiles at positions p and p − s of
-    the field of view has the same signal u in both, so the log-ratio of
-    its excesses, d = log(yᵢ − c) − log(yⱼ − c), measures
-    log m(p) − log m(p − s) whatever u. The bound gains the
-    composite-likelihood term −½ ∑ w·(d − log m(p) + log m(p − s))² over
-    the voxels that are tissue in both tiles (more than `threshold`
-    background standard deviations above c), with the delta-method
-    weight w = 1 / (Var yᵢ / (yᵢ − c)² + Var yⱼ / (yⱼ − c)²). It is a
-    quadratic in θ, added to the system of the θ step (and to the
-    initial moment fit of the flat field). d and w are computed once
-    from the initial c and v (whose background quantiles depend on
-    `bg_fraction`) and frozen for the rest of the fit, so an error in
-    the initial offset biases d and is not undone by later updates of c.
-    This identifies the flat field even where the mean signal of
-    the scene depends on the position in the tiles.
+    [`TileOverlap`][optix.shading.mix.TileOverlap] of integer tile
+    positions), a scene voxel seen by several tiles has one class and one
+    signal u shared by all of them: tile t sees y = c + b_t·u + noise at
+    the matching pixel, with b_t = m (or g_t·m with per-tile gains). Its
+    term of the bound integrates the product of the tile likelihoods over
+    u in one quadrature, with the class prior of a uniformly chosen owner
+    among its pictures; a voxel seen once is the single-picture term. The
+    flat field is thereby constrained by the same scene structure seen at
+    different places of the field of view, even where the mean signal
+    depends on the position in the tiles. The log-ratios of matched
+    excesses only initialise the flat field (and the gains).
 
-    With `TileOverlap(fit_gain=True)` the overlap term also fits a gain
-    g_t per tile (effective flat g_t·m, residual
-    d − Δ log m − (log gᵢ − log gⱼ)), profiled out in closed form at each
-    θ; a uniform per-tile fade (bleaching, lamp drift) is then not
-    mistaken for a ramp of m. The price: a linear log m is
-    indistinguishable from such gains, so the linear part of log m along
-    the tile steps is left to the mixture term. The gains are reported
-    as `tile_gain_` and affect nothing else.
+    With `TileOverlap(fit_gain=True)`, each tile t also has a gain g_t
+    (flat field g_t·m), so that a uniform per-tile fade (bleaching, lamp
+    drift) is not mistaken for a ramp of m. log g_t is a per-tile constant
+    column of the θ system; its common scale is that of the class means
+    (geometric mean of the gains one over the tiles that overlap another;
+    a tile that overlaps none keeps g = 1). A linear log m along the tile
+    steps is then identified only through the class prior (it is nearly
+    equivalent to gains ∝ exp of the tile position). Such fits stop on the
+    Newton decrement of the parameter step.
 
     The gain g is held at its nominal value (`gain`, or the gain of an
     initial [`SensorEstimate`][optix.estimates.SensorEstimate]): in this
@@ -231,13 +227,11 @@ class GammaMixture(Estimator):
     quantization_ : Tensor
         `(*group,)` width Δ of the quantisation bins used by the fit.
     tile_gain_ : Tensor or None
-        `(*group, ntiles)` per-tile gains g_t of the overlap term, when
-        it fits them (`TileOverlap(fit_gain=True)`); None otherwise.
-        Geometric mean one within each connected group of overlapping
-        tiles, and 1 for a tile that overlaps no other. They are
-        nuisance parameters of the overlap term only: the flat field,
-        the mixture term and `predict` do not include them (to equalise
-        the tiles, divide tile t by g_t).
+        `(*group, ntiles)` per-tile gains g_t (tile t has the flat field
+        g_t·m), with `TileOverlap(fit_gain=True)`; None otherwise.
+        Geometric mean one over the tiles that overlap another, 1 for a
+        tile that overlaps none. `predict` and the default `apply` use m
+        alone; `apply(..., tile_gain=True)` divides tile t by g_t.
 
     Examples
     --------
@@ -376,7 +370,7 @@ class GammaMixture(Estimator):
             absolute positions (tile axis 0). Every pair of tiles whose
             boxes intersect contributes. The tile axis must be a sample
             axis; the same translations apply to every group. Default
-            None: the pictures are independent (no overlap term).
+            None: the pictures are independent.
             `TileOverlap(fit_gain=True)` also fits a gain per tile
             (see `tile_gain_`).
         faithful : bool
@@ -751,7 +745,12 @@ class GammaMixture(Estimator):
             raise RuntimeError("GammaMixture is not fitted: call fit first")
 
     def _group_model(
-        self, g: tuple, source: ArrayLike, layout: Layout, backend: dict
+        self,
+        g: tuple,
+        source: ArrayLike,
+        layout: Layout,
+        backend: dict,
+        overlap: Overlap | None = None,
     ) -> MixtureFit:
         """Model of group `g` with the fitted parameters."""
         sensor = self.estimates["sensor"].to(**backend)
@@ -769,7 +768,10 @@ class GammaMixture(Estimator):
             alpha=classes.concentration[g],
             gain=gain,
             quantization=quantization,
+            overlap=overlap,
         )
+        if model.param.A is not None and self.tile_gain_ is not None:
+            model.param.A = self.tile_gain_[g].to(**backend).log()
         _, _, spatial = layout.shape_of(source)
         maps = (*classes.concentration.shape[: len(g)], *spatial)
         prm, prior = model.param, model.prior
@@ -864,6 +866,7 @@ class GammaMixture(Estimator):
         mean: bool = False,
         out: WritableArrayLike | None = None,
         out_mean: WritableArrayLike | None = None,
+        joint: bool = False,
     ) -> tuple[WritableArrayLike, WritableArrayLike | None]:
         """Posterior class probabilities of the training data.
 
@@ -885,6 +888,12 @@ class GammaMixture(Estimator):
             background), of the shape of `data`.
         out, out_mean : writable array-like, optional
             Outputs (tensor, numpy, zarr, ...). Default: new tensors.
+        joint : bool
+            With overlapping tiles (`overlap`), use the fitted scene model:
+            every observation of a voxel seen by several tiles gets the
+            joint posterior of that voxel (one class and one signal for
+            all its tiles), and tile t has the flat field gₜ·m. Default
+            False: each picture on its own, with m.
 
         Returns
         -------
@@ -893,6 +902,8 @@ class GammaMixture(Estimator):
         """
         self._fitted()
         alpha = self.concentration_
+        if joint and self.options["overlap"] is not None:
+            return self._classify_joint(data, per_class, mean, out, out_mean)
         raw = data.array if isinstance(data, Labeled) else data
         layout = data.layout if isinstance(data, Labeled) else self.layout
         layout = layout or Layout.default(len(raw.shape), 2)
@@ -914,6 +925,57 @@ class GammaMixture(Estimator):
             tol=0.0,
         )
         return z, u
+
+    def _classify_joint(
+        self,
+        data: ArrayLike,
+        per_class: bool,
+        mean: bool,
+        out: WritableArrayLike | None,
+        out_mean: WritableArrayLike | None,
+    ) -> tuple[WritableArrayLike, WritableArrayLike | None]:
+        if not isinstance(data, Labeled):
+            data = self._labeled(data, self.layout)
+        raw, layout = self._split(data)
+        backend = self._backend(data)
+        nclass = int(self.options["nclass"])
+        shape = tuple(int(n) for n in raw.shape)
+        out = prepare_out(
+            out,
+            (nclass, *shape) if per_class else shape,
+            like=raw,
+            dtype=self.dtype,
+        )
+        if mean:
+            out_mean = prepare_out(out_mean, shape, like=raw, dtype=self.dtype)
+        overlap = Overlap.build(
+            self.options["overlap"],
+            shape,
+            layout,
+            threshold=float(self.options["threshold"]),
+        )
+        gpos, groups, _ = self._groups(raw, layout)
+        sub = _drop_groups(layout, len(shape))
+        alpha = self.concentration_.to(**backend)
+        for g in groups:
+            fixed = dict(zip(gpos, g, strict=True))
+            source = _fix(raw, fixed)
+            model = self._group_model(g, source, sub, backend, overlap)
+            if per_class:
+                shifted = {a + 1: i for a, i in fixed.items()}
+                target = [_fix(out, {0: k, **shifted}) for k in range(nclass)]
+            else:
+                target = _fix(out, fixed)
+            model.scene_posterior(
+                alpha[g],
+                out=target,
+                out_mean=_fix(out_mean, fixed) if mean else None,
+                per_class=per_class,
+            )
+        flush(out)
+        if mean:
+            flush(out_mean)
+        return out, out_mean if mean else None
 
     def predict(
         self,
@@ -970,6 +1032,7 @@ class GammaMixture(Estimator):
         out: WritableArrayLike | None = None,
         *,
         output: str = "corrected",
+        tile_gain: bool = False,
     ) -> WritableArrayLike:
         """Correct the data, or classify them with the fitted model.
 
@@ -996,6 +1059,11 @@ class GammaMixture(Estimator):
             The probabilities and the mean are those of
             [`predict`][optix.shading.GammaMixture.predict], with its
             defaults.
+        tile_gain : bool
+            `"corrected"` only: also divide tile t by its fitted gain gₜ
+            (`tile_gain_`, with `TileOverlap(fit_gain=True)`), which
+            equalises the tiles of the training mosaic: x = (y − c)/(gₜ·m).
+            `data` must then have the tile axis of the fit. Default False.
 
         Returns
         -------
@@ -1008,7 +1076,7 @@ class GammaMixture(Estimator):
             data = self._labeled(data, self.layout)
         with torch.no_grad():
             if output == "corrected":
-                return self._apply(data, out)
+                return self._apply(data, out, tile_gain=tile_gain)
             if output == "mean":
                 _, mean, _ = self._responsibilities(
                     data,
@@ -1028,9 +1096,12 @@ class GammaMixture(Estimator):
             return z
 
     def _apply(
-        self, data: ArrayLike, out: WritableArrayLike | None
+        self,
+        data: ArrayLike,
+        out: WritableArrayLike | None,
+        tile_gain: bool = False,
     ) -> WritableArrayLike:
-        """Corrected data (y − c) / m."""
+        """Corrected data (y − c) / m, or (y − c) / (gₜ·m)."""
         self._fitted()
         shading = self.estimates["shading"]
         layout = self._layout_of(data)
@@ -1042,13 +1113,45 @@ class GammaMixture(Estimator):
                 f"has {fitted}"
             )
         flat, dark = shading.flat, shading.dark
+        gains = None
+        if tile_gain:
+            if self.tile_gain_ is None:
+                raise ValueError(
+                    "tile_gain=True needs fitted tile gains "
+                    "(TileOverlap(fit_gain=True))"
+                )
+            gains, ti = self.tile_gain_, self._tile_sample_index(data)
 
         def fn(chunk: object, batch: Tensor) -> Tensor:
-            return batch.sub_(dark[chunk.group].to(batch)).div_(
+            batch = batch.sub_(dark[chunk.group].to(batch)).div_(
                 flat[chunk.group].to(batch)
             )
+            if gains is not None:
+                shape = chunk.sample_shape
+                start = chunk.samples[ti].start or 0
+                t = torch.arange(start, start + shape[ti])
+                view = [1] * len(shape)
+                view[ti] = shape[ti]
+                t = t.reshape(view).expand(shape).reshape(-1)
+                g = gains[chunk.group].to(batch)[t.to(batch.device)]
+                batch = batch.div_(g[:, None, None])
+            return batch
 
         return self._apply_frames(data, out, fn, overhead=1.0)
+
+    def _tile_sample_index(self, data: ArrayLike) -> int:
+        """Position of the tile axis among the sample axes of `data`."""
+        layout = self._layout_of(data)
+        ndim = len(data.shape)
+        _, sample, _ = layout.positions(ndim)
+        axis = self.options["overlap"]
+        axis = axis.axis if isinstance(axis, TileOverlap) else 0
+        if isinstance(axis, str):
+            axis = layout.axes.index(axis)
+        axis = int(axis) % ndim
+        if axis not in sample:
+            raise ValueError("the tile axis must be a sample axis of data")
+        return list(sample).index(axis)
 
     # -- state ---------------------------------------------------------------
     def _extra_state(self) -> dict[str, object]:

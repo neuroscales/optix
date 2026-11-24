@@ -129,9 +129,9 @@ with one component per non-tile axis in storage order (`(x, y, z)` above),
 as `overlap=TileOverlap(positions=...)`, or as the steps between
 consecutive tiles (`steps=`, or one `step=` for all of them, e.g.
 `step=(0, 64, 0)` for tiles 64 rows apart along `y`). Every pair of tiles
-whose boxes intersect is matched voxel by voxel, including a step along a
-sample axis such as `x` (which pairs frame `k` of one tile with frame
-`k − sx` of the other); tiles that do not touch are skipped.
+whose boxes intersect shares the signal of their common voxels, including
+a step along a sample axis such as `x` (frame `k` of one tile is frame
+`k − sx` of the other); tiles that do not touch are independent.
 
 An axis can also be given by position instead of by name, which is how the
 default layout works (`spatial=(-2, -1)`), and `Layout` checks the roles
