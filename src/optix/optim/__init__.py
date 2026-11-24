@@ -6,9 +6,10 @@ regularised estimators (for example
 [`Ikoma`][optix.deconv.Ikoma]).
 
 - Proximity operators: `prox_box`, `prox_group_l2`, `project_group_l2`,
-  `prox_squared_l2`, `prox_shifted_poisson`, `prox_conjugate`.
-- Functions pairing a value and a prox: `Box`, `GroupL2`, `SquaredL2`,
-  `ShiftedPoisson`.
+  `prox_schatten` (with `schatten_norm`), `prox_squared_l2`,
+  `prox_shifted_poisson`, `prox_conjugate`.
+- Functions pairing a value and a prox: `Box`, `GroupL2`, `Schatten`,
+  `SquaredL2`, `ShiftedPoisson`.
 - Linear operators: the protocols `LinearOperator` (forward, adjoint,
   norm2) and `Circulant` (adds the Fourier symbols); `Identity`,
   `Convolution` (a transfer function), the finite differences `diff`,
@@ -18,7 +19,14 @@ regularised estimators (for example
 
 from ._admm import AdmmResult, Term, admm_fft
 from ._diff import Gradient, Hessian, diff, diff_adjoint, rfft_frequencies
-from ._functions import Box, Function, GroupL2, ShiftedPoisson, SquaredL2
+from ._functions import (
+    Box,
+    Function,
+    GroupL2,
+    Schatten,
+    ShiftedPoisson,
+    SquaredL2,
+)
 from ._operators import (
     Circulant,
     Convolution,
@@ -31,8 +39,10 @@ from ._prox import (
     prox_box,
     prox_conjugate,
     prox_group_l2,
+    prox_schatten,
     prox_shifted_poisson,
     prox_squared_l2,
+    schatten_norm,
 )
 
 __all__ = [
@@ -46,6 +56,7 @@ __all__ = [
     "Hessian",
     "Identity",
     "LinearOperator",
+    "Schatten",
     "ShiftedPoisson",
     "SquaredL2",
     "Term",
@@ -57,7 +68,9 @@ __all__ = [
     "prox_box",
     "prox_conjugate",
     "prox_group_l2",
+    "prox_schatten",
     "prox_shifted_poisson",
     "prox_squared_l2",
     "rfft_frequencies",
+    "schatten_norm",
 ]

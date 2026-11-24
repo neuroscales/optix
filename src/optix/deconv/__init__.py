@@ -5,10 +5,12 @@ Richardson–Lucy for Poisson counts, its acceleration by Biggs & Andrews
 background counts, read noise) and its total-variation regularisation by
 Dey et al. (2006); multiview deconvolution of registered views by
 Preibisch et al. (2014); the linear Wiener and Tikhonov filters; the
-regularised shifted-Poisson deconvolution of Ikoma et al. (2018), solved by
-ADMM. Spatially variant blur: the PSF models of Nagy & O'Leary (1998) and
-Denis et al. (2015), usable as the PSF of the Richardson–Lucy family, and the
-preconditioned conjugate-gradient restoration of Nagy & O'Leary.
+regularised shifted-Poisson deconvolution of Ikoma et al. (2018) and the
+Hessian Schatten-norm Poisson deconvolution of Lefkimmiatis & Unser (2013),
+both solved by ADMM. Spatially variant blur: the PSF models of Nagy &
+O'Leary (1998) and Denis et al. (2015), usable as the PSF of the
+Richardson–Lucy family, and the preconditioned conjugate-gradient
+restoration of Nagy & O'Leary.
 
 Building blocks (FFT convolution with padding, the shift-variant
 operator, the Richardson–Lucy update, the Biggs–Andrews acceleration
@@ -17,6 +19,7 @@ parameter, the back projectors) are in `optix.deconv.utils`.
 
 from . import utils
 from ._ba import BiggsAndrews, biggs_andrews
+from ._hspiral import HSPIRAL, hspiral
 from ._ikoma import Ikoma, ikoma
 from ._linear import Tikhonov, Wiener, tikhonov, wiener
 from ._multiview import MultiviewRL, multiview_rl
@@ -29,6 +32,7 @@ from ._wb import WienerButterworth, wiener_butterworth
 
 __all__ = [
     "BiggsAndrews",
+    "HSPIRAL",
     "Ikoma",
     "DenisPSF",
     "NagyOLeary",
@@ -41,6 +45,7 @@ __all__ = [
     "Wiener",
     "WienerButterworth",
     "biggs_andrews",
+    "hspiral",
     "ikoma",
     "nagy_oleary",
     "multiview_rl",

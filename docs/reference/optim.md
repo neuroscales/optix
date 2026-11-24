@@ -17,6 +17,8 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - prox_box
         - prox_group_l2
         - project_group_l2
+        - prox_schatten
+        - schatten_norm
         - prox_squared_l2
         - prox_shifted_poisson
         - prox_conjugate
@@ -32,6 +34,7 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - Function
         - Box
         - GroupL2
+        - Schatten
         - SquaredL2
         - ShiftedPoisson
 

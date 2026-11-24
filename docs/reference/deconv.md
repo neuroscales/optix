@@ -20,6 +20,7 @@ Deconvolution with a known point spread function.
         - Wiener
         - Tikhonov
         - Ikoma
+        - HSPIRAL
 
 ## Shift-variant PSF models
 
@@ -49,6 +50,7 @@ Deconvolution with a known point spread function.
         - wiener
         - tikhonov
         - ikoma
+        - hspiral
 
 ## Utilities
 

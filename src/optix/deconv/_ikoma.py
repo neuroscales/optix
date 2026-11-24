@@ -1,7 +1,6 @@
 """Ikoma et al. (2018): shifted-Poisson deconvolution with a Hessian prior."""
 
 import math
-import warnings
 from collections.abc import Sequence
 
 import torch
@@ -9,7 +8,7 @@ from torch import Tensor
 
 from .._estimator import Tags, _same
 from ..estimates import SensorEstimate, ShadingEstimate
-from ..io import ArrayLike, Chunk, Labeled, Layout, WritableArrayLike
+from ..io import ArrayLike, Layout, WritableArrayLike
 from ..optim import (
     Box,
     Convolution,
@@ -366,75 +365,6 @@ class Ikoma(_Variational):
         plane = psf.sum(dim=(-2, -1), keepdim=True)
         return torch.where(plane > 0, psf / plane.clamp(min=1e-300), 0)
 
-    def _init_from(self, init: object, shape: tuple, like: object) -> None:
-        self.sensor = self._pick(init, SensorEstimate, shape=shape, like=like)
-        self.shading = self._pick(
-            init, ShadingEstimate, shape=shape, like=like
-        )
-        self._warn_unused(init, SensorEstimate, ShadingEstimate)
-        if self.shading is not None and self.shading.baseline is not None:
-            warnings.warn(
-                "Ikoma ignores the per-frame baseline of the shading estimate",
-                RuntimeWarning,
-                stacklevel=4,
-            )
-        self.is_faithful = self._faithful_options
-
-    def _maps(self, data: Labeled, backend: dict) -> dict[str, Tensor | None]:
-        """Camera maps (data units), broadcast to `(*group, *spatial)`."""
-        shape = data.layout.map_shape(data.array)
-
-        def full(value: object) -> Tensor | None:
-            if value is None:
-                return None
-            return torch.broadcast_to(
-                torch.as_tensor(value).to(**backend), shape
-            )
-
-        sensor, shading = self.sensor, self.shading
-        out = {
-            name: full(None if sensor is None else getattr(sensor, name))
-            for name in ("offset", "gain", "variance")
-        }
-        flat = None if shading is None else shading.flat
-        if flat is not None:
-            flat = flat.to(**backend)
-            if (flat <= 0).any() or not flat.isfinite().all():
-                raise ValueError("The flat field must be finite and positive")
-            flat = flat / flat.median()
-        out["flat"] = full(flat)
-        out["dark"] = full(None if shading is None else shading.dark)
-        return out
-
-    def _prepare(self, chunk: Chunk, maps: dict) -> _Problem:
-        """Electrons ỹ (clipped at −σ̃²) and read noise σ̃²."""
-        index = chunk.group + self._region(chunk)
-
-        def at(name: str) -> Tensor | None:
-            value = maps[name]
-            return None if value is None else value[index]
-
-        y = chunk.data
-        dark = at("dark")
-        if dark is None:
-            dark = at("offset")
-        if dark is not None:
-            y = y - dark
-        flat = at("flat")
-        if flat is not None:
-            y = y / flat
-        gain = at("gain")
-        if gain is not None:
-            y = y / gain
-        var: Tensor | float = 0.0
-        v = at("variance")
-        if v is not None:
-            var = v if gain is None else v / gain.square()
-            if flat is not None:
-                var = var / flat.square()
-        y = torch.maximum(y, -torch.as_tensor(var).to(y))
-        return _Problem(y, variance=var)
-
     def _setup_images(self, psf: Tensor) -> None:
         opts = self.options
         peak = self.peak
@@ -523,21 +453,12 @@ class Ikoma(_Variational):
 
     def _extra_state(self) -> dict[str, object]:
         state = super()._extra_state()
-        sensor, shading = self.sensor, self.shading
-        state["sensor"] = None if sensor is None else sensor._payload()
-        state["shading"] = None if shading is None else shading._payload()
         state["nu"] = self.nu
         state["rho"] = self.rho
         return state
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
         super()._load_extra_state(state)
-        sensor = state.get("sensor")
-        if sensor is not None:
-            self.sensor = SensorEstimate._from_payload(sensor)
-        shading = state.get("shading")
-        if shading is not None:
-            self.shading = ShadingEstimate._from_payload(shading)
         self.nu = state.get("nu")
         self.rho = state.get("rho")
 
