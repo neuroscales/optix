@@ -393,6 +393,30 @@ Here $\boldsymbol{\omega}$ is a window on the patch, as the Kaiser window of the
 a block, and not an angular frequency; $w_{ij}$ is a weight between two pixels, not the pixel weights $\mathbf{w}_s$ of a
 shift-variant model; $\mathbf{t}$ is an offset, not an iteration.
 
+## Noise correction of sCMOS images
+
+The symbols of [NCS](../algorithms/denoise/ncs.md). The data in electrons
+$\tilde{\mathbf{y}}$ and the read-noise variance in electrons² $\tilde\sigma^2$ are
+those of the [Optimisation](#optimisation) section; the camera maps $\mathbf{o}$,
+$\mathbf{g}$, $\boldsymbol\sigma^2$ and the optics $\mathrm{NA}$, $\lambda_0$ are
+those of the sections on [image formation](#image-formation) and [optics](#optics).
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{x}$, $\hat{\mathbf{x}}$ | image in electrons that the camera sees (the paper's $\mu$, the effective photon count), and its estimate | the result of `ncs`, `apply` |
+| $d$ | pixel size in the object plane, in the unit of $\lambda_0$ (the paper's $\Delta$; not the dark field $\mathbf{d}$) | `pixel_size` |
+| $M$, $L$ | side of a segment, and of the padded segment, $L = M + 2$ (the paper also calls the mask $M$) | `segment`, `segment_bounds` |
+| $\mathbf{F}$, $\mathbf{k} = (k_x, k_y)$, $k_r$ | unitary 2-D discrete Fourier transform of a segment; spatial frequency in cycles per unit length and its modulus | `ncs_mask` |
+| $\mathbf{m}$, $\mathbf{Q}$ | OTF mask on the frequency grid (the paper's $M(k_x, k_y)$), between 0 and 1; $\mathbf{Q} = \mathbf{F}^{\dagger}\operatorname{diag}(\mathbf{m}^{\odot 2})\mathbf{F}$ | `ncs_mask`, `mask=` |
+| $\beta$, $T$, $k_{\mathrm{lo}}$, $k_{\mathrm{hi}}$ | roll-off and period of the raised-cosine mask, and the edges of its transition band, $(1 \mp \beta)/(2T)$; local to this section | `raised_cosine(beta, period)` |
+| $\mathrm{LL}_{\mathrm{s}}$, $E_{\mathrm{N}}$ | simplified negative log-likelihood (shifted Poisson) and noise contribution outside the OTF (the paper's $LL_S$ and $\sigma_N$) | `ncs_objective` |
+| $J$, $\alpha$ | cost $\mathrm{LL}_{\mathrm{s}} + \alpha E_{\mathrm{N}}$ (the paper's $f$), and the weight of the noise contribution | `ncs_objective`, `alpha` |
+
+Here $\alpha$ is a weight, not the semi-aperture of the objective or a Dirichlet
+concentration; $\beta$ is a roll-off, not a background level or the Kaiser
+parameter; $E_{\mathrm{N}}$ is an energy, and $\mathrm{LL}_{\mathrm{s}}$ a cost, not a
+distribution. The paper's $\gamma$ is $\tilde\sigma^2$ here, not a gain or a step size.
+
 ## Views
 
 | Symbol | Meaning | In code |
