@@ -2,7 +2,8 @@
 
 The stages, transforms, block matching and collaborative filters of
 BM3D and BM4D, the patch distances of non-local means, the default
-intensity range and the memory budget; the OTF mask, cost, solver and
+intensity range and the memory budget; the transform, thresholding
+functions and PURE system of PURE-LET; the OTF mask, cost, solver and
 segmentation of NCS.
 """
 
@@ -40,6 +41,7 @@ from ._nlm import (
     patch_kernel,
     search_offsets,
 )
+from ._purelet import PureSums, haar_uwt, let_basis, let_threshold
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -50,6 +52,7 @@ from ._transforms import (
 
 __all__ = [
     "NcsResult",
+    "PureSums",
     "Stage",
     "aggregate",
     "bior15_matrix",
@@ -62,8 +65,11 @@ __all__ = [
     "default_h",
     "filter_batch",
     "haar_matrix",
+    "haar_uwt",
     "hard_threshold",
     "kaiser_window",
+    "let_basis",
+    "let_threshold",
     "match_batch",
     "ncs_gradient",
     "ncs_mask",
