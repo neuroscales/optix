@@ -389,10 +389,11 @@ def nl_means(
         shifted copies of the image, sized from the memory budget of
         [`optix.config`][optix.config]. It runs on any torch device and,
         the offsets being accumulated one by one in a fixed order, does
-        not depend on the batch size (to rounding). The result at a pixel depends on the data
-        within [`nl_means_halo`][optix.denoise.nl_means_halo] pixels,
-        which [`NLMeans`][optix.denoise.NLMeans] uses to stream large
-        arrays in blocks.
+        not depend on the batch size (to rounding). The result at a
+        pixel depends on the data within
+        [`nl_means_halo`][optix.denoise.nl_means_halo] pixels, which
+        [`NLMeans`][optix.denoise.NLMeans] uses to stream large arrays
+        in blocks.
 
     !!! references "References"
         1. Buades A, Coll B, Morel J-M. *A non-local algorithm for image
