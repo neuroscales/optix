@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - NLMeans
 
 ## Transforms
 
@@ -23,6 +24,8 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - nl_means
+        - nl_means_halo
 
 ## Utilities
 
@@ -55,3 +58,7 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - patch_kernel
+        - search_offsets
+        - patch_distances
+        - offset_batch

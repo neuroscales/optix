@@ -1,7 +1,8 @@
 """Building blocks of `optix.denoise` (no stability promise).
 
 The stages, transforms, block matching and collaborative filters of
-BM3D and BM4D, the default intensity range and the memory budget.
+BM3D and BM4D, the patch distances of non-local means, the default
+intensity range and the memory budget.
 """
 
 from ._bm3d import clean_range
@@ -21,6 +22,7 @@ from ._engine import (
     stage_halo,
     wiener,
 )
+from ._nlm import offset_batch, patch_distances, patch_kernel, search_offsets
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -44,9 +46,13 @@ __all__ = [
     "hard_threshold",
     "kaiser_window",
     "match_batch",
+    "offset_batch",
+    "patch_distances",
+    "patch_kernel",
     "patch_spectra",
     "reference_grid",
     "run_stage",
+    "search_offsets",
     "stage_halo",
     "transform_matrix",
     "wiener",
