@@ -1,7 +1,8 @@
 """Building blocks of `optix.denoise` (no stability promise).
 
 The stages, transforms, block matching and collaborative filters of
-BM3D and BM4D, the default intensity range and the memory budget.
+BM3D and BM4D, the default intensity range and the memory budget; the
+total-variation solver of ROF.
 """
 
 from ._bm3d import clean_range
@@ -28,9 +29,11 @@ from ._transforms import (
     kaiser_window,
     transform_matrix,
 )
+from ._tv import TVResult, tv_denoise
 
 __all__ = [
     "Stage",
+    "TVResult",
     "aggregate",
     "bior15_matrix",
     "block_match",
@@ -49,5 +52,6 @@ __all__ = [
     "run_stage",
     "stage_halo",
     "transform_matrix",
+    "tv_denoise",
     "wiener",
 ]

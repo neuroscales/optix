@@ -10,6 +10,7 @@ from ..special import poisson_normal_logpdf, poisson_normal_ratio
 from ._prox import (
     _packed_ndim,
     _schatten_p,
+    project_l2_ball,
     prox_box,
     prox_group_l2,
     prox_schatten,
@@ -22,6 +23,7 @@ __all__ = [
     "Box",
     "Function",
     "GroupL2",
+    "L2Ball",
     "PoissonGaussian",
     "Schatten",
     "ShiftedPoisson",
@@ -96,6 +98,50 @@ class Box:
     def prox(self, v: Tensor, t: float) -> Tensor:
         """Projection onto the box (any t)."""
         return prox_box(v, self.lower, self.upper)
+
+
+class L2Ball:
+    """Indicator function of the weighted ℓ2 ball ∑ⱼ wⱼ (zⱼ − cⱼ)² ≤ r².
+
+    0 inside, +∞ outside. With z an image and c the data, this is the
+    discrepancy constraint of Rudin, Osher & Fatemi (1992, Eq. 2.3c).
+    """
+
+    def __init__(
+        self,
+        radius: float,
+        center: Tensor | float = 0.0,
+        weight: Tensor | float = 1.0,
+    ) -> None:
+        """Set the ball.
+
+        Parameters
+        ----------
+        radius : float
+            r ≥ 0.
+        center : Tensor or float
+            Centre c.
+        weight : Tensor or float
+            Weights w ≥ 0, broadcasting with c.
+        """
+        self.radius = float(radius)
+        if not self.radius >= 0:
+            raise ValueError(f"radius must be >= 0, got {radius}")
+        self.center = center
+        self.weight = weight
+
+    def value(self, z: Tensor) -> Tensor:
+        """0 inside the ball (to a relative 10⁻⁶ of r²), +inf outside."""
+        w = self.weight
+        if isinstance(w, Tensor):
+            w = w.double()
+        r = (z - self.center).double().square()
+        inside = float((w * r).sum()) <= self.radius**2 * (1 + 1e-6)
+        return torch.tensor(0.0 if inside else math.inf, dtype=torch.float64)
+
+    def prox(self, v: Tensor, t: float) -> Tensor:
+        """Projection onto the ball (any t; see `project_l2_ball`)."""
+        return project_l2_ball(v, self.radius, self.center, self.weight)
 
 
 class GroupL2:

@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - ROF
 
 ## Transforms
 
@@ -23,6 +24,7 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - rof
 
 ## Utilities
 
@@ -55,3 +57,5 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - tv_denoise
+        - TVResult

@@ -18,6 +18,7 @@ from ._spectral import (
 
 __all__ = [
     "project_group_l2",
+    "project_l2_ball",
     "project_schatten",
     "prox_box",
     "prox_conjugate",
@@ -116,6 +117,76 @@ def project_group_l2(
         Projected point.
     """
     return v * (radius / _group_norm(v, dim)).clamp(max=1)
+
+
+def project_l2_ball(
+    v: Tensor,
+    radius: float,
+    center: Tensor | float = 0.0,
+    weight: Tensor | float = 1.0,
+    *,
+    max_iter: int = 50,
+) -> Tensor:
+    """Projection onto the weighted ℓ2 ball ∑ⱼ wⱼ (zⱼ − cⱼ)² ≤ r².
+
+    The proximity operator of the indicator function of the ball, for
+    any step size. With e = v − c, the projection is (KKT conditions)
+
+        z = c + e / (1 + μw),
+
+    with μ = 0 if v is inside the ball, otherwise the root μ > 0 of the
+    decreasing convex function φ(μ) = ∑ⱼ wⱼ eⱼ² / (1 + μwⱼ)² − r².
+    With a scalar w this is the closed form z = c + e·r / (√w ‖e‖₂);
+    otherwise Newton's method on φ from μ = 0, which increases
+    monotonically to the root, stopped when φ(μ) ≤ 10⁻¹²·r² or after
+    `max_iter` steps (then the point is scaled radially onto the ball,
+    so the result is always feasible). The scalar reductions are in
+    float64.
+
+    Parameters
+    ----------
+    v : Tensor
+        Point.
+    radius : float
+        r ≥ 0.
+    center : Tensor or float
+        Centre c; broadcasts with `v`.
+    weight : Tensor or float
+        Weights w ≥ 0; broadcasts with `v`.
+    max_iter : int
+        Maximum number of Newton steps (non-scalar weights).
+
+    Returns
+    -------
+    Tensor
+        Projected point.
+    """
+    r2 = float(radius) ** 2
+    e = v - center
+    if not isinstance(weight, Tensor) or weight.numel() == 1:
+        w = float(weight)
+        norm2 = w * float(e.double().square().sum())
+        if norm2 <= r2:
+            return v.clone()
+        return center + e * math.sqrt(r2 / norm2)
+    we2 = (weight * e.square()).double()
+    w = weight.double()
+    mu = 0.0
+    phi = float(we2.sum()) - r2
+    if phi <= 0:
+        return v.clone()
+    for _ in range(max_iter):
+        den = 1 + mu * w
+        phi = float((we2 / den.square()).sum()) - r2
+        if phi <= 1e-12 * r2:
+            break
+        slope = float((-2 * w * we2 / den.pow(3)).sum())
+        mu -= phi / slope
+    z = e / (1 + mu * weight)
+    norm2 = float((weight * z.square()).double().sum())
+    if norm2 > r2:
+        z = z * math.sqrt(r2 / norm2)
+    return center + z
 
 
 def prox_squared_l2(

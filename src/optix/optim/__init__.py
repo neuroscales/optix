@@ -6,10 +6,12 @@ regularised estimators (for example
 [`Ikoma`][optix.deconv.Ikoma]).
 
 - Proximity operators: `prox_box`, `prox_group_l2`, `project_group_l2`,
+  `project_l2_ball`,
   `prox_schatten` (with `schatten_norm`), `project_schatten`,
   `prox_squared_l2`, `prox_shifted_poisson`, `prox_conjugate`; the
   iterative `prox_hessian_schatten` (with `HessianSchattenResult`).
-- Functions pairing a value and a prox: `Box`, `GroupL2`, `Schatten`,
+- Functions pairing a value and a prox: `Box`, `GroupL2`, `L2Ball`,
+  `Schatten`,
   `HessianSchatten`, `SquaredL2`, `ShiftedPoisson`; smooth functions
   (value, gradient, Lipschitz constant): the protocol `Smooth` and
   `PoissonGaussian`.
@@ -17,15 +19,18 @@ regularised estimators (for example
   norm2) and `Circulant` (adds the Fourier symbols); `Identity`,
   `Convolution` (a transfer function), the finite differences `diff`,
   `diff_adjoint`, `Gradient` and `Hessian`; `as_circulant`.
-- Solvers: `admm_fft`; `primal_dual` (with `primal_dual_step`).
+- Solvers: `admm_fft`; `primal_dual` (with `primal_dual_step`);
+  `chambolle_pock`.
 """
 
 from ._admm import AdmmResult, Term, admm_fft
+from ._chambolle_pock import chambolle_pock
 from ._diff import Gradient, Hessian, diff, diff_adjoint, rfft_frequencies
 from ._functions import (
     Box,
     Function,
     GroupL2,
+    L2Ball,
     PoissonGaussian,
     Schatten,
     ShiftedPoisson,
@@ -47,6 +52,7 @@ from ._operators import (
 from ._primal_dual import PrimalDualResult, primal_dual, primal_dual_step
 from ._prox import (
     project_group_l2,
+    project_l2_ball,
     project_schatten,
     prox_box,
     prox_conjugate,
@@ -69,6 +75,7 @@ __all__ = [
     "HessianSchatten",
     "HessianSchattenResult",
     "Identity",
+    "L2Ball",
     "LinearOperator",
     "PoissonGaussian",
     "PrimalDualResult",
@@ -79,11 +86,13 @@ __all__ = [
     "Term",
     "admm_fft",
     "as_circulant",
+    "chambolle_pock",
     "diff",
     "diff_adjoint",
     "primal_dual",
     "primal_dual_step",
     "project_group_l2",
+    "project_l2_ball",
     "project_schatten",
     "prox_box",
     "prox_conjugate",
