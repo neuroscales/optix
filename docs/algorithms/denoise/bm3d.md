@@ -633,9 +633,10 @@ final estimate with the truth.
 ```
 
 The estimator form streams the image in blocks with a halo, and gives the
-whole-image result. Here a $150 \times 170$ image is cut into blocks of
-$31 \times 37$ pixels; `search=9` only shortens the example, and reduces the halo
-from 90 to 30 pixels.
+whole-image result: exactly in float64, and to rounding in float32, where
+the order in which the blocks are summed can move a value by one ulp. Here a
+$150 \times 170$ image is cut into blocks of $31 \times 37$ pixels; `search=9`
+only shortens the example, and reduces the halo from 90 to 30 pixels.
 
 ```pycon
 >>> big = 255 * phantoms.filaments((150, 170), intensity=1.0, seed=1)
@@ -644,7 +645,8 @@ from 90 to 30 pixels.
 >>> est.halo()
 30
 >>> out = est.apply(noisy_big)  # 25 blocks
->>> bool(torch.equal(out, bm3d(noisy_big, sigma=20, data_range=255, search=9)))
+>>> ref = bm3d(noisy_big, sigma=20, data_range=255, search=9)
+>>> bool((out - ref).abs().max() < 1e-3)
 True
 ```
 

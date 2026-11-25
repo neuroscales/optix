@@ -646,7 +646,10 @@ def test_blocks_interior_edges(dtype):
     assert len(shapes) == 25
     assert min(s[0] for s in shapes) < 150 and min(s[1] for s in shapes) < 170
     expected = bm3d(z, 20, data_range=255, search=9)
-    torch.testing.assert_close(out, expected, rtol=0, atol=1e-9)
+    # float64 is exact; in float32 the aggregation order of the blocks can
+    # move a sum by 1 ulp (7.6e-6 at 100 seen on CI), so allow a few ulps.
+    atol = 1e-9 if dtype == torch.float64 else 4 * torch.finfo(dtype).eps * 255
+    torch.testing.assert_close(out, expected, rtol=0, atol=atol)
 
 
 def test_halo_is_tight():
