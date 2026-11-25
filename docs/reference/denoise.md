@@ -11,6 +11,7 @@
         - BM3D
         - BM4D
         - NCS
+        - ACsN
         - PURELET
         - NLMeans
 
@@ -28,6 +29,8 @@
         - bm4d_halo
         - ncs
         - ncs_halo
+        - acsn
+        - acsn_halo
         - pure_let
         - pure_let_halo
         - nl_means
@@ -72,6 +75,14 @@
         - ncs_solve
         - NcsResult
         - segment_bounds
+        - acsn_profile
+        - acsn_noise
+        - otf_cutoff
+        - highpass
+        - noise_ratio
+        - sigma_from_highpass
+        - quality_score
+        - temporal_psnr
         - haar_uwt
         - let_threshold
         - let_basis
