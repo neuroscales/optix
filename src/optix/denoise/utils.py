@@ -22,7 +22,13 @@ from ._engine import (
     stage_halo,
     wiener,
 )
-from ._nlm import offset_batch, patch_distances, patch_kernel, search_offsets
+from ._nlm import (
+    default_h,
+    offset_batch,
+    patch_distances,
+    patch_kernel,
+    search_offsets,
+)
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -37,6 +43,7 @@ __all__ = [
     "bior15_matrix",
     "block_match",
     "block_overhead",
+    "default_h",
     "bm3d_profile",
     "bm4d_profile",
     "clean_range",

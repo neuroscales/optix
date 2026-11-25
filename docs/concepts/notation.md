@@ -385,7 +385,7 @@ values; unlike a block of BM3D, it is indexed by its centre.
 | $N_S$, $W_i$ | side of the search window; search window of pixel $i$, clipped to the image | `search` |
 | $\boldsymbol{\omega}$, $a$ | Gaussian window on the patch and its standard deviation in pixels; the sum of $\boldsymbol{\omega}$ is $K$ (`kernel_norm="mean"`) or 1 (`"sum"`) | `patch_kernel`, `a`, `kernel_norm` |
 | $d_{ij}$ | $\boldsymbol{\omega}$-weighted squared distance between the patches at $i$ and $j$ | `patch_distances` |
-| $h$ | filtering parameter of the weights $\exp(-d_{ij}/h^2)$, in the units of the data (default $10\sigma$); local to this section (the PSF or the grid spacing elsewhere) | `h` |
+| $h$ | filtering parameter of the weights $\exp(-d_{ij}/h^2)$, in the units of the data (default $10\sigma\sqrt{K/49}$, $10\sigma$ for $7 \times 7$ patches); local to this section (the PSF or the grid spacing elsewhere) | `h` |
 | $w_{ij}$, $Z_i$ | weight of pixel $j$ (an index of pixels here, of basis functions elsewhere) in the estimate of $i$, and its normalising constant, $\sum_j w_{ij} = 1$ | |
 | $\mathbf{t}$ | offset in the search window, $j = i + \mathbf{t}$ | `search_offsets` |
 

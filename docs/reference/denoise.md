@@ -59,6 +59,7 @@
         - dct_matrix
         - kaiser_window
         - patch_kernel
+        - default_h
         - search_offsets
         - patch_distances
         - offset_batch

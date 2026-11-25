@@ -70,8 +70,7 @@ image is the latent image plus white Gaussian noise:
 | $\sigma$ | $\sigma$ | noise standard deviation, in the units of the data | scalar, one per call (one per fit) |
 | $\Omega$ | $I$ | pixel (voxel) grid, 2D or 3D | $\lvert\Omega\rvert = HW$ or $DHW$ |
 
-The paper calls the noisy image $v$ and the noise-free one $u$: the reverse of
-the letters of optix, where $\mathbf{y}$ is what the camera recorded. Images of a
+The paper calls the noisy image $v$ and the noise-free one $u$. Images of a
 stack, or of different groups, are denoised one by one, each with the same
 $\sigma$.
 
@@ -148,6 +147,11 @@ and the paper's own:
     = \bigl(G_a * \lvert v(i + \cdot) - v(j + \cdot)\rvert^2\bigr)(0)
     $$
 
+    The weights are those of Section 3; the convolution form of the distance is
+    the continuous formula of Section 1, Section 3 naming only the weighted norm.
+    The paper prints $\lVert v(N_i) - v(N_i)\rVert_{2,a}^2$ in $Z(i)$; $N_j$ is
+    meant, as written here.
+
 | optix | Buades et al. 2005 | Meaning | Shape |
 |---|---|---|---|
 | $\hat{x}_i$ | $NL[v](i)$ | estimate at pixel $i$ | scalar, per pixel |
@@ -187,22 +191,23 @@ from the formula.
 ### Scale of the distance and of $h$
 
 Since $\hat{x}$ depends on $d_{ij}/h^2$, the scale of $\boldsymbol{\omega}$ and
-that of $h$ are one and the same choice, and the paper fixes neither of the two
-completely. For two patches of the *noisy* image, the paper states
+that of $h$ are one and the same choice. The paper fixes both, and the two are
+inconsistent. For two patches of the *noisy* image, it states (Section 3)
 
 $$
 \mathrm{E}\,\lVert v(N_i) - v(N_j)\rVert_{2,a}^2 = \lVert u(N_i) - u(N_j)\rVert_{2,a}^2 + 2\sigma^2 ,
 $$
 
-which holds when the Gaussian window integrates to 1. For a general window the
-noise adds $2\sigma^2 \sum_{\mathbf{u}} \omega_{\mathbf{u}}$, since each pixel difference of noise has
+which holds only when the Gaussian window sums to 1; Sections 1 and 2.1 also
+use a normalised Gaussian. For a general window the noise adds
+$2\sigma^2 \sum_{\mathbf{u}} \omega_{\mathbf{u}}$, since each pixel difference of noise has
 variance $2\sigma^2$:
 
 $$
 \mathrm{E}\,d_{ij} = d_{ij}^{\,\text{clean}} + 2\sigma^2 \sum_{\mathbf{u}} \omega_{\mathbf{u}} .
 $$
 
-Two scales of $\boldsymbol{\omega}$ are possible, selected by `kernel_norm`:
+Two scales of $\boldsymbol{\omega}$ are available, selected by `kernel_norm`:
 
 | `kernel_norm` | $\sum_{\mathbf{u}} \omega_{\mathbf{u}}$ | distance $d_{ij}$ | noise-only $\mathrm{E}\,d_{ij}$, $K = 49$ |
 |---|---|---|---|
@@ -213,23 +218,49 @@ The two distances differ by the factor $K$, and the same estimate is obtained
 from one with $h$ and from the other with $h/\sqrt{K}$: for $7 \times 7$
 patches, a factor 7 in $h$.
 
-The identity of the paper is written for a window of sum 1, which suggests
-`"sum"`. With it and $h = 10\sigma$, two patches that differ by noise alone have
-$d \approx 2\sigma^2$ and a weight $\exp(-2\sigma^2/100\sigma^2) \approx 0.98$: nearly every patch of the
+The identity of the paper implies `"sum"`. Section 5 then sets $h = 10\sigma$,
+and the two cannot both hold as the paper describes the method. With a window
+of sum 1, the distance is at most $R^2$ for data of range $R$, so every weight is
+at least $\exp(-R^2/100\sigma^2)$ of the pixel's own: 0.20 at $\sigma = 20$ on
+8-bit data. Two patches that differ by noise alone have $d \approx 2\sigma^2$ and
+a weight $\exp(-2\sigma^2/100\sigma^2) \approx 0.98$: nearly every patch of the
 window gets a weight close to 1, and the result is close to the mean of the
 window, which blurs the image (see the [results](#results-on-synthetic-data)).
-With `"mean"` the same two patches have $d \approx 98\sigma^2$ and a weight
-$\exp(-0.98) \approx 0.37$, patches that differ by $\delta$ grey levels per
-pixel have a weight $\exp(-49\delta^2/100\sigma^2)$, which is small for
-$\delta \gtrsim 1.5\sigma$, and $h = 10\sigma$ works as the paper describes it.
-The default is therefore `"mean"`; the setting is
-open to the user, and `kernel_norm="sum"` with $h = 10\sigma/7$ is the same
-estimator.
+This contradicts Section 5, where "large Euclidean distances lead to nearly
+zero weights acting as an automatic threshold", and the weights of its Fig. 2,
+which range from 1 to nearly 0.
+
+With `"mean"` the same two patches have $d \approx 98\sigma^2$, which is
+$h^2 = 100\sigma^2$ almost exactly, and a weight $\exp(-0.98) \approx 0.37$;
+patches that differ by $\delta$ grey levels per pixel have a weight
+$\exp(-49\delta^2/100\sigma^2)$, which is small for $\delta$ of about $2\sigma$
+(0.14) and more, and $h = 10\sigma$ works as the paper describes it. The
+default `"mean"` is this repair. It is inferred from the paper's numbers, not
+stated in it, and it is a departure from the paper rather than a choice the
+paper leaves open (see [Faithful mode and extensions](#faithful-mode-and-extensions)).
+`kernel_norm="sum"` with $h = 10\sigma/7$ is the same estimator.
+
+### Default $h$ for other patches
+
+With the default window the noise-only distance $2\sigma^2 K$ grows with the
+number $K = N^d$ of values of the patch, so $h = 10\sigma$ is calibrated for
+$K = 49$ only. The default is therefore
+
+$$
+h = 10\sigma \sqrt{K / 49},
+$$
+
+which keeps the ratio $2\sigma^2 K / h^2 = 0.98$ of the paper and is $10\sigma$ at
+its settings ($N = 7$, $d = 2$). For volumes with the default $N = 7$ it is
+$10\sigma\sqrt{7} \approx 26.5\sigma$
+([`default_h`][optix.denoise.utils.default_h]). With `kernel_norm="sum"` the
+same default $h$ is used, which at $N = 7$, $d = 2$ is the literal reading of the
+paper.
 
 ## Algorithm
 
 **Input:** noisy images $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$ (volumes with `ndim=3`);
-noise standard deviation $\sigma$ (or a `SensorEstimate`); $h = 10\sigma$, $N = 7$, $N_S = 21$,
+noise standard deviation $\sigma$ (or a `SensorEstimate`); $h = 10\sigma\sqrt{N^d/49}$ ($10\sigma$ for the paper's $N = 7$, $d = 2$), $N = 7$, $N_S = 21$,
 $a = (N - 1)/4$, `kernel_norm="mean"` \
 **Output:** denoised images $\hat{\mathbf{x}} \in \mathbb{R}^{\lvert\Omega\rvert}$.
 
@@ -238,7 +269,8 @@ $a = (N - 1)/4$, `kernel_norm="mean"` \
 2. **Window.** Build the 1-D window $\omega(u) \propto \exp(-u^2/2a^2)$ for
    $u = -\lfloor N/2\rfloor, \ldots, \lfloor N/2\rfloor$, normalised to sum $N$
    (`"mean"`) or 1 (`"sum"`), and $\boldsymbol\omega$ as its outer product.
-3. **Pad** $\mathbf{y}$ by reflection by $\lfloor N/2\rfloor$ pixels, and by zeros by
+3. **Pad** $\mathbf{y}$ by reflection by $\lfloor N/2\rfloor$ pixels (by replication along an
+   axis of at most $\lfloor N/2\rfloor$ pixels), and by zeros by
    $\lfloor N_S/2\rfloor$ more.
 4. **Accumulate.** Set $\mathbf{n} = \mathbf{0}$ and $\mathbf{z} = \mathbf{0}$ (numerator and
    denominator, images). For every offset $\mathbf{t} \in \{-\lfloor N_S/2\rfloor, \ldots, \lfloor N_S/2\rfloor\}^d$,
@@ -246,7 +278,8 @@ $a = (N - 1)/4$, `kernel_norm="mean"` \
     1. **distance**: $d_{\mathbf{t}}(i) = \sum_{\mathbf{u}} \omega_{\mathbf{u}} (y_{i+\mathbf{u}} - y_{i+\mathbf{t}+\mathbf{u}})^2$,
        the weighted sum over the patch of the squared difference between $\mathbf{y}$ and
        its shift by $\mathbf{t}$, computed one axis at a time;
-    2. **weight**: $w_{\mathbf{t}}(i) = \exp(-d_{\mathbf{t}}(i)/h^2)$, and 0 where $i + \mathbf{t}$ is outside the
+    2. **weight**: $w_{\mathbf{t}}(i) = \exp(-(d_{\mathbf{t}}(i)/h)/h)$, that is
+       $\exp(-d_{\mathbf{t}}(i)/h^2)$ without overflow for a very small $h$, and 0 where $i + \mathbf{t}$ is outside the
        image;
     3. **add**: $\mathbf{n} \leftarrow \mathbf{n} + w_{\mathbf{t}} \odot \mathbf{y}_{\mathbf{t}}$ and $\mathbf{z} \leftarrow \mathbf{z} + w_{\mathbf{t}}$, with $\mathbf{y}_{\mathbf{t}}$ the shifted image.
 5. **Divide**: $\hat{\mathbf{x}} = \mathbf{n} / \mathbf{z}$.
@@ -254,15 +287,29 @@ $a = (N - 1)/4$, `kernel_norm="mean"` \
 
 Offsets are taken in batches, and the sums over offsets run one by one in the
 same order, so the result does not depend on the batch size. The cost is
-$N_S^d (2N + 4)$ operations per pixel, since the sum over the patch is
-separable, against $N^d N_S^d$ for the paper's direct computation.
+$N_S^d (d N + 4)$ operations per pixel, since the sum over the patch is
+separable (one pass per axis), against $N^d N_S^d$ for the paper's direct computation.
 
 ## Faithful mode and extensions
 
 `faithful=True` (the default) is the setting of Section 5 of the paper: images
 (2-D), patches of $7 \times 7$, a search window of $21 \times 21$ and
-$h = 10\sigma$. The paper leaves a number of choices open, and the code makes
-them as follows.
+$h = 10\sigma$, with the algorithm of Section 3, in which the patch contains
+the pixel (the consistency results of Section 4 are stated for the patch
+without its centre, a variant that is not implemented).
+
+!!! warning "Departure from the paper: the kernel normalisation"
+    The paper implies a window $\boldsymbol\omega$ of sum 1 (`kernel_norm="sum"`),
+    through its identity of the expected distance (Section 3) and the
+    normalised Gaussian of Sections 1 and 2.1, but its $h = 10\sigma$
+    (Section 5) only behaves as Section 5 and Fig. 2 describe with a window of
+    mean 1 over the patch. Faithful mode uses `kernel_norm="mean"`, the repair
+    inferred from $h^2 = 100\sigma^2 \approx 2 \cdot 49\,\sigma^2$ and explained in
+    [Scale of the distance and of h](#scale-of-the-distance-and-of-h).
+    `kernel_norm="sum"` sets `is_faithful` to false.
+
+The paper leaves a number of other choices open, and the code makes them as
+follows.
 
 ### Choices not in the paper
 
@@ -271,26 +318,20 @@ them as follows.
    is the Gaussian sampled at the integer offsets of the patch, with the default
    $a = (N - 1)/4$: 1.5 pixels for $7 \times 7$ patches, so that the patch spans
    $\pm 2a$. `a=float("inf")` gives uniform weights.
-2. **`kernel_norm`.** The window is normalised to mean 1 over the patch
-   (`"mean"`, default) rather than to sum 1 (`"sum"`), for the reasons given in
-   [Scale of the distance and of h](#scale-of-the-distance-and-of-h). The two differ by a
-   factor 7 in $h$ for $7 \times 7$ patches: the paper's $h = 10\sigma$ denoises with
-   `"mean"` and over-smooths with `"sum"`. The paper's identity of the expected
-   distance holds for `"sum"` (it is then $2\sigma^2$); for `"mean"` the same
-   expectation is $2\sigma^2 K$.
-3. **Window of the search.** The sum of the paper runs over the whole image; in
+2. **Window of the search.** The sum of the paper runs over the whole image; in
    its experiments it is restricted to a $21 \times 21$ window. The window is
    centred on the pixel (offsets $-10$ to $10$) and clipped at the border of
    the image: only pixels inside the image take part.
-4. **Borders.** The patches that cross the border are completed by reflection
-   about the edge pixel (replication along an axis too short to reflect). The
+3. **Borders.** The patches that cross the border are completed by reflection
+   about the edge pixel, axis by axis; an axis of at most $\lfloor N/2\rfloor$
+   pixels is completed by replication instead. The
    paper does not treat the border.
-5. **$h$ and $\sigma$.** The paper sets $h = 10\sigma$ "when a noise of standard
+4. **$h$ and $\sigma$.** The paper sets $h = 10\sigma$ "when a noise of standard
    deviation $\sigma$ is added": $\sigma$ is the known standard deviation of the
    noise, in the units of the data (1 after stabilisation).
-6. **The pixel itself.** The pixel is in its own window, with the weight
+5. **The pixel itself.** The pixel is in its own window, with the weight
    $\exp(0) = 1$, as the formula has it, without special treatment.
-7. **Stacks.** Each image (or volume) of a stack is denoised separately.
+6. **Stacks.** Each image (or volume) of a stack is denoised separately.
 
 ### Extensions (opt-in, not faithful)
 
@@ -307,7 +348,7 @@ can also be denoised plane by plane with `ndim=2` (the default), which is the
 faithful method applied to each plane.
 
 **Bias correction.** The paper notes that the noisy distance is biased by
-$2\sigma^2$ (the identity of the previous section) but uses it as it is. The
+$2\sigma^2$ for a window of sum 1, $2\sigma^2 \sum_{\mathbf{u}}\omega_{\mathbf{u}}$ in general (the identity of the previous section) but uses it as it is. The
 correction subtracts the expected distance of two patches of pure noise,
 $2\sigma^2 \sum_{\mathbf{u}}\omega_{\mathbf{u}}$, and clamps the result at 0, so that two patches
 whose difference is within the noise get the weight 1. It lets $h$ be
@@ -317,12 +358,15 @@ The settings of the paper can also be changed; each sets `is_faithful` to false:
 
 | Keyword | Changes | Faithful value | Recommended value |
 |---|---|---|---|
-| `h` | filtering parameter, in data units (stabilised units with a `SensorEstimate`) | `None` ($10\sigma$) | `None` |
+| `h` | filtering parameter, in data units (stabilised units with a `SensorEstimate`) | `None` ($10\sigma\sqrt{N^d/49}$, $10\sigma$ at the paper's settings) | `None` |
 | `patch` | odd side $N$ of the patch | 7 | 7 |
 | `search` | odd side $N_S$ of the search window | 21 | 21 |
 
-`a` and `kernel_norm` are the open choices 1 and 2 above and do not change
-`is_faithful`. The other keywords do not change the method:
+`kernel_norm="sum"` also sets `is_faithful` to false (see the departure
+above). `a` is the open choice 1 above and does not change `is_faithful`. When
+`patch` or `ndim` changes $K = N^d$, the default $h$ follows the rule
+$10\sigma\sqrt{K/49}$ of [Default h for other patches](#default-h-for-other-patches).
+The other keywords do not change the method:
 
 | Keyword | Changes | Faithful value |
 |---|---|---|
@@ -374,13 +418,15 @@ of a stack, and groups, are independent. Maps of a `SensorEstimate` are cropped
 to each block.
 
 Within a block of $P$ values (padded), the computation holds the padded image,
-the numerator and the denominator, and a few temporary images, about six
-buffers of $P$ values, and a *batch of offsets*: each offset of the batch
-needs about five more buffers (the shifted image, the squared differences, the
-two passes of the separable sum, the weights). The batch is sized to half the
-memory budget of [`optix.config`](../../reference/configuration.md), and the
-default `block` leaves the other half for the six buffers of the block. A
-batch is at least one offset. The cost per pixel is about $N_S^d (2N + 4)$
+the numerator and the denominator, and a few temporary images (the default
+`block` budgets six buffers of $P$ values for them), and a *batch of offsets*:
+each offset of the batch holds at most three more buffers at once (the squared
+differences, and the accumulator and the current term of one pass of the
+separable sum; the weights are then computed in place, and the shifted images
+are views of the padded image). The batch is sized to half the memory budget
+of [`optix.config`](../../reference/configuration.md), and the default `block`
+leaves the other half for the buffers of the block. A batch is at least one
+offset. The cost per pixel is about $N_S^d (d N + 4)$
 operations, linear in the size of the image; the search window $N_S$ dominates
 and is the one to lower first (extension) to go faster. The computation is vectorised and runs on any
 torch device. The offsets are added one by one in a fixed order, so the result
@@ -462,7 +508,7 @@ looking at 1 to 26 electrons. The estimator is given the
 
 Volumes use the extension `ndim=3`, here with $3 \times 3 \times 3$ patches in a
 $7 \times 7 \times 7$ window, which is cheaper than the defaults, on a ball in
-noise.
+noise. The default $h$ is then $10\sigma\sqrt{27/49}$.
 
 ```pycon
 >>> axes = torch.meshgrid(
@@ -471,7 +517,7 @@ noise.
 >>> ball = 100 * ((sum((a - 0.5) ** 2 for a in axes)) < 0.1).float()
 >>> noisy = ball + 15 * torch.randn_like(ball)
 >>> den = nl_means(noisy, sigma=15, ndim=3, patch=3, search=7)
->>> bool((den - ball).square().mean() < (noisy - ball).square().mean() / 10)
+>>> bool((den - ball).square().mean() < (noisy - ball).square().mean() / 5)
 True
 ```
 
@@ -508,9 +554,10 @@ The two curves are shifted by the factor of 7 in $h$ explained above: `"sum"`
 needs an $h$ near $1.4\sigma$ for what `"mean"` does with $10\sigma$. The
 default $10\sigma$ is the best of this grid for `"mean"`. A volume
 of $24 \times 48^2$ voxels with $\sigma = 20$ (range $[0, 255]$, $5 \times 5$
-patches in an $11 \times 11$ window, so not the paper's settings) gives 22.07 dB
-noisy, 32.75 dB denoised plane by plane, 33.91 dB with `ndim=3` (extension) and
-36.22 dB with `ndim=3` and `bias_correction=True`.
+patches in an $11 \times 11$ window, so not the paper's settings, with the
+default $h = 10\sigma\sqrt{K/49}$) gives 22.11 dB noisy, 32.66 dB denoised plane
+by plane, 35.16 dB with `ndim=3` (extension) and 35.19 dB with `ndim=3` and
+`bias_correction=True`.
 
 These numbers describe the synthetic scene only, not natural images. In
 `float32` and in `float64` the results agree to $3 \times 10^{-4}$ grey levels

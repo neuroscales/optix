@@ -1,15 +1,19 @@
 """Non-local means (Buades, Coll & Morel 2005)."""
 
 import math
+import weakref
 
 import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+from torch.utils import _pytree as pytree
+from torch.utils._python_dispatch import TorchDispatchMode
 
 import optix
 from optix.denoise import NLMeans, nl_means, nl_means_halo
 from optix.denoise import utils as U
+from optix.denoise._nlm import OFFSET_COPIES, OFFSET_SHARE
 from optix.estimates import SensorEstimate
 from optix.models import phantoms
 
@@ -42,12 +46,22 @@ def psnr(x, ref, peak=255.0):
     return 10 * math.log10(peak**2 / float((x - ref).square().mean()))
 
 
+def pad_patches(y, r):
+    """Reflect about the edge pixels, or replicate along too short axes."""
+    out = y.numpy()
+    for axis, n in enumerate(y.shape):
+        width = [(0, 0)] * y.ndim
+        width[axis] = (r, r)
+        out = np.pad(out, width, mode="reflect" if n > r else "edge")
+    return torch.from_numpy(out)
+
+
 def brute_force(y, h, patch, search, a=None, norm="mean"):
     """Pixel-by-pixel NL-means, written from Section 3 of the paper."""
     r, s = patch // 2, search // 2
     g1 = U.patch_kernel(patch, a, norm, **F64)
     g = torch.outer(g1, g1)
-    yp = F.pad(y[None, None], (r,) * 4, mode="reflect")[0, 0]
+    yp = pad_patches(y, r)
     n0, n1 = y.shape
     out = torch.empty_like(y)
     for i0 in range(n0):
@@ -63,6 +77,51 @@ def brute_force(y, h, patch, search, a=None, norm="mean"):
                     den += w
             out[i0, i1] = num / den
     return out
+
+
+class LiveBytes(TorchDispatchMode):
+    """Bytes of the tensor storages allocated under the mode, and the peak.
+
+    A storage is counted from the op that creates it until the last
+    tensor that refers to it is collected; storages of the inputs are not
+    counted.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.live = {}
+        self.current = self.peak = 0
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        leaves = pytree.tree_leaves((args, kwargs))
+        inputs = {
+            t.untyped_storage().data_ptr()
+            for t in leaves
+            if isinstance(t, torch.Tensor)
+        }
+        out = func(*args, **kwargs)
+        for t in pytree.tree_leaves(out):
+            if not isinstance(t, torch.Tensor):
+                continue
+            key = t.untyped_storage().data_ptr()
+            if key in self.live:
+                self.live[key][0] += 1
+            elif key in inputs or key == 0:
+                continue
+            else:
+                self.live[key] = [1, t.untyped_storage().nbytes()]
+                self.current += self.live[key][1]
+                self.peak = max(self.peak, self.current)
+            weakref.finalize(t, self._release, key)
+        return out
+
+    def _release(self, key):
+        entry = self.live[key]
+        entry[0] -= 1
+        if entry[0] == 0:
+            self.current -= entry[1]
+            del self.live[key]
 
 
 # -- building blocks ---------------------------------------------------------
@@ -149,10 +208,82 @@ def test_matches_brute_force():
     )
 
 
+def test_patch_one():
+    """patch=1 is the neighbourhood filter on single pixels, for any a."""
+    assert float(U.patch_kernel(1)) == 1.0
+    y = noisy(scene((11, 13)), 20)
+    out = nl_means(y, 20, h=40.0, patch=1, search=5)
+    torch.testing.assert_close(
+        out, nl_means(y, 20, h=40.0, patch=1, search=5, a=1.0)
+    )
+    torch.testing.assert_close(
+        out, brute_force(y, 40.0, 1, 5), rtol=0, atol=1e-10
+    )
+    assert NLMeans(sigma=20, patch=1, search=5, **F64).fit().apply(y).shape
+
+
+def test_short_axis_replicates_only_that_axis():
+    y = noisy(scene((3, 12)), 20)
+    g1 = U.patch_kernel(7, **F64)
+    dist, _, _ = U.patch_distances(y, [(0, 1)], g1, 3)
+    yp = pad_patches(y, 3)
+    g = torch.outer(g1, g1)
+    expected = (g * (yp[:7, :7] - yp[:7, 1:8]).square()).sum()
+    torch.testing.assert_close(dist[0, 0, 0], expected)
+    out = nl_means(y, 20, search=5)
+    torch.testing.assert_close(
+        out, brute_force(y, 10.0 * 20, 7, 5), rtol=0, atol=1e-10
+    )
+
+
+def test_kernel_normalisations_are_equivalent():
+    """ "mean" with h equals "sum" with h/√K, K = patchᵈ."""
+    z = noisy(scene((40, 44)), 20)
+    a = nl_means(z, 20)
+    b = nl_means(z, 20, kernel_norm="sum", h=10 * 20 / 7)
+    torch.testing.assert_close(a, b, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("patch", [3, 5, 9])
+def test_default_h_scales_with_patch(patch):
+    z = noisy(scene((40, 44)), 20)
+    h = 10 * 20 * math.sqrt(patch**2 / 49)
+    assert U.default_h(20, patch) == pytest.approx(h)
+    a = nl_means(z, 20, patch=patch, search=11)
+    torch.testing.assert_close(
+        a, nl_means(z, 20, patch=patch, search=11, h=h), rtol=0, atol=0
+    )
+    b = nl_means(z, 20, patch=patch, search=11, kernel_norm="sum", h=200 / 7)
+    torch.testing.assert_close(a, b, rtol=0, atol=1e-12)
+
+
+def test_default_h_volume_default_patch():
+    clean = scene((12, 20, 22))
+    v = noisy(clean, 20)
+    h = 10 * 20 * math.sqrt(7**3 / 49)
+    assert U.default_h(20, 7, 3) == pytest.approx(h)
+    out = nl_means(v, 20, ndim=3, search=5)
+    torch.testing.assert_close(
+        out, nl_means(v, 20, ndim=3, search=5, h=h), rtol=0, atol=0
+    )
+    assert psnr(out, clean) > psnr(v, clean) + 6
+    est = NLMeans(sigma=20, ndim=3, search=5, **F64).fit()
+    torch.testing.assert_close(est.apply(v), out, rtol=0, atol=1e-12)
+
+
 # -- limits and quality ------------------------------------------------------
 def test_h_to_zero_is_identity():
     y = noisy(scene((24, 26)), 20)
     torch.testing.assert_close(nl_means(y, 20, h=1e-4), y, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "dtype,h", [("float64", 1e-170), ("float64", 1e-320), ("float32", 1e-25)]
+)
+def test_very_small_h_is_identity(dtype, h):
+    y = noisy(scene((20, 22)), 20).to(getattr(torch, dtype))
+    out = nl_means(y, 20, h=h, search=7)
+    torch.testing.assert_close(out, y, rtol=0, atol=0)
 
 
 def test_h_to_infinity_is_window_mean():
@@ -233,8 +364,34 @@ def test_offset_batches_do_not_change_result():
 
 
 def test_offset_batch_formula():
-    assert U.offset_batch(1000, 8, memory=8 * 5000 * 10) == 5
+    per = OFFSET_COPIES * 1000 * 8
+    assert U.offset_batch(1000, 8, memory=int(5 * per / OFFSET_SHARE)) == 5
     assert U.offset_batch(10**9, 8, memory=1) == 1
+
+
+def test_measured_offset_buffers():
+    """Each offset of a batch holds at most `OFFSET_COPIES` padded images."""
+    z = noisy(scene((40, 40)), 20)
+    pixels = 46 * 46  # padded by ⌊patch/2⌋ = 3
+    peaks = {}
+    for batch in (4, 16):
+        memory = int(batch * OFFSET_COPIES * pixels * 8 / OFFSET_SHARE) + 1
+        with optix.config(memory=memory):
+            assert U.offset_batch(pixels, 8) == batch
+            with LiveBytes() as live:
+                nl_means(z, 20, search=11)
+        peaks[batch] = live.peak
+    per_offset = (peaks[16] - peaks[4]) / 12 / (pixels * 8)
+    assert OFFSET_COPIES - 1 < per_offset <= OFFSET_COPIES
+
+
+@pytest.mark.parametrize("budget", [2_000_000, 5_000_000])
+def test_apply_peak_within_budget(budget):
+    z = noisy(scene((150, 170)), 20).numpy()
+    est = NLMeans(sigma=20, **F64).fit()
+    with optix.config(memory=budget), LiveBytes() as live:
+        est.apply(z)
+    assert live.peak <= budget
 
 
 def test_bad_arguments():
@@ -265,8 +422,8 @@ def test_estimator_defaults():
     assert est.is_faithful and est.options["patch"] == 7
     assert est.options["search"] == 21 and est.halo() == 13
     assert NLMeans(sigma=10, a=2.0).is_faithful
-    assert NLMeans(sigma=10, kernel_norm="sum").is_faithful
     for kwargs in (
+        dict(kernel_norm="sum"),
         dict(h=50.0),
         dict(patch=5),
         dict(search=11),
@@ -312,6 +469,19 @@ def test_blocks_match_whole_2d():
     np.testing.assert_allclose(
         np.asarray(out), expected.numpy(), rtol=0, atol=1e-12
     )
+
+
+def test_blocks_match_whole_default_halo():
+    """Blocks smaller than the halo 13, not dividing the image: bitwise."""
+    z = noisy(scene((97, 113)), 20)
+    expected = nl_means(z, 20)
+    for block in ((23, 31), (5, 97), (11, None), (40, 7)):
+        out = NLMeans(sigma=20, block=block, **F64).fit().apply(z)
+        torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    stack = torch.stack([z, z.flip(0), z.flip(1)])
+    expected = nl_means(stack, 20)
+    out = NLMeans(sigma=20, block=(23, 31), **F64).fit().apply(stack)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
 def test_blocks_interior_edges_float32():

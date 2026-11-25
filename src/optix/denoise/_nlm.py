@@ -25,9 +25,10 @@ KernelNorm = Literal["mean", "sum"]
 # Share of the memory budget held by a batch of offsets; the streamed
 # block (padded data, numerator, denominator, temporaries) takes the rest.
 OFFSET_SHARE = 0.5
-# Image-sized buffers per offset of a batch: shifted data, squared
-# differences, the two passes of the separable sum, weights.
-OFFSET_COPIES = 5
+# Image-sized buffers per offset of a batch, at the peak: the squared
+# differences, and the accumulator and product of one pass of the
+# separable patch sum (the weights are then computed in place).
+OFFSET_COPIES = 3
 # Image-sized buffers of a streamed block, outside the offset batch.
 BLOCK_COPIES = 6
 
@@ -50,17 +51,27 @@ def patch_kernel(
     squared differences; with `norm="sum"` each factor sums to 1, so G_a
     sums to 1 and the distance is a weighted *mean*.
 
-    !!! note "Choices not specified in the paper"
-        * The paper gives neither a nor the normalisation of the
-          discrete kernel. The default a = (patch − 1)/4 is 1.5 for 7 × 7
-          patches (the patch spans ±2a). `a = inf` gives uniform weights.
-        * The two normalisations differ by the factor patchᵈ (49 for
-          7 × 7 patches), that is a factor 7 on h. The paper's identity
-          E‖y(N_i) − y(N_j)‖²_{2,a} = ‖x(N_i) − x(N_j)‖²_{2,a} + 2σ² holds
-          for `"sum"`; its setting h = 10σ denoises only with `"mean"`
-          (with `"sum"` nearly every patch of the window gets a weight
-          close to 1, the result being close to the mean of the window).
-          The default is `"mean"`.
+    !!! note "Choice not specified in the paper"
+        The paper does not give a. The default a = (patch − 1)/4 is 1.5
+        for 7 × 7 patches (the patch spans ±2a). `a = inf` gives uniform
+        weights; a has no effect for `patch=1`.
+
+    !!! warning "Departure from the paper: the default normalisation"
+        The paper implies a kernel of sum 1 (`"sum"`): its identity
+        E‖y(N_i) − y(N_j)‖²_{2,a} = ‖x(N_i) − x(N_j)‖²_{2,a} + 2σ²
+        (Section 3) holds only then, and Sections 1 and 2.1 use a
+        normalised Gaussian. Its setting h = 10σ (Section 5) is not
+        consistent with that kernel: the distance is then at most R² for
+        data of range R, so every weight is at least exp(−R²/(100σ²)) of
+        the pixel's own (0.20 at σ = 20 on 8-bit data), whereas Section 5
+        and Fig. 2 describe weights that fall to nearly zero; the result
+        is close to the mean of the search window. The default `"mean"`
+        is a repair inferred from the paper's numbers, not stated in it:
+        with a kernel of mean 1 the expected distance between two 7 × 7
+        patches of noise is 2·49·σ² ≈ h² = 100σ², so h = 10σ is the
+        natural scale and the weights behave as Section 5 describes. The
+        two normalisations differ by the factor patchᵈ (49 for 7 × 7
+        patches), a factor 7 on h.
 
     Parameters
     ----------
@@ -80,12 +91,12 @@ def patch_kernel(
     """
     r = _radius("patch", patch)
     a = (patch - 1) / 4 if a is None else float(a)
-    if not a > 0:
+    if r > 0 and not a > 0:
         raise ValueError(f"a must be > 0, got {a!r}")
     if norm not in ("mean", "sum"):
         raise ValueError(f"norm must be 'mean' or 'sum', got {norm!r}")
     u = torch.arange(-r, r + 1, dtype=torch.float64)
-    if math.isinf(a) or r == 0:
+    if r == 0 or math.isinf(a):
         g = torch.ones_like(u)
     else:
         g = torch.exp(-(u * u) / (2 * a * a))
@@ -161,9 +172,10 @@ def patch_distances(
     !!! note "Choices not specified in the paper"
         Patches that cross the border of the image are completed by
         reflection about the edge pixels (`torch.nn.functional.pad`,
-        mode `"reflect"`; mode `"replicate"` along axes too short to
-        reflect). Offsets whose pixel j falls outside the image are
-        invalid, which clips the search window at the border.
+        mode `"reflect"`), axis by axis; an axis of at most ⌊patch/2⌋
+        pixels is completed by replication (mode `"replicate"`) instead.
+        Offsets whose pixel j falls outside the image are invalid, which
+        clips the search window at the border.
 
     Parameters
     ----------
@@ -185,8 +197,15 @@ def patch_distances(
     valid : Tensor
         `(K, *spatial)` bool, whether i + t is in the image.
     """
-    padded = _pad(data, kernel.numel() // 2, search // 2)
-    return _distances(padded, data.shape, offsets, kernel, search // 2)
+    r, s = kernel.numel() // 2, search // 2
+    padded = _pad(data, r, s)
+    dist = _distances(padded, data.shape, offsets, kernel, s)
+    valid = torch.ones(dist.shape, dtype=torch.bool, device=data.device)
+    _invalidate(valid, offsets, data.shape, False)
+    values = torch.stack(
+        [_shift(padded, r + s, o, data.shape) for o in offsets]
+    )
+    return dist.masked_fill_(~valid, 0), values.masked_fill_(~valid, 0), valid
 
 
 def _radius(name: str, side: object) -> int:
@@ -201,23 +220,41 @@ def _pad(x: Tensor, r: int, s: int) -> Tensor:
     d = x.ndim
     y = x[None, None]
     if r > 0:
-        mode = "reflect" if min(x.shape) > r else "replicate"
-        y = F.pad(y, (r,) * (2 * d), mode=mode)
+        for axis, n in enumerate(x.shape):
+            pad = [0] * (2 * d)
+            # F.pad lists the last axis first
+            pad[2 * (d - 1 - axis)] = pad[2 * (d - 1 - axis) + 1] = r
+            y = F.pad(y, pad, mode="reflect" if n > r else "replicate")
     if s > 0:
         y = F.pad(y, (s,) * (2 * d))
     return y[0, 0]
 
 
-def _patch_sum(sq: Tensor, kernel: Tensor, ndim: int) -> Tensor:
-    """Separable weighted sum over the patch, axis by axis (shrinks 2r)."""
-    p = kernel.numel()
-    for axis in range(sq.ndim - ndim, sq.ndim):
-        n = sq.shape[axis] - p + 1
-        acc = kernel[0] * sq.narrow(axis, 0, n)
-        for u in range(1, p):
-            acc = acc + kernel[u] * sq.narrow(axis, u, n)
-        sq = acc
-    return sq
+def _shift(
+    xq: Tensor, start: int, offset: Sequence[int], size: Sequence[int]
+) -> Tensor:
+    """View of `xq` of shape `size`, from `start + offset` on each axis."""
+    return xq[
+        tuple(
+            slice(start + t, start + t + n)
+            for t, n in zip(offset, size, strict=True)
+        )
+    ]
+
+
+def _invalidate(
+    t: Tensor,
+    offsets: Sequence[Sequence[int]],
+    shape: Sequence[int],
+    value: object,
+) -> None:
+    """Set `t[k]` to `value` (in place) where i + offsets[k] is outside."""
+    for k, o in enumerate(offsets):
+        for axis, (u, n) in enumerate(zip(o, shape, strict=True)):
+            if u > 0:
+                t[(k,) + (slice(None),) * axis + (slice(n - u, None),)] = value
+            elif u < 0:
+                t[(k,) + (slice(None),) * axis + (slice(None, -u),)] = value
 
 
 def _distances(
@@ -226,47 +263,32 @@ def _distances(
     offsets: Sequence[Sequence[int]],
     kernel: Tensor,
     s: int,
-) -> tuple[Tensor, Tensor, Tensor]:
+) -> Tensor:
+    """Patch distances `(K, *shape)`; arbitrary (finite) where invalid."""
     d = len(shape)
     r = kernel.numel() // 2
-    p = r + s  # position of the image in the padded array
-    ref = xq[tuple(slice(s, s + n + 2 * r) for n in shape)]
-    shifted = torch.stack(
-        [
-            xq[
-                tuple(
-                    slice(s + t, s + t + n + 2 * r)
-                    for t, n in zip(o, shape, strict=True)
-                )
-            ]
-            for o in offsets
-        ]
-    )
-    values = torch.stack(
-        [
-            xq[
-                tuple(
-                    slice(p + t, p + t + n)
-                    for t, n in zip(o, shape, strict=True)
-                )
-            ]
-            for o in offsets
-        ]
-    )
-    dist = _patch_sum((ref - shifted).square(), kernel, d)
-    valid = torch.ones(dist.shape, dtype=torch.bool, device=xq.device)
+    size = [n + 2 * r for n in shape]
+    ref = _shift(xq, s, (0,) * d, size)
+    sq = torch.empty((len(offsets), *size), dtype=xq.dtype, device=xq.device)
     for k, o in enumerate(offsets):
-        for axis, (t, n) in enumerate(zip(o, shape, strict=True)):
-            if t > 0:
-                valid[(k,) + (slice(None),) * axis + (slice(n - t, None),)] = (
-                    False
-                )
-            elif t < 0:
-                valid[(k,) + (slice(None),) * axis + (slice(None, -t),)] = (
-                    False
-                )
-    zero = torch.zeros((), dtype=dist.dtype, device=dist.device)
-    return dist.where(valid, zero), values.where(valid, zero), valid
+        torch.sub(ref, _shift(xq, s, o, size), out=sq[k])
+    sq.square_()
+    # separable weighted sum over the patch, axis by axis (shrinks 2r); at
+    # most three buffers of the batch are alive at once: `sq`, the
+    # accumulator and the current term
+    p = kernel.numel()
+    for axis in range(1, d + 1):
+        n = sq.shape[axis] - p + 1
+        acc = torch.mul(sq.narrow(axis, 0, n), kernel[0])
+        if p > 1:
+            term = torch.empty_like(acc)
+            for u in range(1, p):
+                torch.mul(sq.narrow(axis, u, n), kernel[u], out=term)
+                acc.add_(term)
+            del term
+        del sq
+        sq = acc
+    return sq
 
 
 def _nlm_image(
@@ -288,23 +310,51 @@ def _nlm_image(
     batch = offset_batch(padded, x.element_size())
     num = torch.zeros_like(x)
     den = torch.zeros_like(x)
-    inv_h2 = 0.0 if math.isinf(h) else 1.0 / (h * h)
+    # exp(−(d/h)/h): no overflow of 1/h², and d = 0 gives 1 for any h
+    # (h below the smallest normal number of the dtype acts as that number)
+    h = max(h, torch.finfo(x.dtype).tiny)
     # E of the distance between two patches of noise: 2σ²·∑G_a
     mass = float(kernel.double().sum()) ** x.ndim
     shift = 2.0 * sigma * sigma * mass if bias_correction else 0.0
-    zero = torch.zeros((), dtype=x.dtype, device=x.device)
+    p = patch // 2 + s  # position of the image in the padded array
     for start in range(0, len(offsets), batch):
-        dist, values, valid = _distances(
-            xq, x.shape, offsets[start : start + batch], kernel, s
-        )
+        batch_offsets = offsets[start : start + batch]
+        w = _distances(xq, x.shape, batch_offsets, kernel, s)
         if shift:
-            dist = (dist - shift).clamp(min=0)
-        w = torch.exp(-dist * inv_h2).where(valid, zero)
+            w.sub_(shift).clamp_(min=0)
+        w.div_(h).div_(h).neg_().exp_()
+        _invalidate(w, batch_offsets, x.shape, 0.0)
         # sequential over offsets: the sum does not depend on the batches
-        for k in range(w.shape[0]):
-            num = num + w[k] * values[k]
-            den = den + w[k]
-    return num / den
+        for k, o in enumerate(batch_offsets):
+            den.add_(w[k])
+            num.add_(w[k].mul_(_shift(xq, p, o, x.shape)))
+        del w  # before the next batch is allocated
+    return num.div_(den)
+
+
+def default_h(sigma: float, patch: int = 7, ndim: int = 2) -> float:
+    """Default filtering parameter h = 10σ·√(K/49), K = patchᵈ.
+
+    Section 5 of the paper sets h = 10σ for 7 × 7 patches (K = 49). With
+    the default kernel (mean 1 over the patch), the expected distance
+    between two patches of noise is 2σ²·K, so h is scaled by √(K/49) to
+    keep the ratio of that distance to h² at its value in the paper,
+    2·49/100 = 0.98. It is h = 10σ at the paper's settings.
+
+    Parameters
+    ----------
+    sigma : float
+        Noise standard deviation σ.
+    patch : int
+        Odd side of the patches.
+    ndim : int
+        Number of spatial dimensions d.
+
+    Returns
+    -------
+    float
+    """
+    return 10.0 * sigma * math.sqrt(patch**ndim / 49)
 
 
 def _check_h(h: object) -> float | None:
@@ -356,7 +406,16 @@ def nl_means(
     weights satisfy 0 ≤ w(i, j) ≤ 1 and ∑_j w(i, j) = 1; the pixel itself
     has the largest unnormalised weight, exp(0) = 1. Section 5 sets the
     parameters used here by default: a 21 × 21 search window, 7 × 7
-    patches and h = 10σ.
+    patches and h = 10σ. For other patches the default h is
+    10σ·√(K/49) with K = patchᵈ (see
+    [`default_h`][optix.denoise.utils.default_h]), which keeps h = 10σ
+    at the paper's settings.
+
+    This is the algorithm of Section 3, where the patch N_i contains the
+    pixel i. The consistency results of Section 4 (Theorems 4 and 5) are
+    stated for the patch without its centre, N_i∖{i}; that variant is
+    not implemented. The paper prints ‖v(N_i) − v(N_i)‖ in Z(i); N_j is
+    meant, as written above.
 
     As h → 0 the result tends to the data (only the pixel's own patch
     has a non-vanishing weight, unless another patch is identical); as
@@ -369,13 +428,19 @@ def nl_means(
     max(‖·‖²_{2,a} − 2σ²·∑G_a, 0) instead, the expected distance between
     two patches of noise being 2σ²·∑G_a (not in the paper).
 
+    !!! warning "Departure from the paper: the kernel normalisation"
+        The paper implies a kernel G_a of sum 1 (the identity above holds
+        only then), but with it h = 10σ averages nearly the whole search
+        window, contrary to Section 5 and Fig. 2; Sections 3 and 5 are
+        inconsistent. The default `kernel_norm="mean"` (mean 1 over the
+        patch, so the distance is a weighted sum of squared differences)
+        is a repair inferred from h² = 100σ² ≈ 2·49·σ², the expected
+        distance between two 7 × 7 patches of noise; see
+        [`patch_kernel`][optix.denoise.utils.patch_kernel].
+        `kernel_norm="sum"` with h = 10σ/7 gives the same result.
+
     !!! note "Choices not specified in the paper"
-        * The kernel G_a: a = (patch − 1)/4, with mean 1 over the patch
-          (`kernel_norm="mean"`), so that the distance is a weighted sum
-          of squared differences. The paper's identity above suggests a
-          kernel of sum 1 (`kernel_norm="sum"`), but with it h = 10σ
-          averages nearly the whole search window; see
-          [`patch_kernel`][optix.denoise.utils.patch_kernel].
+        * The width of G_a: a = (patch − 1)/4.
         * Borders: patches are completed by reflection, and the search
           window is clipped to the image (see
           [`patch_distances`][optix.denoise.utils.patch_distances]).
@@ -383,10 +448,11 @@ def nl_means(
           same sides, with the separable 3-D kernel.
 
     !!! note "Cost and memory"
-        The cost is about searchᵈ·(2·patch + 4) operations per pixel
-        (the patch sum is separable). The computation is vectorised over
-        batches of offsets of the search window: each batch holds a few
-        shifted copies of the image, sized from the memory budget of
+        The cost is about searchᵈ·(d·patch + 4) operations per pixel
+        (the patch sum is separable, one pass per axis). The computation
+        is vectorised over batches of offsets of the search window: each
+        offset of a batch holds at most three image-sized buffers, the
+        batch being sized from the memory budget of
         [`optix.config`][optix.config]. It runs on any torch device and,
         the offsets being accumulated one by one in a fixed order, does
         not depend on the batch size (to rounding). The result at a
@@ -425,7 +491,8 @@ def nl_means(
         Noise standard deviation σ > 0, in the units of `data`.
     h : float, optional
         Filtering parameter h > 0 (may be inf), in the units of `data`.
-        Default: 10σ (Section 5).
+        Default: 10σ·√(K/49), K = patchᵈ, that is 10σ for 7 × 7 patches
+        (Section 5).
     patch : int
         Odd side of the patches (paper: 7).
     search : int
@@ -434,12 +501,14 @@ def nl_means(
         Standard deviation of the kernel G_a, in pixels. Default:
         (patch − 1)/4.
     kernel_norm : {"mean", "sum"}
-        Normalisation of G_a: mean 1 over the patch (default) or sum 1
-        (see [`patch_kernel`][optix.denoise.utils.patch_kernel]).
+        Normalisation of G_a: mean 1 over the patch (default, a
+        departure from the paper) or sum 1 (implied by the paper); see
+        [`patch_kernel`][optix.denoise.utils.patch_kernel].
     ndim : {2, 3}
         Number of spatial dimensions (3 is not in the paper).
     bias_correction : bool
-        Subtract 2σ² from the patch distances (not in the paper).
+        Subtract 2σ²·∑G_a, the expected distance between two patches of
+        noise, from the patch distances, clamped at 0 (not in the paper).
 
     Returns
     -------
@@ -449,8 +518,8 @@ def nl_means(
     sigma = _check_positive("sigma", sigma)
     ndim = _check_ndim(ndim)
     h = _check_h(h)
-    h = 10.0 * sigma if h is None else h
     patch_kernel(patch, a, kernel_norm)  # validates
+    h = default_h(sigma, patch, ndim) if h is None else h
     _radius("search", search)
     if data.ndim < ndim:
         raise ValueError(f"data needs at least {ndim} dims, got {data.ndim}")
@@ -508,10 +577,15 @@ class NLMeans(_BlockMatching):
 
     !!! note
         Faithful mode is the setting of Section 5 of the paper (2-D,
-        7 × 7 patches, 21 × 21 search window, h = 10σ). `h`, `patch`,
-        `search`, `ndim=3` and `bias_correction` are extensions; `a`
-        and `kernel_norm` are choices the paper leaves open, and
-        `inverse` and `block` do not change the method.
+        7 × 7 patches, 21 × 21 search window, h = 10σ), with the kernel
+        normalisation `kernel_norm="mean"`, a departure from the paper
+        that repairs an inconsistency between its Sections 3 and 5 (see
+        [`nl_means`][optix.denoise.nl_means]). `h`, `patch`, `search`,
+        `ndim=3`, `bias_correction` and `kernel_norm="sum"` (the
+        normalisation the paper implies) make `is_faithful` false; `a`
+        is a choice the paper leaves open, and `inverse` and `block` do
+        not change the method. The default h is 10σ·√(K/49), K =
+        patchᵈ (see [`default_h`][optix.denoise.utils.default_h]).
 
     !!! references "References"
         1. Buades A, Coll B, Morel J-M. *A non-local algorithm for image
@@ -591,7 +665,8 @@ class NLMeans(_BlockMatching):
             Omit it to give a `SensorEstimate` to `fit` instead.
         h : float, optional
             Extension: filtering parameter h (data units; stabilised
-            units with a `SensorEstimate`). Default: 10σ (Section 5).
+            units with a `SensorEstimate`). Default: 10σ·√(K/49), K =
+            patchᵈ, that is 10σ for 7 × 7 patches (Section 5).
         patch : int, optional
             Extension: odd side of the patches (paper: 7).
         search : int, optional
@@ -600,15 +675,17 @@ class NLMeans(_BlockMatching):
             Standard deviation of the patch kernel G_a, in pixels (not
             specified in the paper). Default: (patch − 1)/4.
         kernel_norm : {"mean", "sum"}, optional
-            Normalisation of G_a (not specified in the paper): mean 1
-            over the patch (default) or sum 1; see
+            Normalisation of G_a: mean 1 over the patch (default, a
+            departure from the paper) or sum 1 (implied by the paper,
+            not faithful here); see
             [`patch_kernel`][optix.denoise.utils.patch_kernel].
         ndim : {2, 3}, optional
             Spatial dimensions of the layout; 3 (volumes) is an
             extension. Default: 2.
         bias_correction : bool, optional
-            Extension: subtract 2σ² from the patch distances (not in the
-            paper). Default: `False`.
+            Extension: subtract 2σ²·∑G_a, the expected distance between
+            two patches of noise, from the patch distances, clamped at 0
+            (not in the paper). Default: `False`.
         inverse : {"exact", "closed-form", "asymptotic", "algebraic"}
             Inverse of the Anscombe transform (see
             [`inverse_anscombe`][optix.sensor.inverse_anscombe]).
@@ -642,7 +719,14 @@ class NLMeans(_BlockMatching):
             raise ValueError(f"Unknown inverse {o['inverse']!r}")
         self.is_faithful = all(
             o[k] == self.paper[k]
-            for k in ("h", "patch", "search", "ndim", "bias_correction")
+            for k in (
+                "h",
+                "patch",
+                "search",
+                "kernel_norm",
+                "ndim",
+                "bias_correction",
+            )
         )
         self._range = None
         self._vst = None
@@ -697,7 +781,9 @@ class NLMeans(_BlockMatching):
 
     def _h(self) -> float:
         h = self.options["h"]
-        return 10.0 * self._sigma() if h is None else h
+        if h is None:
+            return default_h(self._sigma(), self.options["patch"], self._ndim)
+        return h
 
     def _core(self, x: Tensor, origin: tuple[int, ...]) -> Tensor:
         o = self.options
