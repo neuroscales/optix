@@ -11,6 +11,7 @@
         - BM3D
         - BM4D
         - NCS
+        - NLMeans
 
 ## Transforms
 
@@ -26,6 +27,8 @@
         - bm4d_halo
         - ncs
         - ncs_halo
+        - nl_means
+        - nl_means_halo
 
 ## Utilities
 
@@ -66,3 +69,8 @@
         - ncs_solve
         - NcsResult
         - segment_bounds
+        - patch_kernel
+        - default_h
+        - search_offsets
+        - patch_distances
+        - offset_batch
