@@ -7,16 +7,17 @@ that choose terms, and the numerical care is written once. It has three layers.
 
 | Layer | Names | What it is |
 |---|---|---|
-| Proximity operators and functions | `prox_box`, `prox_group_l2`, `project_group_l2`, `prox_squared_l2`, `prox_shifted_poisson`, `prox_schatten`, `schatten_norm`, `project_schatten`, `prox_hessian_schatten`, `HessianSchattenResult`, `prox_conjugate`; `Box`, `GroupL2`, `SquaredL2`, `ShiftedPoisson`, `Schatten`, `HessianSchatten` | the building blocks of splitting algorithms |
+| Proximity operators and functions | `prox_box`, `prox_group_l2`, `project_group_l2`, `project_l2_ball`, `prox_squared_l2`, `prox_shifted_poisson`, `prox_schatten`, `schatten_norm`, `project_schatten`, `prox_hessian_schatten`, `HessianSchattenResult`, `prox_conjugate`; `Box`, `GroupL2`, `L2Ball`, `SquaredL2`, `ShiftedPoisson`, `Schatten`, `HessianSchatten` | the building blocks of splitting algorithms |
 | Smooth functions | `Smooth`, `PoissonGaussian` | a differentiable term with a Lipschitz gradient, for the primal–dual solver |
 | Linear operators | `LinearOperator`, `Circulant`; `Identity`, `Convolution`, `as_circulant`; `diff`, `diff_adjoint`, `Gradient`, `Hessian` | the operator protocols, a transfer function as an operator, and finite differences with their Fourier symbols |
-| Solvers | `Term`, `admm_fft`, `AdmmResult`; `primal_dual`, `primal_dual_step`, `PrimalDualResult` | ADMM for circulant operators, solved in the Fourier domain; primal–dual splitting with a smooth term, which needs no inversion |
+| Solvers | `Term`, `admm_fft`, `AdmmResult`; `primal_dual`, `primal_dual_step`, `PrimalDualResult`; `chambolle_pock` | ADMM for circulant operators, solved in the Fourier domain; primal–dual splitting with a smooth term, which needs no inversion; the primal–dual algorithm of Chambolle and Pock, for a sum of two terms with proximity operators |
 
 The module is semi-public: it is documented in the
 [API reference](../reference/optim.md) and may change without notice. It does not
 depend on `optix.deconv`; [Ikoma](../algorithms/deconv/ikoma.md) is its first user,
 [HSPIRAL](../algorithms/deconv/hspiral.md) uses it too, and
-[Chouzenoux](../algorithms/deconv/chouzenoux.md) uses the primal–dual solver.
+[Chouzenoux](../algorithms/deconv/chouzenoux.md) uses the primal–dual solver, and
+[ROF](../algorithms/denoise/rof.md) the Chambolle–Pock one.
 
 ```pycon
 >>> import torch
@@ -25,13 +26,16 @@ depend on `optix.deconv`; [Ikoma](../algorithms/deconv/ikoma.md) is its first us
 ...     Gradient,
 ...     GroupL2,
 ...     Hessian,
+...     L2Ball,
 ...     PoissonGaussian,
 ...     SquaredL2,
 ...     Term,
 ...     admm_fft,
+...     chambolle_pock,
 ...     primal_dual,
 ...     primal_dual_step,
 ...     project_group_l2,
+...     project_l2_ball,
 ...     prox_group_l2,
 ... )
 >>> _ = torch.manual_seed(0)
@@ -54,6 +58,7 @@ the terms of imaging it has a closed form. The module provides the following.
 | indicator of a box $[l, u]$ | projection, $\min(\max(\mathbf{v}, l), u)$; any $t$ | `prox_box`, `Box` |
 | $w\sum_j \lVert \mathbf{z}_j \rVert_2$ (mixed $\ell_{2,1}$) | block soft threshold, $\max(1 - tw / \lVert\mathbf{v}_j\rVert_2, 0)\,\mathbf{v}_j$ | `prox_group_l2`, `GroupL2` |
 | indicator of the $\ell_2$ ball of radius $r$ | $\mathbf{v}_j \min(1, r / \lVert\mathbf{v}_j\rVert_2)$ | `project_group_l2` |
+| indicator of the weighted $\ell_2$ ball $\sum_j w_j (z_j - c_j)^2 \le r^2$ | projection, in closed form for a scalar weight and by Newton's method otherwise, see below | `project_l2_ball`, `L2Ball` |
 | $\tfrac{w}{2}\lVert \mathbf{z} - \mathbf{y} \rVert^2$ | $(\mathbf{v} + tw\mathbf{y}) / (1 + tw)$ | `prox_squared_l2`, `SquaredL2` |
 | $\sum_j z_j - (y_j + \tilde\sigma^2)\log(z_j + \tilde\sigma^2)$ | root of a quadratic, see below | `prox_shifted_poisson`, `ShiftedPoisson` |
 | $w\sum_j \lVert \mathbf{X}_j \rVert_{S_p}$ (Schatten norm of a field of symmetric matrices), $p \in \{1, 2, \infty\}$ | a shrinkage of the singular values, see below | `prox_schatten`, `Schatten` |
@@ -88,6 +93,38 @@ tensor([[0.6000, 0.0000],
 >>> prox_group_l2(v, 1.0) + project_group_l2(v, 1.0) - v
 tensor([[0., 0.],
         [0., 0.]])
+```
+
+### The weighted ℓ2 ball
+
+`L2Ball(radius, center, weight)` is the indicator of the ball
+$\sum_j w_j (z_j - c_j)^2 \le r^2$ of the whole image, not of one group $\mathbf{z}_j$ as
+`project_group_l2` is. With $c$ the data and $z$ an image, it is the discrepancy
+constraint of [Rudin, Osher and Fatemi (1992, Eq. 2.3c)](https://doi.org/10.1016/0167-2789(92)90242-F),
+and its prox is the projection for any step $t$. With $\mathbf{e} = \mathbf{v} - \mathbf{c}$, the
+KKT conditions give
+
+$$
+\mathbf{z} = \mathbf{c} + \frac{\mathbf{e}}{1 + \mu\mathbf{w}},
+$$
+
+with $\mu = 0$ when $\mathbf{v}$ is inside the ball, and otherwise the root $\mu > 0$ of the decreasing
+convex function $\varphi(\mu) = \sum_j w_j e_j^2 / (1 + \mu w_j)^2 - r^2$. For a scalar
+weight the root is explicit and the projection is the radial scaling
+$\mathbf{z} = \mathbf{c} + \mathbf{e}\, r / (\sqrt{w}\,\lVert\mathbf{e}\rVert_2)$. For a map of weights it is
+found by Newton's method from $\mu = 0$, which increases monotonically to the root, until
+$\varphi(\mu) \le 10^{-12} r^2$ or `max_iter` (50) steps; the point is then scaled radially
+onto the ball, so that the result is always feasible. The sums are in float64. `L2Ball.value`
+is $0$ inside the ball, to a relative $10^{-6}$ of $r^2$, and $+\infty$ outside.
+
+```pycon
+>>> v = torch.tensor([3.0, 4.0])
+>>> project_l2_ball(v, 1.0), project_l2_ball(v, 10.0)  # outside, inside
+(tensor([0.6000, 0.8000]), tensor([3., 4.]))
+>>> w = torch.tensor([1.0, 4.0])
+>>> z = project_l2_ball(v, 1.0, weight=w)
+>>> round(float((w * z**2).sum()), 6)  # on the boundary
+1.0
 ```
 
 ### The shifted-Poisson prox
@@ -579,6 +616,80 @@ The exact likelihood of a small image, and its Lipschitz constant:
 (torch.Size([3]), True)
 ```
 
+## Chambolle–Pock
+
+`chambolle_pock` is the primal–dual algorithm of
+[Chambolle and Pock (2011)](https://doi.org/10.1007/s10851-010-0251-1) for
+
+$$
+\min_{\mathbf{x}} \; G(\mathbf{x}) + F(\mathbf{K}\mathbf{x}),
+$$
+
+with $F$ and $G$ convex and with proximity operators, and $\mathbf{K}$ any linear operator. It
+needs no smooth term and no Lipschitz constant, unlike `primal_dual`, so that a constraint
+on the data (`L2Ball`) or a non-smooth data term is a valid $G$. It solves the saddle
+problem $\min_{\mathbf{x}} \max_{\mathbf{v}} \langle\mathbf{K}\mathbf{x}, \mathbf{v}\rangle + G(\mathbf{x}) - F^*(\mathbf{v})$
+by
+
+$$
+\mathbf{v}_{k+1} = \mathrm{prox}_{\tau_{\mathrm{d}} F^*}(\mathbf{v}_k + \tau_{\mathrm{d}}\mathbf{K}\bar{\mathbf{x}}_k),
+\qquad
+\mathbf{x}_{k+1} = \mathrm{prox}_{\tau_{\mathrm{p}} G}(\mathbf{x}_k - \tau_{\mathrm{p}}\mathbf{K}^\top\mathbf{v}_{k+1}),
+\qquad
+\bar{\mathbf{x}}_{k+1} = \mathbf{x}_{k+1} + \theta(\mathbf{x}_{k+1} - \mathbf{x}_k),
+$$
+
+Algorithm 1 of the paper with $\theta = 1$ (its $\tau$ and $\sigma$ are written
+$\tau_{\mathrm{p}}$ and $\tau_{\mathrm{d}}$ here, as $\sigma$ is the noise level elsewhere in the
+documentation). The prox of $F^*$ comes from that of $F$ by the Moreau identity
+(`prox_conjugate`). It converges when $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\mathbf{K}\rVert^2 < 1$
+(Theorem 1), at the ergodic rate $O(1/N)$. When $G$ is $\gamma$-strongly convex, the steps
+follow Algorithm 2 ($\theta_k = 1/\sqrt{1 + 2\gamma\tau_{\mathrm{p},k}}$, $\tau_{\mathrm{p},k+1} =
+\theta_k\tau_{\mathrm{p},k}$, $\tau_{\mathrm{d},k+1} = \tau_{\mathrm{d},k}/\theta_k$) and the rate is
+$O(1/N^2)$ (Theorem 2).
+
+| Argument | Meaning |
+|---|---|
+| `op`, `dual`, `primal` | $\mathbf{K}$ (a `LinearOperator`, with `norm2`), $F$ and $G$ (`Function`s; only their prox is used) |
+| `x0`, `y0` | starting primal point (sets dtype and device) and dual variable (zeros by default) |
+| `tau`, `sigma` | steps $\tau_{\mathrm{p}}$, $\tau_{\mathrm{d}} > 0$ with $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\mathbf{K}\rVert^2 < 1$; both $0.99/\lVert\mathbf{K}\rVert$ by default (the paper leaves the split open) |
+| `strong_convexity` | $\gamma \ge 0$, the modulus of strong convexity of $G$; 0 is Algorithm 1 |
+| `max_iter`, `tol` | stop after `max_iter` iterations (1000), or when the measure of convergence is at most `tol` ($10^{-5}$); `tol=None` runs them all. Neither default is in the paper |
+| `gap`, `check_every` | `gap(x, y)`, the measure of convergence, for instance a relative primal–dual gap (Section 5), evaluated every `check_every` iterations; by default the relative change of $\mathbf{x}$ |
+| `trace`, `callback` | a dict filled with the per-iteration list `"change"` and the list `"gap"`; `callback(k, x)` after each iteration |
+
+The result is a `PrimalDualResult`: `x`, the last primal iterate, `duals` the list
+`[y]` of the dual variable, `n_iter`, the last relative `change`, and `residual`, the last
+evaluated `gap` (infinite without one). The steps set the scale of the iterates: when $G$ acts
+on data of scale $\kappa$ (the noise level of a discrepancy constraint, say), the steps
+$\tau_{\mathrm{p}} = \kappa/\lVert\mathbf{K}\rVert$ and $\tau_{\mathrm{d}} = 0.99/(\kappa\lVert\mathbf{K}\rVert)$ keep
+the two updates balanced, as [ROF](../algorithms/denoise/rof.md#algorithm) does.
+
+The example is the constrained total-variation denoising of the ADMM example above: minimise
+$\sum_j \lVert(\nabla\mathbf{x})_j\rVert_2$ subject to $\lVert\mathbf{x} - \mathbf{y}\rVert^2 \le M\sigma^2$, with
+$M = 64^2$ and $\sigma = 2$. The projection onto the ball is the primal step, so the
+iterate satisfies the constraint at every iteration.
+
+```pycon
+>>> D = Gradient(2, boundary="neumann")
+>>> norm, kappa = D.norm2**0.5, 2.0  # κ = σ
+>>> res = chambolle_pock(
+...     D,
+...     GroupL2(1.0),  # F = the isotropic total variation, on ∇x
+...     L2Ball(2.0 * 64, y),  # G = the constraint, radius √M σ
+...     y,
+...     tau=kappa / norm,
+...     sigma=0.99 / (kappa * norm),
+...     tol=1e-4,
+... )
+>>> res.n_iter, res.residual, [d.shape for d in res.duals]
+(109, inf, [torch.Size([2, 64, 64])])
+>>> float((res.x - y).square().sum()) <= (2.0 * 64) ** 2 * (1 + 1e-6)
+True
+>>> [round(float((e - x).abs().mean()), 2) for e in (y, res.x)]
+[1.6, 0.21]
+```
+
 ## References
 
 !!! references "References"
@@ -610,6 +721,12 @@ The exact likelihood of a small image, and its Lipschitz constant:
        variation image denoising and deblurring problems.* IEEE Trans Image Process
        **18**(11):2419-2434, 2009.
        [doi:10.1109/TIP.2009.2028250](https://doi.org/10.1109/TIP.2009.2028250)
+    8. Chambolle A, Pock T. *A first-order primal-dual algorithm for convex problems
+       with applications to imaging.* J Math Imaging Vis **40**(1):120-145, 2011.
+       [doi:10.1007/s10851-010-0251-1](https://doi.org/10.1007/s10851-010-0251-1)
+    9. Rudin LI, Osher S, Fatemi E. *Nonlinear total variation based noise removal
+       algorithms.* Physica D **60**(1-4):259-268, 1992.
+       [doi:10.1016/0167-2789(92)90242-F](https://doi.org/10.1016/0167-2789(92)90242-F)
 
     ??? quote "BibTeX"
 
@@ -682,5 +799,25 @@ The exact likelihood of a small image, and its Lipschitz constant:
           pages   = {2419--2434},
           year    = {2009},
           doi     = {10.1109/TIP.2009.2028250},
+        }
+        @article{chambolle2011first,
+          author  = {Chambolle, Antonin and Pock, Thomas},
+          title   = {A first-order primal-dual algorithm for convex problems with applications to imaging},
+          journal = {Journal of Mathematical Imaging and Vision},
+          volume  = {40},
+          number  = {1},
+          pages   = {120--145},
+          year    = {2011},
+          doi     = {10.1007/s10851-010-0251-1},
+        }
+        @article{rudin1992nonlinear,
+          author  = {Rudin, Leonid I. and Osher, Stanley and Fatemi, Emad},
+          title   = {Nonlinear total variation based noise removal algorithms},
+          journal = {Physica D: Nonlinear Phenomena},
+          volume  = {60},
+          number  = {1--4},
+          pages   = {259--268},
+          year    = {1992},
+          doi     = {10.1016/0167-2789(92)90242-F},
         }
         ```

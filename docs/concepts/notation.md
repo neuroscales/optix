@@ -372,6 +372,28 @@ regulariser; $\beta$ is the Kaiser parameter, not a background level; $\tau$ a d
 threshold, not a precision or a penalty weight; $\mathbf{T}$ is a matrix, not
 the PSF transform; $m$ and $M$ count blocks, not the mean of a Normal. The context tells which is meant.
 
+## Total-variation denoising
+
+The symbols of [ROF](../algorithms/denoise/rof.md). The data, the image and the noise
+are $\mathbf{y}$, $\mathbf{x}$ and $\boldsymbol\varepsilon$ as in the
+[image formation](#image-formation) section.
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $M$ | number of pixels of an image, $M = \lvert\Omega\rvert$ | `data.numel()` |
+| $\mathrm{TV}(\mathbf{x})$ | isotropic total variation, $\sum_j \lVert(\nabla\mathbf{x})_j\rVert_2$ | `tv_denoise` |
+| $\lambda$ | weight of the data term of the penalised problem $\mathrm{TV}(\mathbf{x}) + \tfrac\lambda2\lVert\mathbf{x} - \mathbf{y}\rVert^2$; the Lagrange multiplier of the noise constraint $\lVert\mathbf{x} - \mathbf{y}\rVert^2 \le M\sigma^2$ | `lam`, `TVResult.lam` |
+| $\omega_j$, $w_a$ | pixel weights of the data term; weights of the differences along axis $a$ in the total variation | `weights`, `axis_weights` |
+| $\mathbf{p}$ | dual field of the total variation, $\lVert\mathbf{p}_j\rVert_2 \le 1$, with $\lambda(\mathbf{x} - \mathbf{y}) = -\nabla^\top\mathbf{p}$ | `duals` of `chambolle_pock` |
+| $\mathbf{K}$, $F$, $G$, $\mathbf{v}$, $\bar{\mathbf{x}}$ | operator, dual and primal functions, dual variable and extrapolated iterate of $\min_{\mathbf{x}} G(\mathbf{x}) + F(\mathbf{K}\mathbf{x})$ | `op`, `dual`, `primal` of `chambolle_pock` |
+| $\tau_{\mathrm{p}}$, $\tau_{\mathrm{d}}$, $\theta$ | primal and dual steps (written $\tau$ and $\sigma$ by Chambolle and Pock) and extrapolation parameter | `tau`, `sigma` |
+| $\kappa$ | scale of the data term in data units, that sets the split of the steps ($\sigma/\sqrt{\bar\omega}$ for the noise constraint); not the constant of the default weights | |
+| $\gamma$ | strong-convexity modulus of $G$ in `chambolle_pock` (not the step of `primal_dual`) | `strong_convexity` |
+
+Here $\sigma$ is always the standard deviation of the noise, never the dual step, and
+$\mathbf{p}$ a dual field, not a block of block matching; $\mathbf{v}$ is the dual variable
+$\mathbf{v}_r$ of `primal_dual`. The context tells which is meant.
+
 ## Views
 
 | Symbol | Meaning | In code |
