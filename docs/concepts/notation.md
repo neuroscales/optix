@@ -398,6 +398,36 @@ a noise, not a weight of the total variation, a natural parameter or an efficien
 $\varrho$ is a ratio, not the pupil radius $\rho$; and $\nu_c$ is a frequency in cycles, as
 $\boldsymbol{\nu}$ is.
 
+## Wavelet shrinkage
+
+The symbols of [PURE-LET](../algorithms/denoise/pure-let.md). The data are
+normalised to photoelectrons, and the method estimates the mean squared error
+of its own output from the data (PURE) to choose the weights of a combination of
+thresholds.
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\tilde{\mathbf{y}}$, $\tilde\sigma^2$ | data in photoelectrons, $(\mathbf{y} - o)/g$; read-noise variance in photoelectrons², $\sigma^2/g^2$ (as in [Ikoma](../algorithms/deconv/ikoma.md), without the flat field) | |
+| $\boldsymbol{\lambda}$ | noise-free intensity, a fixed vector of expected photoelectrons | |
+| $\mathcal{F}$, $\mathcal{F}_k$, $\mathcal{F}_{\mathrm{low}}$ | denoiser; $k$-th function of the linear expansion of thresholds (LET); its low-pass residual | `pure_let`, `let_basis` |
+| $\mathbf{1}_i$ | vector with 1 at pixel $i$ and 0 elsewhere | |
+| $\hat\epsilon$ | PURE, the unbiased estimate of the mean squared error (Taylor form) | `PureSums.risk` |
+| $\mathbf{D}_{j,b}$, $\bar{\mathbf{D}}_j$, $\mathbf{R}_{j,b}$ | analysis by the wavelet band $b$ and by the scaling filter of level $j$ of the undecimated Haar transform; reconstruction | `haar_uwt` |
+| $\mathbf{w}$, $\bar{\mathbf{w}}$ | wavelet and scaling coefficients of a level | `haar_uwt` |
+| $J$, $j$, $d$, $b$ | number of levels, level, number of transformed axes, orientation band ($1 \ldots 2^d - 1$) | `levels`, `ndim` |
+| $M_j$, $\beta_j$ | redundancy of level $j$, $2^{dj}$; scale $M_j^{-1/2}$ that turns $\bar w$ into a local mean | |
+| $t_j(\bar w)$, $\theta_{j,k}$ | signal-dependent threshold; the two functions of $(w, \bar w)$ of a band | `let_threshold` |
+| $\kappa$ | sharpness of the smooth absolute value $\tanh(\kappa\bar w)\bar w$ | `sharpness` |
+| $a_{j,b,k}$, $K$ | LET coefficients; their number, $2(2^d - 1)J$ | `PureSums.solve` |
+| $\mathbf{G}$, $\hat{\mathbf{c}}$, $\delta_k$ | matrix and right-hand side of the linear system of PURE; derivative terms of $\hat c_k$ | `PureSums.gram`, `.cross`, `.delta` |
+| $T$, $T_j$, $E_{\text{mean}}$ | threshold of the reliability rule; statistic of level $j$, $M_j E_{\text{mean}}$; mean energy of the intensity | `reliability`, `PureSums.active` |
+
+Here $\mathcal{F}$ is a function, not the flat field $\mathbf{f}$; $\beta_j$ is a
+scale, not the Kaiser parameter or a background level; $\theta$ is a
+function of coefficients, not the direction of stripes; $b$ is a band, not a
+baseline; $a$ a coefficient, not a Zernike coefficient; $\mathbf{G}$ a Gram
+matrix, not a group of blocks; $\kappa$ a sharpness, not a noise constant.
+
 ## Non-local means
 
 The symbols of [Non-local means](../algorithms/denoise/nl-means.md). A *patch* is

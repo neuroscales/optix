@@ -11,6 +11,7 @@
         - BM3D
         - BM4D
         - ACsN
+        - PURELET
         - NLMeans
 
 ## Transforms
@@ -27,6 +28,8 @@
         - bm4d_halo
         - acsn
         - acsn_halo
+        - pure_let
+        - pure_let_halo
         - nl_means
         - nl_means_halo
 
@@ -69,6 +72,10 @@
         - sigma_from_highpass
         - quality_score
         - temporal_psnr
+        - haar_uwt
+        - let_threshold
+        - let_basis
+        - PureSums
         - patch_kernel
         - default_h
         - search_offsets

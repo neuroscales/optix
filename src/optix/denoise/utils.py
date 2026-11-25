@@ -3,7 +3,7 @@
 The stages, transforms, block matching and collaborative filters of
 BM3D and BM4D, the patch distances of non-local means, the noise estimate,
 profile and quality score of ACsN, the default intensity range and the memory
-budget.
+budget; the transform, thresholding functions and PURE system of PURE-LET.
 """
 
 from ._acsn import (
@@ -40,6 +40,7 @@ from ._nlm import (
     patch_kernel,
     search_offsets,
 )
+from ._purelet import PureSums, haar_uwt, let_basis, let_threshold
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -49,6 +50,7 @@ from ._transforms import (
 )
 
 __all__ = [
+    "PureSums",
     "Stage",
     "acsn_noise",
     "acsn_profile",
@@ -63,9 +65,12 @@ __all__ = [
     "dct_matrix",
     "filter_batch",
     "haar_matrix",
+    "haar_uwt",
     "hard_threshold",
     "highpass",
     "kaiser_window",
+    "let_basis",
+    "let_threshold",
     "match_batch",
     "noise_ratio",
     "otf_cutoff",

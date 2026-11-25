@@ -57,6 +57,7 @@ nav = [
     {"Denoising" = [
       "algorithms/denoise/bm3d.md",
       "algorithms/denoise/acsn.md",
+      "algorithms/denoise/pure-let.md",
       "algorithms/denoise/nl-means.md",
     ]},
     {"Destriping" = [
