@@ -515,16 +515,34 @@ def test_blocks_memory_budget():
 
 
 def _peak_bytes(fn):
-    """Peak of live tensor bytes during `fn` (torch profiler events)."""
+    """Peak of live CPU tensor bytes during `fn`, from the profiler's raw
+    allocation records.
+
+    The raw `[memory]` records (one per allocation, +bytes, or free,
+    −bytes) are summed in time order. The per-op `self_cpu_memory_usage`
+    of `p.events()` is not used: torch < 2.4 attributes records to ops by
+    microsecond time stamps, so a record at an op boundary is counted in
+    several ops and the running sum drifts upwards (to several times the
+    true peak with torch 2.3).
+    """
+    from torch.autograd import DeviceType
     from torch.profiler import ProfilerActivity, profile
 
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True) as p:
         fn()
-    events = [e for e in p.events() if e.self_cpu_memory_usage != 0]
-    events.sort(key=lambda e: e.time_range.start)
+    records = [
+        e
+        for e in p.profiler.kineto_results.events()
+        if e.name() == "[memory]" and e.device_type() == DeviceType.CPU
+    ]
+
+    def start(e):
+        return e.start_ns() if hasattr(e, "start_ns") else 1000 * e.start_us()
+
+    records.sort(key=start)  # stable: same-µs records keep their order
     current = peak = 0
-    for e in events:
-        current += e.self_cpu_memory_usage
+    for e in records:
+        current += e.nbytes()
         peak = max(peak, current)
     return peak
 
