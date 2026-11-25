@@ -129,7 +129,7 @@ vector with 1 at pixel $i$ and 0 elsewhere, they give *PURE*
 === "optix"
 
     $$
-    \hat\epsilon =
+    \epsilon =
     \frac{1}{\lvert\Omega\rvert}\Bigl(
     \lVert \mathcal{F}(\tilde{\mathbf{y}}) \rVert^2
     - 2\,\tilde{\mathbf{y}}^\top \mathcal{F}^{-}(\tilde{\mathbf{y}})
@@ -138,7 +138,7 @@ vector with 1 at pixel $i$ and 0 elsewhere, they give *PURE*
     + \frac{1}{\lvert\Omega\rvert}\bigl(\lVert \tilde{\mathbf{y}} \rVert^2 - \mathbf{1}^\top\tilde{\mathbf{y}}\bigr)
     - \tilde\sigma^2,
     \qquad
-    \mathbb{E}\{\hat\epsilon\} = \mathbb{E}\{\mathrm{MSE}\}
+    \mathbb{E}\{\epsilon\} = \mathbb{E}\{\mathrm{MSE}\}
     $$
 
 === "Luisier et al. 2011"
@@ -489,7 +489,13 @@ $$
 
 where the sums run over the coefficients $l$ of the band and the derivatives are
 evaluated at $(w_l, \bar w_l)$. These closed forms need the periodic boundary
-conditions, which is why the implementation extends the image periodically.
+conditions, which is why the implementation extends the image periodically, and
+an image with at least $2^J$ samples along every transformed axis: they assume
+that the $2^j$ taps of each filter fall on distinct pixels. On a smaller image
+the circulant $\mathbf{D}_j$ folds several taps onto one pixel and $\delta_k$ is no
+longer the derivative term of PURE, so
+[`pure_let`][optix.denoise.pure_let] and [`PURELET`][optix.denoise.PURELET] raise
+a `ValueError` that names the largest valid $J$.
 
 ### The reliability rule
 
@@ -535,7 +541,8 @@ share $T_j$, so they are kept or dropped together.
 | $a_{j,b,k}$ | $a_{j,k}$ | LET coefficients | $K = 2(2^d - 1)J$ |
 | $\mathbf{G}$, $\hat{\mathbf{c}}$ | $\mathbf{M}$, $\hat{\mathbf{c}}$ | matrix and right-hand side of the linear system | $K \times K$, $K$ |
 | $\delta_k$ | | derivative terms of $\hat c_k$, $\tilde{\mathbf{y}}^\top\partial\mathcal{F}_k + \tilde\sigma^2\operatorname{div}\{\mathcal{F}_k - \partial\mathcal{F}_k\}$ | $K$ |
-| $\hat\epsilon$ | $\epsilon$, $\hat\epsilon$ | PURE (Taylor form) | scalar |
+| $\epsilon$ | $\epsilon$ | PURE (exact form, Eq. 2) | scalar |
+| $\hat\epsilon$ | $\hat\epsilon$ | PURE (Taylor form, Eq. 6) | scalar |
 | $T$, $T_j$, $E_{\text{mean}}$ | $T$, $T_j$, $E_{\text{mean}}$ | threshold of the reliability rule (`reliability`); statistic of level $j$; mean energy of the intensity | scalars |
 
 ## Algorithm
@@ -599,7 +606,10 @@ The paper leaves a number of choices open, and the code makes them as follows.
    [Luisier et al. (2011, §III-B)](https://doi.org/10.1109/TIP.2010.2073477) give the
    transform-dependent terms in closed form. The image is extended by wrapping
    around, by $2^J - 1$ pixels. Structures near one border are filtered together
-   with those near the opposite border.
+   with those near the opposite border. The closed forms also need at least
+   $2^J$ samples along every transformed axis; a smaller image is refused (with
+   the largest valid $J$ in the message) rather than denoised with a wrong
+   risk.
 5. **The output is in the units of the data**, $g\hat{\boldsymbol\lambda} + o$. The paper
    denoises the normalised data and does not map back.
 6. **The noise parameters are inputs.** The paper estimates $\alpha$, $\delta$
@@ -619,9 +629,9 @@ The paper leaves a number of choices open, and the code makes them as follows.
     * the system is scaled to a unit diagonal and solved by its eigenvalue
       decomposition, discarding the eigenvalues below $10^{-10}$ times the
       largest. For a well-conditioned system this is the exact solution. When
-      some $\mathcal{F}_k$ are linearly dependent to working precision ($\mathcal{F}_k = 0$ for
-      constant data, or coarse bands that wrap around an image smaller than
-      their filters), it gives the minimum-norm minimiser of PURE.
+      some $\mathcal{F}_k$ are linearly dependent to working precision
+      ($\mathcal{F}_k = 0$ for constant data), it gives the minimum-norm minimiser
+      of PURE.
 
 **Not implemented.** The paper also uses a $16 \times 16$ overcomplete
 block-DCT (BDCT) transform and a dictionary that combines it with the UWT
@@ -724,11 +734,14 @@ by `apply`. Images of a stack, and groups, are independent, and the maps of a
 
 The cost is linear in the number of pixels: each pass runs the $J$ levels of
 the transform and the reconstruction of the $K$ functions, and the second pass
-skips the derivative terms. In memory, a block holds the $K$ functions
-and the intermediate transforms; the default `block` is chosen from the memory
-budget of [`optix.config`](../../reference/configuration.md), assuming a
-conservative number of copies of the block. Larger blocks reduce the overhead of
-the halo, at the cost of memory. The statistics of all the frames are kept between the passes, $K^2$ values
+computes the thresholding function only, without its derivatives. In memory, a
+block needs about $K + 4\cdot 2^d + 16$ copies of itself (with its halo): the
+$K$ functions, plus the coefficients of one level and their reconstruction, the
+bands being thresholded one at a time (56 copies for an image and 104 for a
+volume with $J = 4$, and $2^d + 4$ more with per-pixel noise maps). The default
+`block` is chosen from this number and the memory budget of
+[`optix.config`](../../reference/configuration.md). Larger blocks reduce the
+overhead of the halo, at the cost of memory. The statistics of all the frames are kept between the passes, $K^2$ values
 of `float64` for each (about 5 kB per frame for images with $J = 4$, 25 kB for
 volumes). The computation is vectorised and runs on any torch device.
 
@@ -873,7 +886,10 @@ filaments on a smooth background, with intensities in photoelectrons
 - **Closed forms.** The derivatives of the threshold, and the derivative terms
   $\delta_k$ of the Haar transform (for constant and per-pixel variance, 2-D and
   3-D), agree with finite differences and with a brute-force evaluation of
-  Eq. 6.
+  Eq. 6. They also agree to $10^{-10}$ with Eq. 8 evaluated with the
+  transform written as explicit circulant matrices (Eq. 16, Kronecker
+  products of the 1-D filters, $\mathbf{R}_j = \mathbf{D}_j^\top/M_j$), down to the smallest
+  valid size ($16 \times 17$ with $J = 4$; one sample less is refused).
 - **PURE is unbiased (exact form).** With the LET coefficients fixed, the mean over
   150 realisations of PURE of Eq. 2, evaluated by brute force with the $N$
   shifted inputs of $\mathcal{F}^{-}$ (an $8 \times 8$ image of peak 20, $\sigma = 1$,
@@ -894,10 +910,29 @@ filaments on a smooth background, with intensities in photoelectrons
     With fixed coefficients, the difference is within three standard errors of zero
     at the three intensities, and the risk estimate with a per-pixel
     $\tilde\sigma^2$ passes the same test. With the coefficients solved on the
-    data themselves, PURE lies below the MSE (by 7 to 13 %): a risk estimate
-    that is minimised over $K = 24$ weights on the data that it is evaluated on
-    is optimistic, as any empirical risk is. This does not stop the minimiser
-    from being nearly the best one (see the PSNR below).
+    data themselves, PURE lies below the MSE: a risk estimate that is
+    minimised over $K = 24$ weights on the data that it is evaluated on is
+    optimistic, as any empirical risk is. The gap is exact: with
+    $\mathbf{c} = [\mathcal{F}_k^\top(\boldsymbol\lambda - \mathcal{F}_{\mathrm{low}})]_k$ the
+    right-hand side of the oracle system and $\mathbf{a}^\star = \mathbf{G}^{-1}\mathbf{c}$
+    the oracle coefficients,
+
+    $$
+    \hat\epsilon(\hat{\mathbf{a}}) - \mathrm{MSE}(\hat{\mathbf{a}})
+    = \bigl[\hat\epsilon(\mathbf{a}^\star) - \mathrm{MSE}(\mathbf{a}^\star)\bigr]
+    - \frac{2}{\lvert\Omega\rvert}\,(\hat{\mathbf{c}} - \mathbf{c})^\top \mathbf{G}^{-1} (\hat{\mathbf{c}} - \mathbf{c}).
+    $$
+
+    The first term is the bias of PURE at fixed coefficients, zero within its
+    standard error here. The second is never positive: PURE lies below the MSE
+    by $(2/\lvert\Omega\rvert)(\hat{\mathbf{c}} - \mathbf{c})^\top\mathbf{G}^{-1}(\hat{\mathbf{c}} - \mathbf{c})$,
+    where $\hat{\mathbf{c}} - \mathbf{c}$ is the error of $\hat{\mathbf{c}}$: about $2K$ to
+    $3K$ noise variances divided by the number of pixels $\lvert\Omega\rvert$ (7 to
+    13 % of the MSE here, with $K = 24$ on $256^2$ images; the term grows as
+    $1/\lvert\Omega\rvert$, about four times larger on a $128^2$ image). Half of it is
+    the excess MSE of the solved coefficients over the oracle ones. This does
+    not stop the minimiser from being nearly the best one (see the PSNR
+    below).
 - **The solution minimises PURE.** The solution of the system satisfies
   $\mathbf{G}\mathbf{a} = \hat{\mathbf{c}}$ to rounding, and random perturbations of $\mathbf{a}$
   increase PURE by the quadratic form of $\mathbf{G}$.
@@ -918,8 +953,8 @@ filaments on a smooth background, with intensities in photoelectrons
     access to the truth.
 - **Streaming.** Block-wise and whole-image results agree to $10^{-10}$ in
   `float64` and to within 8 units in the last place in `float32`, for any block
-  size, any number of wraps of the halo around a small image, with a zarr array
-  and with several frames.
+  size, blocks smaller than the halo (which then wraps several times around
+  the image), with a zarr array and with several frames.
 
 These numbers describe the synthetic scenes only: they are not comparable with
 the PSNRs of the standard test images of the paper.

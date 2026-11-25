@@ -192,6 +192,80 @@ def test_closed_forms_3d():
     torch.testing.assert_close(delta, expected, rtol=1e-6, atol=1e-6)
 
 
+def _circulant(n, taps):
+    """1-D correlation with `taps` (coefficient l sees samples l, l + 1,
+    …), periodic: taps that wrap onto one sample add up (Eq. (16))."""
+    d = torch.zeros(n, n, **F64)
+    for t, v in enumerate(taps):
+        for i in range(n):
+            d[i, (i + t) % n] += v
+    return d
+
+
+def _dense_delta(y, s2, levels, sharpness=100.0):
+    """δ_k of Eq. (8) with explicit circulant matrices (Eq. (16)).
+
+    D_j and D̄_j are Kronecker products of the 1-D filters of Fig. 3,
+    R_j = D_jᵀ/M_j, and the diagonals of Eq. (8) are Hadamard products.
+    """
+    shape = y.shape
+    yv = y.reshape(-1)
+    sv = s2.reshape(-1) if isinstance(s2, torch.Tensor) else None
+    out = []
+    for j in range(1, levels + 1):
+        q = 2 ** (j - 1)
+        low = [2 ** (-j / 2)] * (2 * q)
+        high = [2 ** (-j / 2)] * q + [-(2 ** (-j / 2))] * q
+        lp = [_circulant(n, low) for n in shape]
+        hp = [_circulant(n, high) for n in shape]
+        m = 2.0 ** (len(shape) * j)
+        d_low = lp[0]
+        for a in lp[1:]:
+            d_low = torch.kron(d_low, a)
+        for c in range(1, 2 ** len(shape)):
+            mats = [
+                hp[i] if (c >> i) & 1 else lp[i] for i in range(len(shape))
+            ]
+            d = mats[0]
+            for a in mats[1:]:
+                d = torch.kron(d, a)
+            r = d.T / m
+            w, wbar = d @ yv, d_low @ yv
+            var = m**-0.5 * (d_low @ sv) if sv is not None else s2
+            th = U.let_threshold(w, wbar, m**-0.5, var, sharpness)
+            _, t1, t2, t11, t22, t12 = th
+            s_n = sv if sv is not None else torch.full_like(yv, s2)
+            # f_1 = R·D·y (linear), f_2 = R·θ(D·y, D̄·y)
+            df1 = (d * r.T).sum(0)
+            df2 = (d * r.T).T @ t1 + (d_low * r.T).T @ t2
+            d2f2 = (
+                (d * d * r.T).T @ t11
+                + 2 * (d * d_low * r.T).T @ t12
+                + (d_low * d_low * r.T).T @ t22
+            )
+            out.append(yv @ df1 + s_n @ df1)
+            out.append(yv @ df2 + s_n @ (df2 - d2f2))
+    return torch.stack(out)
+
+
+@pytest.mark.parametrize("pixelwise", [False, True])
+@pytest.mark.parametrize(
+    ("shape", "levels"), [((16, 17), 4), ((8, 9), 3), ((4, 5, 6), 2)]
+)
+def test_closed_forms_match_circulant_matrices(shape, levels, pixelwise):
+    """δ of `let_basis` is Eq. (8) for the periodic transform of Eq. (16),
+    down to the smallest valid size (every axis ≥ 2^J)."""
+    g = torch.Generator().manual_seed(15)
+    x = 2 + 20 * torch.rand(shape, generator=g, dtype=D)
+    y = observe(x, 1.0, g)
+    s2 = (
+        0.5 + 2 * torch.rand(shape, generator=g, dtype=D) if pixelwise else 1.0
+    )
+    _, _, delta = basis(y, s2, levels, ndim=len(shape))
+    expected = _dense_delta(y, s2, levels)
+    torch.testing.assert_close(delta, expected, rtol=1e-10, atol=1e-10)
+
+
 def test_risk_is_the_taylor_pure():
     """PureSums.risk(a) is Eq. (6) for f = Σ a_k f_k + f_low."""
     g = torch.Generator().manual_seed(3)
@@ -440,6 +514,60 @@ def test_blocks_memory_budget():
     torch.testing.assert_close(out, expected, rtol=0, atol=1e-10)
 
 
+def _peak_bytes(fn):
+    """Peak of live tensor bytes during `fn` (torch profiler events)."""
+    from torch.profiler import ProfilerActivity, profile
+
+    with profile(activities=[ProfilerActivity.CPU], profile_memory=True) as p:
+        fn()
+    events = [e for e in p.events() if e.self_cpu_memory_usage != 0]
+    events.sort(key=lambda e: e.time_range.start)
+    current = peak = 0
+    for e in events:
+        current += e.self_cpu_memory_usage
+        peak = max(peak, current)
+    return peak
+
+
+@pytest.mark.parametrize(
+    ("core", "levels", "pixelwise", "dtype"),
+    [
+        ((64, 64), 1, False, D),
+        ((64, 64), 4, False, D),
+        ((64, 64), 4, False, torch.float32),
+        ((48, 48), 2, True, D),
+        ((12, 12, 12), 2, False, D),
+    ],
+)
+def test_memory_overhead(core, levels, pixelwise, dtype):
+    """The peak of `apply` on one block stays within the `overhead`
+    given to `blocks` (in copies of the block with its halo)."""
+    from optix.denoise._purelet import _block_overhead
+
+    ndim = len(core)
+    g = torch.Generator().manual_seed(16)
+    y = (20 + 5 * torch.rand(core, generator=g, dtype=D)).to(dtype)
+    kw = dict(levels=levels, ndim=ndim, block=core, dtype=dtype)
+    if pixelwise:
+        sensor = SensorEstimate(
+            offset=torch.rand(core, generator=g, dtype=D),
+            variance=1 + torch.rand(core, generator=g, dtype=D),
+            gain=1 + 0.1 * torch.rand(core, generator=g, dtype=D),
+        )
+        est = PURELET(pixelwise=True, **kw).fit(init=sensor)
+    else:
+        est = PURELET(sigma=1.0, **kw).fit()
+    est.apply(y)  # warm-up (lazy imports, caches)
+    peak = _peak_bytes(lambda: est.apply(y))
+    if peak == 0:
+        pytest.skip("the profiler reports no memory events")
+    h = pure_let_halo(levels)
+    unit = math.prod(n + 2 * h for n in core) * y.element_size()
+    overhead = _block_overhead(ndim, levels, pixelwise)
+    assert peak / unit <= overhead
+    assert peak / unit >= overhead / 3  # not grossly overestimated
+
+
 def test_each_frame_has_its_coefficients():
     data = _frames()
     out = PURELET(sigma=6.0, gain=2.0, offset=100.0, **F64).fit().apply(data)
@@ -447,21 +575,33 @@ def test_each_frame_has_its_coefficients():
     torch.testing.assert_close(out[1], single, rtol=0, atol=1e-10)
 
 
-def test_small_image_wraps_several_times():
-    """Halo (15) larger than the image: the periodic halo wraps around.
-
-    The level-4 bands nearly coincide on so small an image (their
-    filters wrap around it), so the PURE system is singular and only its
-    well-determined part is solved: agreement to 1e-8, not 1e-10.
-    """
-    data = _frames((11, 9))
-    est = PURELET(sigma=6.0, gain=2.0, offset=100.0, block=(4, 5), **F64)
+def test_halo_wraps_several_times():
+    """Halo (15) larger than the blocks: the periodic halo wraps around."""
+    data = _frames((17, 31))
+    est = PURELET(sigma=6.0, gain=2.0, offset=100.0, block=(5, 7), **F64)
     torch.testing.assert_close(
         est.fit().apply(data),
         pure_let(data, 6.0, gain=2.0, offset=100.0),
         rtol=0,
-        atol=1e-8,
+        atol=1e-10,
     )
+
+
+def test_size_limit():
+    """Every axis needs 2^J samples: (16, 17) passes, (15, 17) is refused."""
+    g = torch.Generator().manual_seed(14)
+    y = observe(scene((16, 17), peak=20.0), 1.0, g)
+    assert torch.isfinite(pure_let(y, 1.0, levels=4)).all()
+    est = PURELET(sigma=1.0, levels=4, **F64).fit()
+    assert torch.isfinite(est.apply(y)).all()
+    for bad in (y[:15], y[:, :15]):
+        with pytest.raises(ValueError, match="levels <= 3"):
+            pure_let(bad, 1.0, levels=4)
+        with pytest.raises(ValueError, match="levels <= 3"):
+            est.apply(bad)
+    vol = torch.rand(4, 20, 20, **F64) * 10
+    with pytest.raises(ValueError, match="levels <= 2"):
+        PURELET(sigma=1.0, ndim=3, **F64).fit().apply(vol)
 
 
 def test_float32_matches_float64():

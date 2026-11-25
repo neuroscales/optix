@@ -52,6 +52,25 @@ def _check_ndim(ndim: object) -> int:
     return int(ndim)
 
 
+def _check_size(spatial: Sequence[int], levels: int) -> None:
+    """Every transformed axis needs at least 2^J samples (Section III-B)."""
+    n = min(int(x) for x in spatial)
+    if n >= 2**levels:
+        return
+    best = n.bit_length() - 1  # largest J with 2^J <= n
+    hint = (
+        f"use levels <= {best}"
+        if best >= 1
+        else "every axis needs at least 2 samples"
+    )
+    raise ValueError(
+        f"levels={levels} needs at least 2^levels = {2**levels} samples "
+        f"along every transformed axis, got {tuple(spatial)}: the closed "
+        "forms of PURE assume that the filters of the coarsest level do "
+        f"not wrap around the image; {hint}"
+    )
+
+
 def _check_nonneg(name: str, value: object) -> float:
     if value is None or isinstance(value, bool):
         raise ValueError(f"{name} must be a number >= 0, got {value!r}")
@@ -93,6 +112,32 @@ def _lowpass_adjoint(u: Tensor, ndim: int, shifts: Sequence[int]) -> Tensor:
     return u
 
 
+def _adjoint_axis(u: Tensor, dim: int, s: int, sign: Tensor | None) -> Tensor:
+    """Adjoint of one 1-D Haar step of `_split` along `dim` (zero outside).
+
+    `sign` holds ±1 per leading channel (broadcast to `u`; −1 for the
+    high-pass filter (1, −1)/√2); None means low-pass.
+    """
+    n = u.shape[dim]
+    shape = list(u.shape)
+    shape[dim] = n + s
+    out = u.new_empty(shape)
+    out.narrow(dim, n, s).zero_()
+    out.narrow(dim, 0, n).copy_(u)
+    late = out.narrow(dim, s, n)
+    if sign is None:
+        late.add_(u)
+    else:
+        late.addcmul_(u, sign)
+    return out.mul_(_R)
+
+
+def _axis_sign(signs: Tensor | None, i: int, u: Tensor) -> Tensor | None:
+    if signs is None:
+        return None
+    return signs[:, i].to(u).reshape((-1,) + (1,) * (u.ndim - 1))
+
+
 def _adjoint_step(
     u: Tensor, ndim: int, s: int, signs: Tensor | None
 ) -> Tensor:
@@ -102,15 +147,7 @@ def _adjoint_step(
     high-pass filter is (1, −1)/√2); None means all low-pass.
     """
     for i in range(ndim):
-        dim = u.ndim - ndim + i
-        shape = list(u.shape)
-        shape[dim] = s
-        z = u.new_zeros(shape)
-        late = torch.cat([z, u], dim)
-        if signs is not None:
-            sign = signs[:, i].to(u).reshape((-1,) + (1,) * (u.ndim - 1))
-            late = late * sign
-        u = (torch.cat([u, z], dim) + late) * _R
+        u = _adjoint_axis(u, u.ndim - ndim + i, s, _axis_sign(signs, i, u))
     return u
 
 
@@ -182,7 +219,9 @@ def let_threshold(
     beta: float,
     variance: Tensor | float,
     sharpness: float = 100.0,
-) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    *,
+    derivatives: bool = True,
+) -> tuple[Tensor, ...]:
     """Nonlinear LET function of Eq. (20) and its partial derivatives.
 
     θ(w, w̄) = w·exp(−(w/(3·t(w̄)))⁸), with the signal-dependent threshold
@@ -190,18 +229,18 @@ def let_threshold(
 
         t(w̄) = √(β·|w̄| + σ²),
 
-    where |w̄| is replaced by the smooth tanh(k·w̄)·w̄ (Section III-C,
-    k = `sharpness` = 100) so that the derivatives of Corollary 1 exist.
-    Returns θ and Θ₁ = ∂θ/∂w, Θ₂ = ∂θ/∂w̄, Θ₁₁ = ∂²θ/∂w²,
-    Θ₂₂ = ∂²θ/∂w̄², Θ₁₂ = ∂²θ/∂w∂w̄ (the vectors of Corollary 1), in
-    closed form. With u = w/(3t) and E = exp(−u⁸):
+    where |w̄| is replaced by the smooth tanh(κ·w̄)·w̄ (Section III-C,
+    where it is called k; κ = `sharpness` = 100) so that the derivatives
+    of Corollary 1 exist. Returns θ and Θ₁ = ∂θ/∂w, Θ₂ = ∂θ/∂w̄,
+    Θ₁₁ = ∂²θ/∂w², Θ₂₂ = ∂²θ/∂w̄², Θ₁₂ = ∂²θ/∂w∂w̄ (the vectors of
+    Corollary 1), in closed form. With u = w/(3t) and E = exp(−u⁸):
 
         Θ₁ = E·(1 − 8u⁸),     Θ₁₁ = −(8u⁷/(3t))·E·(9 − 8u⁸),
         Θ₂ = (8w·u⁸·E/t)·t′,  Θ₁₂ = (8u⁸·E/t)·(9 − 8u⁸)·t′,
         Θ₂₂ = (8w·u⁸·E/t²)·(8u⁸ − 9)·t′² + (8w·u⁸·E/t)·t″,
 
     with t′ = β·m′/(2t), t″ = β·m″/(2t) − β²·m′²/(4t³) and
-    m(w̄) = tanh(k·w̄)·w̄.
+    m(w̄) = tanh(κ·w̄)·w̄.
 
     !!! note "Choices not specified in the paper"
         * t² is floored at the machine epsilon of the dtype (t = 0 occurs
@@ -221,36 +260,43 @@ def let_threshold(
         Gaussian variance σ² of the coefficients (a map for per-pixel
         noise parameters).
     sharpness : float
-        k of the smooth absolute value tanh(k·w̄)·w̄.
+        κ of the smooth absolute value tanh(κ·w̄)·w̄.
+    derivatives : bool
+        Whether to compute the five derivatives; θ alone otherwise.
 
     Returns
     -------
     tuple of Tensor
-        θ, Θ₁, Θ₂, Θ₁₁, Θ₂₂, Θ₁₂.
+        θ, Θ₁, Θ₂, Θ₁₁, Θ₂₂, Θ₁₂; `(θ,)` if `derivatives` is False.
     """
-    k = sharpness
-    th = torch.tanh(k * wbar)
-    sech2 = 1 - th * th
-    m = th * wbar
-    dm = th + k * wbar * sech2
-    d2m = 2 * k * sech2 * (1 - k * wbar * th)
-    q = (beta * m + variance).clamp_min(torch.finfo(w.dtype).eps)
+    kappa = sharpness
+    th = torch.tanh(kappa * wbar)
+    q = (beta * th * wbar + variance).clamp_min(torch.finfo(w.dtype).eps)
     t = q.sqrt()
+    u = (w / (3 * t)).clamp_(-_U_MAX, _U_MAX)
+    a = u.square()
+    a.square_().square_()  # u⁸
+    e = a.neg().exp_()
+    theta = w * e
+    if not derivatives:
+        return (theta,)
+    # derivatives of t(w̄): low-pass sized
+    sech2 = 1 - th * th
+    dm = th + kappa * wbar * sech2
+    d2m = 2 * kappa * sech2 * (1 - kappa * wbar * th)
     dt = beta * dm / (2 * t)
     d2t = beta * d2m / (2 * t) - beta * beta * dm * dm / (4 * t * q)
-    u = (w / (3 * t)).clamp(-_U_MAX, _U_MAX)
-    u2 = u * u
-    u8 = u2 * u2
-    u8 = u8 * u8
-    e = torch.exp(-u8)
-    theta = w * e
-    d1 = e * (1 - 8 * u8)
-    u7 = u2 * u2 * u2 * u
-    d11 = -(8 * u7 / (3 * t)) * e * (9 - 8 * u8)
-    g = 8 * w * u8 * e / t  # ∂θ/∂t
+    del sech2, dm, d2m, th
+    # band-sized terms, with in-place updates to limit the temporaries
+    a.mul_(8)  # 8u⁸
+    d1 = torch.rsub(a, 1).mul_(e)  # E·(1 − 8u⁸)
+    b = torch.rsub(a, 9)  # 9 − 8u⁸
+    d11 = u.pow_(7).mul_(e).mul_(b).mul_(-8 / (3 * t))
+    ge = a.mul_(e).div_(t)  # 8u⁸·E/t
+    d12 = torch.mul(ge, b).mul_(dt)
+    g = ge.mul_(w)  # ∂θ/∂t = 8w·u⁸·E/t
     d2 = g * dt
-    d12 = (8 * u8 * e / t) * (9 - 8 * u8) * dt
-    d22 = (g / t) * (8 * u8 - 9) * dt * dt + g * d2t
+    d22 = g.mul_(b.mul_(-(dt * dt) / t).add_(d2t))
     return theta, d1, d2, d11, d22, d12
 
 
@@ -324,7 +370,11 @@ def let_basis(
 
     because d_{l,n}² = M⁻¹ on the support of the band's filter, the
     scaling filter is constant there (M⁻¹ᐟ²) and the wavelet filters have
-    zero mean. Hence
+    zero mean. This needs the 2^j taps of each filter to fall on distinct
+    pixels, i.e. an image with at least 2^J samples along every
+    transformed axis: on a smaller image the circulant D_j of Eq. (16)
+    folds several taps onto one pixel and δ below is not the derivative
+    term of PURE. Hence
 
         δ_k = M⁻³ᐟ²·Σ_l [Θ₁·D̄(y + σ²) + Θ₂·D(y + σ²)]
               − M⁻²·Σ_l [(Θ₁₁ + Θ₂₂)·Dσ² + 2·Θ₁₂·D̄σ²],
@@ -354,7 +404,8 @@ def let_basis(
     ndim : int
         Number of transformed (trailing) axes d.
     sharpness : float
-        k of Section III-C.
+        κ of the smooth absolute value tanh(κ·w̄)·w̄ (Section III-C,
+        where it is called k).
     halo : int, optional
         Halo of `data` (default: 2^J − 1).
     derivatives : bool
@@ -384,51 +435,77 @@ def let_basis(
     nb = 2**ndim - 1
     signs = _channel_signs(ndim).repeat_interleave(2, dim=0)
     sums = tuple(range(-ndim, 0))
-    funcs, deltas = [], []
+    funcs = data.new_empty((2 * nb * levels, *data.shape[:-ndim], *core))
+    deltas = []
     low, low_s = data, variance if smap else None
     for j in range(1, levels + 1):
         s = 2 ** (j - 1)
+        m = 2.0 ** (ndim * j)
+        beta = m**-0.5
+        # coef[:, 0] holds the bands w, coef[:, 1] their θ(w, w̄)
         c = _split(low, ndim, s)
-        bands, low = c[1:], c[0]
+        coef = c.new_empty((nb, 2, *c.shape[1:]))
+        coef[:, 0] = c[1:]
+        low = c[0].clone()
+        del c
         if smap:
             cs = _split(low_s, ndim, s)
             bands_s, low_s = cs[1:], cs[0]
-        m = 2.0 ** (ndim * j)
-        beta = m**-0.5
         var = beta * low_s if smap else variance
-        th, d1, d2, d11, d22, d12 = let_threshold(
-            bands, low, beta, var, sharpness
+        if derivatives:
+            lo = _crop(low, ndim, h, core)
+            if smap:
+                bs = _crop(bands_s, ndim, h, core)
+                ls = _crop(low_s, ndim, h, core)
+            else:
+                ls = variance * m**0.5  # D̄σ² for a constant σ²
+            lys = lo + ls
+            lin = lys.sum(sums).expand(nb, *lys.shape[:-ndim])
+            nonlin = lin.new_empty(lin.shape)
+        # one band at a time, to bound the temporaries of the threshold
+        for i in range(nb):
+            th, *dth = let_threshold(
+                coef[i, 0], low, beta, var, sharpness, derivatives=derivatives
+            )
+            coef[i, 1] = th
+            del th
+            if not derivatives:
+                continue
+            # δ: sums over the coefficients l of the core
+            d1, d2, d11, d22, d12 = (_crop(t, ndim, h, core) for t in dth)
+            del dth
+            bys = _crop(coef[i, 0], ndim, h, core)
+            if smap:
+                bys = bys + bs[i]
+            t1 = (d1.mul_(lys) + d2.mul_(bys)).sum(sums)
+            if smap:
+                t2 = (d11.add_(d22).mul_(bs[i]) + d12.mul_(2 * ls)).sum(sums)
+            else:
+                t2 = 2 * ls * d12.sum(sums)
+            del d1, d2, d11, d22, d12, bys
+            nonlin[i] = t1 * m**-1.5 - t2 / (m * m)
+        if derivatives:
+            deltas.append(
+                torch.stack([lin * m**-1.5, nonlin], 1).flatten(0, 1)
+            )
+            del lys
+        # R_j: one axis at a time, each step freeing its input
+        f = coef.flatten(0, 1)
+        del coef
+        for i in range(ndim):
+            f = _adjoint_axis(f, f.ndim - ndim + i, s, _axis_sign(signs, i, f))
+        for t in range(j - 2, -1, -1):
+            for i in range(ndim):
+                f = _adjoint_axis(f, f.ndim - ndim + i, 2**t, None)
+        torch.div(
+            _crop(f, ndim, h, core), m, out=funcs[2 * nb * (j - 1) :][: 2 * nb]
         )
-        coef = torch.stack([bands, th], 1).reshape(2 * nb, *bands.shape[1:])
-        f = _adjoint_step(coef, ndim, s, signs)
-        f = _lowpass_adjoint(f, ndim, [2**i for i in range(j - 2, -1, -1)])
-        funcs.append(_crop(f, ndim, h, core) / m)
-        if not derivatives:
-            continue
-        # coefficients of the core positions l
-        cc = [_crop(t, ndim, h, core) for t in (bands, low, d1, d2)]
-        cc += [_crop(t, ndim, h, core) for t in (d11, d22, d12)]
-        b, lo, d1, d2, d11, d22, d12 = cc
-        if smap:
-            bs = _crop(bands_s, ndim, h, core)
-            ls = _crop(low_s, ndim, h, core)
-            lys, bys = lo + ls, b + bs
-        else:
-            ls = variance * m**0.5  # D̄σ² for a constant σ²
-            lys, bys = lo + ls, b
-        lin = lys.sum(sums).expand(nb, *lys.shape[:-ndim])
-        t1 = (d1 * lys + d2 * bys).sum(sums)
-        if smap:
-            t2 = ((d11 + d22) * bs + 2 * d12 * ls).sum(sums)
-        else:
-            t2 = 2 * ls * d12.sum(sums)
-        nonlin = t1 * m**-1.5 - t2 / (m * m)
-        deltas.append(torch.stack([lin * m**-1.5, nonlin], 1).flatten(0, 1))
+        del f
     shifts = [2**i for i in range(levels - 1, -1, -1)]
     lowpass = _lowpass_adjoint(low.unsqueeze(0), ndim, shifts)[0]
     lowpass = _crop(lowpass, ndim, h, core) / 2.0 ** (ndim * levels)
     delta = torch.cat(deltas, 0) if derivatives else None
-    return torch.cat(funcs, 0), lowpass, delta
+    return funcs, lowpass, delta
 
 
 def _function_levels(levels: int, ndim: int) -> Tensor:
@@ -515,18 +592,28 @@ class PureSums:
         PureSums
         """
         k = functions.shape[0]
-        f = functions.reshape(k, -1).double()
+        f = functions.reshape(k, -1)
         y = data.reshape(-1).double()
         low = lowpass.reshape(-1).double()
         r = y - low
         n = y.numel()
+        # float64 sums over pixel chunks: a float64 copy of f of at most
+        # the size of one image
+        gram = torch.zeros(k, k, dtype=torch.float64, device=f.device)
+        cross = torch.zeros(k, dtype=torch.float64, device=f.device)
+        step = -(-n // k)
+        for i in range(0, n, step):
+            fi = f[:, i : i + step].double()
+            gram += fi @ fi.T
+            cross += fi @ r[i : i + step]
+        del fi
         if isinstance(variance, Tensor) and variance.ndim > 0:
             sum_s = float(variance.double().sum())
         else:
             sum_s = float(variance) * n
         return cls(
-            gram=f @ f.T,
-            cross=f @ r,
+            gram=gram,
+            cross=cross,
             delta=delta.double().reshape(k),
             resid=float(r.square().sum()),
             sum_y=float(y.sum()),
@@ -613,9 +700,12 @@ class PureSums:
         eigendecomposition, discarding eigenvalues below 10⁻¹⁰ times the
         largest. This is the exact solution of a well-conditioned
         system, and the minimum-norm minimiser of PURE when some f_k are
-        (numerically) linearly dependent: f_k = 0 for constant data, or
-        coarse bands that wrap around an image smaller than their
-        filters.
+        (numerically) linearly dependent, as f_k = 0 for constant data.
+        The sums must come from an image with at least 2^J samples along
+        every transformed axis (as
+        [`pure_let`][optix.denoise.pure_let] and
+        [`PURELET`][optix.denoise.PURELET] require): on a smaller image
+        δ is not the derivative term of PURE.
 
         Parameters
         ----------
@@ -643,8 +733,7 @@ class PureSums:
 
 def _combine(functions: Tensor, lowpass: Tensor, a: Tensor) -> Tensor:
     """f = Σ_k a_k·f_k + f_low."""
-    a = a.to(functions).reshape((-1,) + (1,) * (functions.ndim - 1))
-    return (a * functions).sum(0) + lowpass
+    return torch.tensordot(a.to(functions), functions, 1).add_(lowpass)
 
 
 # -- functional API ----------------------------------------------------------
@@ -715,8 +804,12 @@ def pure_let(
 
     !!! note "Choices not specified in the paper"
         * The number of levels J (default 4; the paper does not give it,
-          and its Fig. 6 shows levels up to 3). The result at a pixel
-          depends on the data within 2^J − 1 pixels.
+          and its Fig. 6 shows the levels 1 and 3). The result at a pixel
+          depends on the data within 2^J − 1 pixels. Every transformed
+          axis needs at least 2^J samples: the closed forms of PURE
+          (Section III-B) assume that the filters of the coarsest level
+          do not wrap around the image, and a `ValueError` naming the
+          largest valid J is raised otherwise.
         * Each of the 2^d − 1 orientation bands of a level is a band of
           the filterbank with its own LET coefficients.
         * Boundaries are periodic, the case in which Section III-B gives
@@ -738,10 +831,14 @@ def pure_let(
           and applies it to images (d = 2).
 
     !!! note "Cost and memory"
-        About 4·(2^d − 1)·J images of the size of the input are held
-        (the LET functions and the transform), and the cost is linear in
-        the number of pixels. [`PURELET`][optix.denoise.PURELET] streams
-        large arrays in blocks.
+        The peak memory is about K + 4·2^d + 16 images of the size of
+        the input (periodically padded by 2^J − 1 pixels), with
+        K = 2·(2^d − 1)·J: the K LET functions, plus the coefficients of
+        one level and their reconstruction (56 for an image and 104 for
+        a volume with J = 4; 2^d + 4 more with per-pixel noise maps).
+        The cost is linear in the number of pixels.
+        [`PURELET`][optix.denoise.PURELET] streams large arrays in
+        blocks.
 
     !!! references "References"
         1. Luisier F, Blu T, Unser M. *Image denoising in mixed
@@ -780,7 +877,8 @@ def pure_let(
     reliability : float
         T of Section III-D.
     sharpness : float
-        k of the smooth absolute value tanh(k·w̄)·w̄ (Section III-C).
+        κ of the smooth absolute value tanh(κ·w̄)·w̄ (Section III-C,
+        where it is called k).
 
     Returns
     -------
@@ -795,6 +893,7 @@ def pure_let(
     if not data.is_floating_point():
         data = data.to(resolve_backend(like=data)["dtype"])
     spatial = tuple(data.shape[-ndim:])
+    _check_size(spatial, levels)
     alpha = _as_map(gain, spatial, data)
     delta = _as_map(offset, spatial, data)
     sd = _as_map(sigma, spatial, data)
@@ -962,11 +1061,14 @@ class PURELET(Estimator):
 
     !!! note
         Faithful mode is the UWT PURE-LET of the paper (Haar, Section
-        III), with its T = 10 and k = 100. `pixelwise` (per-pixel noise
-        maps), `ndim` ≠ 2 (volumes, space-time stacks) and other values
-        of `reliability` or `sharpness` are extensions; `levels` (not
-        given in the paper) and `block` do not change the method.
-        Maps in the `SensorEstimate` need `pixelwise=True`.
+        III), with its T = 10 and κ = 100 (called k in the paper).
+        `pixelwise` (per-pixel noise maps), `ndim` ≠ 2 (volumes,
+        space-time stacks) and other values of `reliability` or
+        `sharpness` are extensions; `levels` (not given in the paper)
+        and `block` do not change the method. Maps in the
+        `SensorEstimate` need `pixelwise=True`. Every spatial axis
+        needs at least 2^J samples (see
+        [`pure_let`][optix.denoise.pure_let]).
 
     !!! references "References"
         1. Luisier F, Blu T, Unser M. *Image denoising in mixed
@@ -1056,7 +1158,8 @@ class PURELET(Estimator):
         reliability : float, optional
             T of Section III-D (paper: 10).
         sharpness : float, optional
-            k of the smooth absolute value of Section III-C (paper: 100).
+            κ of the smooth absolute value tanh(κ·w̄)·w̄ of Section III-C
+            (called k there; paper: 100).
         ndim : int, optional
             Extension when ≠ 2: number of spatial axes transformed (3 for
             volumes, or for space-time with time declared spatial in the
@@ -1223,6 +1326,7 @@ class PURELET(Estimator):
         if not isinstance(data, Labeled):
             data = self._labeled(data, self._layout_of(data, ndim))
         _, shape, h = self._frames(data)
+        _check_size(shape, levels)
         raw = data.array
         target = out.array if isinstance(out, Labeled) else out
         if out is not None and _shares_memory(target, raw):
@@ -1231,12 +1335,12 @@ class PURELET(Estimator):
                 "separate output."
             )
         out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
-        nfun = 2 * (2**ndim - 1) * levels
+        maps = any(isinstance(t, Tensor) for t in self._params)
         chunks = blocks(
             data,
             o["block"],
             h,
-            overhead=4 * nfun + 4 * 2**ndim + 8,
+            overhead=_block_overhead(ndim, levels, maps),
             contiguous=True,
             align=chunks_of(out),
             dtype=self.dtype,
@@ -1262,6 +1366,8 @@ class PURELET(Estimator):
             )
             key = _frame_key(chunk)
             systems[key] = sums if key not in systems else systems[key] + sums
+            # free the block before the next one is read
+            del x, y, s, alpha, delta, f, low, d, sums
         coefs = {k: v.solve(o["reliability"]) for k, v in systems.items()}
         # pass 2: reconstruction
         for chunk, x in _periodic(chunks, raw, data.layout, h):
@@ -1277,6 +1383,7 @@ class PURELET(Estimator):
                 for t in (alpha, delta)
             )
             chunk.store(out, est * a_c + d_c)
+            del x, s, alpha, delta, f, low, est, a_c, d_c
         flush(out)
         return out
 
@@ -1298,6 +1405,18 @@ class PURELET(Estimator):
         sensor = self.estimates.get("sensor")
         if sensor is not None:
             self._set_sensor(sensor)
+
+
+def _block_overhead(ndim: int, levels: int, maps: bool) -> int:
+    """Peak memory of `PURELET.apply`, in copies of one block with halo.
+
+    The K = 2·(2^d − 1)·J LET functions of the block, plus the transient
+    of one level (its 2·(2^d − 1) coefficient bands and their
+    reconstruction) and the block itself, measured with the torch
+    profiler: K + 4·2^d + 16, and 2^d + 4 more with per-pixel noise maps.
+    """
+    nfun = 2 * (2**ndim - 1) * levels
+    return nfun + 4 * 2**ndim + 16 + ((2**ndim + 4) if maps else 0)
 
 
 def _frame_key(chunk: object) -> tuple:
