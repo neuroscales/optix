@@ -372,6 +372,32 @@ regulariser; $\beta$ is the Kaiser parameter, not a background level; $\tau$ a d
 threshold, not a precision or a penalty weight; $\mathbf{T}$ is a matrix, not
 the PSF transform; $m$ and $M$ count blocks, not the mean of a Normal. The context tells which is meant.
 
+## sCMOS noise estimation
+
+The symbols of [ACsN](../algorithms/denoise/acsn.md), which removes the offset and
+gain of an sCMOS camera, estimates the noise level from the frequencies outside the
+OTF, and filters with the block matching of the previous section. The camera
+symbols $\mathbf{g}$, $\mathbf{o}$ and $\boldsymbol{\varepsilon}$ (one value per pixel),
+$\mathrm{NA}$, $\lambda_0$ and $\boldsymbol{\nu}$ are those of the sections above.
+
+| Symbol | Meaning | Unit | In code |
+|---|---|---|---|
+| $\mathbf{m}$ | frame corrected for offset and gain, $(\mathbf{y} - \mathbf{o}) / \mathbf{g}$ | e⁻ | `_frame` |
+| $\boldsymbol{\eta}$, $\sigma_{\mathrm{N}}$ | white Gaussian noise of $\mathbf{m}$, $\mathbf{m} = \boldsymbol{\lambda} + \boldsymbol{\eta}$, and its standard deviation (read noise in electrons plus shot noise) | e⁻ | `ACsN.sigma_`, `sigma=` |
+| $d_{\mathrm{px}}$ | pixel size in the image plane: camera pixel divided by the magnification (written $\Delta$ in docstrings) | length | `pixel_size` |
+| $\nu_c$, $\bar\nu$ | cutoff of the OTF, $2\,\mathrm{NA}/\lambda_0$; cutoff of the camera, `camera_cutoff` times the Nyquist frequency $1/(2 d_{\mathrm{px}})$ | 1 / length | `otf_cutoff`, `camera_cutoff` |
+| $\mathbf{m}_{\mathrm{hp}}$, $\sigma_{\mathrm{hp}}$ | high-pass image outside the OTF, and its standard deviation | e⁻ | `highpass`, `sigma_from_highpass` |
+| $\varrho$ | noise ratio $\sigma_{\mathrm{N}} / \sigma_{\mathrm{hp}}$ | | `noise_ratio` |
+| $S(\mathbf{a}, \mathbf{b})$ | local structure similarity of two images | | `quality_score` |
+| $\mathbf{s}_{\mathrm{N}}$, $\mathbf{s}_{\mathrm{P}}$, $Q$ | structure maps of the Q-score (noisy image against the method noise, and against the denoised image); the score, $-\operatorname{corr}(\mathbf{s}_{\mathrm{N}}, \mathbf{s}_{\mathrm{P}})$ | | `ACsN.quality_` |
+
+The sparse filter uses the symbols of the previous section: $N$, $N_S$, $M$,
+$\lambda_{\mathrm{ht}}$, $N_{\mathrm{har}}$ and $\mathbf{W}$. The paper writes the
+gain $\gamma$, the offset $\beta$ and the patch size $k$. Here $\boldsymbol{\eta}$ is
+a noise, not a weight of the total variation, a natural parameter or an efficiency;
+$\varrho$ is a ratio, not the pupil radius $\rho$; and $\nu_c$ is a frequency in cycles, as
+$\boldsymbol{\nu}$ is.
+
 ## Views
 
 | Symbol | Meaning | In code |
