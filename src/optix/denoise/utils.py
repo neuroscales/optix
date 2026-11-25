@@ -1,7 +1,8 @@
 """Building blocks of `optix.denoise` (no stability promise).
 
 The stages, transforms, block matching and collaborative filters of
-BM3D and BM4D, the default intensity range and the memory budget.
+BM3D and BM4D, the default intensity range and the memory budget; the
+transform, thresholding functions and PURE system of PURE-LET.
 """
 
 from ._bm3d import clean_range
@@ -21,6 +22,7 @@ from ._engine import (
     stage_halo,
     wiener,
 )
+from ._purelet import PureSums, haar_uwt, let_basis, let_threshold
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -30,6 +32,7 @@ from ._transforms import (
 )
 
 __all__ = [
+    "PureSums",
     "Stage",
     "aggregate",
     "bior15_matrix",
@@ -41,8 +44,11 @@ __all__ = [
     "dct_matrix",
     "filter_batch",
     "haar_matrix",
+    "haar_uwt",
     "hard_threshold",
     "kaiser_window",
+    "let_basis",
+    "let_threshold",
     "match_batch",
     "patch_spectra",
     "reference_grid",

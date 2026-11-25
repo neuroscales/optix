@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - PURELET
 
 ## Transforms
 
@@ -23,6 +24,8 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - pure_let
+        - pure_let_halo
 
 ## Utilities
 
@@ -55,3 +58,7 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - haar_uwt
+        - let_threshold
+        - let_basis
+        - PureSums
