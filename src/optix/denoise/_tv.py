@@ -6,13 +6,14 @@ algorithm of Chambolle & Pock (2011) and the building blocks of
 """
 
 import math
+import warnings
 from collections.abc import Callable, Sequence
 from typing import Literal, NamedTuple, Self
 
 import torch
 from torch import Tensor
 
-from .._config import resolve_backend
+from .._config import get_config, resolve_backend
 from .._estimator import Estimator, Tags, _shares_memory
 from ..estimates import SensorEstimate
 from ..io import (
@@ -33,6 +34,7 @@ from ..optim import (
     prox_shifted_poisson,
     prox_squared_l2,
 )
+from ..optim._prox import _sum64
 from ..sensor._anscombe import anscombe, build_table, inverse_anscombe
 from ._bm3d import _constant, _select
 
@@ -48,6 +50,20 @@ _INVERSES = ("exact", "closed-form", "asymptotic", "algebraic")
 MAX_ITER = 2000
 TOL = 1e-4
 CHECK = 10
+#: Split of the primal and dual steps of the constrained model:
+#: κ = `SPLIT`·σ/√ω̄ in τ_p = κ/‖∇‖, τ_d = 0.99/(κ‖∇‖) (not in the paper).
+SPLIT = 1 / 8
+
+
+def _peak_memory(ndim: int, data_term: DataTerm = "gaussian") -> int:
+    """Peak working memory of `tv_denoise`, in multiples of the image.
+
+    About 2d + 5 image sizes with the image itself (d spatial dims;
+    7.3 measured in 2-D and 10.3 in 3-D, float32), three times that for
+    the KL term, whose gap is evaluated in float64.
+    """
+    base = 2 * int(ndim) + 5
+    return 3 * base if data_term == "kl" else base
 
 
 class TVResult(NamedTuple):
@@ -58,14 +74,17 @@ class TVResult(NamedTuple):
     x : Tensor
         Denoised image u.
     lam : float
-        Weight λ of the data term: the Lagrange multiplier of the noise
-        constraint in the constrained model (λ of Eq. 2.6), else the
-        given λ.
+        Weight λ of the data term: in the constrained model, the
+        Lagrange multiplier of the noise constraint, the λ of Eq. 2.5a
+        (twice the value of the printed Eq. 2.6, and with pixel spacing
+        h = 1 where the paper has h = 1/N); 0 when a constant is
+        feasible. Else the given λ.
     n_iter : int
-        Number of iterations.
+        Number of iterations (0 when a constant is feasible).
     gap : float
         Last relative primal–dual gap (P − D)/P, with P the primal
-        objective less the minimum of the data term.
+        objective less the minimum of the data term (0 when a constant
+        is feasible).
     """
 
     x: Tensor
@@ -85,14 +104,12 @@ class _Quadratic:
         return prox_squared_l2(v, t, self.f, self.lam * self.w)
 
     def value(self, u: Tensor) -> float:
-        r = (u - self.f).double().square()
-        return self.lam / 2 * float((_double(self.w) * r).sum())
+        return self.lam / 2 * _sum64(self.w * (u - self.f).square())
 
     def conjugate(self, z: Tensor) -> float:
         """G*(z) = ∑ zⱼfⱼ + zⱼ²/(2λwⱼ)."""
-        z = z.double()
-        lw = self.lam * _double(self.w)
-        return float((z * self.f.double() + z.square() / (2 * lw)).sum())
+        lw = self.lam * self.w
+        return _sum64(z * self.f + z.square() / (2 * lw))
 
     def minimum(self) -> float:
         return 0.0
@@ -148,8 +165,28 @@ def _double(t: Tensor | float) -> Tensor | float:
 
 
 def _tv(op: Gradient, u: Tensor) -> float:
-    g = op.forward(u)
-    return float(torch.linalg.vector_norm(g.double(), dim=0).sum())
+    return _sum64(torch.linalg.vector_norm(op.forward(u), dim=0))
+
+
+def _not_converged(res: TVResult, max_iter: int, tol: float | None) -> bool:
+    return tol is not None and res.n_iter >= max_iter and not res.gap <= tol
+
+
+def _warn_max_iter(
+    name: str,
+    gaps: Sequence[float],
+    total: int,
+    max_iter: int,
+    tol: float,
+    stacklevel: int = 3,
+) -> None:
+    warnings.warn(
+        f"{name}: {len(gaps)} of {total} image(s) stopped at "
+        f"max_iter={max_iter} with a relative primal–dual gap above "
+        f"tol={tol:g} (worst {max(gaps):.3g}); raise max_iter or tol",
+        RuntimeWarning,
+        stacklevel=stacklevel,
+    )
 
 
 # -- solver ------------------------------------------------------------------
@@ -166,6 +203,7 @@ def tv_denoise(
     tol: float | None = TOL,
     check_every: int = CHECK,
     trace: dict | None = None,
+    warn: bool = True,
 ) -> TVResult:
     """Total-variation denoising of one image or volume.
 
@@ -189,13 +227,24 @@ def tv_denoise(
     [`chambolle_pock`][optix.optim.chambolle_pock] (K = ∇, F = ‖·‖₂,₁,
     G = the data term), with the accelerated steps of its Algorithm 2
     for the penalised Gaussian model (G is λ·min ω-strongly convex). The
-    steps are τ = κ/‖∇‖ and σ = 0.99/(κ‖∇‖), with κ the scale of the
-    data term in data units: σ/√ω̄ (constrained), 1/(λω̄) (penalised)
-    and c̄/(λω̄) (KL, c̄ the mean of f + s²). Iterations stop when the
-    relative primal–dual gap (P − D)/(P − min G) is at most `tol`
-    (checked every `check_every` iterations), with P = TV(u) + G(u) and
-    D = −G*(−∇ᵀy). Neither the solver nor the step sizes nor the
+    primal and dual steps are τ_p = κ/‖∇‖ and τ_d = 0.99/(κ‖∇‖), with κ
+    a scale of the data term in data units: `SPLIT`·σ/√ω̄ with
+    `SPLIT` = 1/8 (constrained), 1/(λω̄) (penalised) and c̄/(λω̄) (KL,
+    c̄ the mean of f + s²). Iterations stop when the relative
+    primal–dual gap (P − D)/(P − min G) is at most `tol` (checked every
+    `check_every` iterations), with P = TV(u) + G(u) and D = −G*(−∇ᵀy).
+    A run that stops at `max_iter` above `tol` emits a `RuntimeWarning`
+    (with `warn`). Neither the solver nor the step sizes nor the
     stopping rule are in the paper.
+
+    In the constrained model, when a constant image is feasible
+    (∑ⱼ ωⱼ(fⱼ − c)² ≤ Mσ² with c the ω-weighted mean of f), every
+    feasible constant is a minimiser (TV = 0), so the solution is not
+    unique; c is returned at once, with λ = 0, no iteration and gap 0.
+
+    The working memory is about 2d + 5 image sizes (d the number of
+    dims; 9 for an image) for the Gaussian data terms, and about three
+    times that for the KL term, whose gap is evaluated in float64.
 
     Parameters
     ----------
@@ -221,6 +270,8 @@ def tv_denoise(
         Iterations between two evaluations of the gap.
     trace : dict, optional
         See [`chambolle_pock`][optix.optim.chambolle_pock].
+    warn : bool
+        Warn when the run stops at `max_iter` with a gap above `tol`.
 
     Returns
     -------
@@ -242,7 +293,7 @@ def tv_denoise(
             raise ValueError("weights must be positive")
         if _constant(w):
             w = float(w.reshape(-1)[0])
-    wmean = w if isinstance(w, float) else float(w.double().mean())
+    wmean = w if isinstance(w, float) else _sum64(w) / w.numel()
     wmin = w if isinstance(w, float) else float(w.min())
     op = Gradient(f.ndim, weights=axis_weights, boundary="neumann")
     if any(not a > 0 for a in op.weights):
@@ -255,17 +306,24 @@ def tv_denoise(
         if not (math.isfinite(sigma) and sigma > 0):
             raise ValueError(f"sigma must be finite and > 0, got {sigma}")
         radius = math.sqrt(f.numel()) * sigma
+        # a feasible constant (the ω-weighted mean) is a minimiser
+        if isinstance(w, float):
+            c = _sum64(f) / f.numel()
+            res2 = w * _sum64((f - c).square())
+        else:
+            c = _sum64(w * f) / _sum64(w)
+            res2 = _sum64(w * (f - c).square())
+        if res2 <= radius * radius:
+            return TVResult(torch.full_like(f, c), 0.0, 0, 0.0)
         primal = L2Ball(radius, f, w)
-        scale = sigma / math.sqrt(wmean)
+        scale = SPLIT * sigma / math.sqrt(wmean)
         gamma = 0.0
-        inv_w = 1 / _double(w)
+        inv_w = 1 / w
 
         def gap(u: Tensor, y: Tensor) -> float:
             p = _tv(op, u)
-            z = op.adjoint(y).double()
-            d = float((z * f.double()).sum()) - radius * math.sqrt(
-                float((z.square() * inv_w).sum())
-            )
+            z = op.adjoint(y)
+            d = _sum64(z * f) - radius * math.sqrt(_sum64(z.square() * inv_w))
             return (p - d) / p if p > 0 else abs(d)
     else:
         lam = float(lam)
@@ -286,8 +344,10 @@ def tv_denoise(
             p = _tv(op, u) + primal.value(u) - low
             z = -op.adjoint(y)
             if data_term == "kl":
-                # scale y into the domain of G* (z < λw), y = 0 is in it
-                lw = lam * _double(w) + torch.zeros_like(z, dtype=z.dtype)
+                # scale y into the domain of G* (z < λw), y = 0 is in it;
+                # in float64, where the margin 1 − 10⁻⁹ is not lost
+                z = z.double()
+                lw = lam * _double(w) + torch.zeros_like(z)
                 pos = z > 0
                 if bool(pos.any()):
                     t = float((lw[pos] / z[pos]).min()) * (1 - 1e-9)
@@ -311,11 +371,13 @@ def tv_denoise(
     )
     u, y = res.x, res.duals[0]
     if sigma is not None:
-        e = (_double(w) * (u - f).double()).reshape(-1)
-        z = op.adjoint(y).double().reshape(-1)
-        den = float(e @ e)
-        lam = -float(z @ e) / den if den > 0 else 0.0
-    return TVResult(u, float(lam), res.n_iter, res.residual)
+        e = w * (u - f)
+        den = _sum64(e.square())
+        lam = -_sum64(op.adjoint(y) * e) / den if den > 0 else 0.0
+    out = TVResult(u, float(lam), res.n_iter, res.residual)
+    if warn and _not_converged(out, max_iter, tol):
+        _warn_max_iter("tv_denoise", [out.gap], 1, max_iter, tol)
+    return out
 
 
 # -- references --------------------------------------------------------------
@@ -397,6 +459,8 @@ def rof(
         Number of spatial dims (3: extension).
     max_iter, tol
         Solver settings (see [`tv_denoise`][optix.denoise.utils.tv_denoise]).
+        One `RuntimeWarning` per call, with the worst gap, when images
+        stop at `max_iter` above `tol`.
 
     Returns
     -------
@@ -410,22 +474,24 @@ def rof(
         data = data.to(resolve_backend(like=data)["dtype"])
     shape = data.shape
     flat = data.reshape(-1, *shape[-ndim:])
-    out = torch.stack(
-        [
-            tv_denoise(
-                x,
-                sigma=sigma,
-                lam=lam,
-                data_term=data_term,
-                weights=weights,
-                axis_weights=axis_weights,
-                max_iter=max_iter,
-                tol=tol,
-            ).x
-            for x in flat
-        ]
-    )
-    return out.reshape(shape)
+    results = [
+        tv_denoise(
+            x,
+            sigma=sigma,
+            lam=lam,
+            data_term=data_term,
+            weights=weights,
+            axis_weights=axis_weights,
+            max_iter=max_iter,
+            tol=tol,
+            warn=False,
+        )
+        for x in flat
+    ]
+    gaps = [r.gap for r in results if _not_converged(r, max_iter, tol)]
+    if gaps:
+        _warn_max_iter("rof", gaps, len(results), max_iter, tol)
+    return torch.stack([r.x for r in results]).reshape(shape)
 
 
 class ROF(Estimator):
@@ -440,8 +506,9 @@ class ROF(Estimator):
     white Gaussian noise. The mean constraint (2.3b) holds at the
     solution (TV is invariant to an offset and the mean of f minimises
     the residual). The equality of Eq. 2.3c is relaxed to an inequality,
-    which is the same problem unless σ² exceeds the variance of f, in
-    which case the solution is the constant mean of f.
+    which is the same problem unless a constant image is feasible
+    (σ² at least the variance of f). Then every feasible constant is a
+    minimiser, so the solution is not unique; the mean of f is returned.
 
     The paper reaches the minimiser by marching the Euler–Lagrange
     equation (2.5a) in time with the gradient-projection multiplier λ(t)
@@ -451,7 +518,14 @@ class ROF(Estimator):
     ([`tv_denoise`][optix.denoise.utils.tv_denoise]); the multiplier λ
     of the solution is available from that function. Each image (the
     `ndim` spatial axes of the layout) is solved whole; the other axes
-    are streamed one image at a time.
+    are streamed one image at a time. The solver needs about 2d + 5
+    image sizes of working memory (d = `ndim`; three times that with
+    the KL data term), which must fit in the memory budget of
+    [`config`][optix.config], else `apply` raises a `MemoryError`. The
+    iteration count and the final gap of each image are appended to
+    `history.extras["iterations"]` and `history.extras["gap"]`; one
+    `RuntimeWarning` per `apply` reports images stopped at `max_iter`
+    above `tol`, with the worst gap.
 
     Poisson-Gaussian noise: give a
     [`SensorEstimate`][optix.estimates.SensorEstimate] to `fit`. With the
@@ -474,7 +548,8 @@ class ROF(Estimator):
         for example a smaller weight along an anisotropic z axis) and
         `ndim=3` (3-D total variation). The noise constraint is
         ∑(u − f)² ≤ Mσ², the residual variance of Eqs. 2.2c and 2.7d;
-        Eqs. 2.3c and 2.6 carry an extra factor ½.
+        Eqs. 2.3c and 2.6 carry an extra factor ½. There is no
+        recommended preset, so `faithful=False` changes nothing.
 
     !!! references "References"
         1. Rudin LI, Osher S, Fatemi E. *Nonlinear total variation based
@@ -561,7 +636,8 @@ class ROF(Estimator):
         sigma : float, optional
             Standard deviation σ of white Gaussian noise, in data units
             (constrained model). Omit it to give a `SensorEstimate` to
-            `fit` instead, or with `lam`.
+            `fit` instead (the stabilised data have σ = 1, and `fit`
+            raises if both are given), or with `lam`.
         lam : float, optional
             Extension: weight λ > 0 of a penalised data term instead of
             the noise constraint (required by `data_term="kl"`).
@@ -609,6 +685,14 @@ class ROF(Estimator):
             and len(o["axis_weights"]) != (o["ndim"])
         ):
             raise ValueError("axis_weights needs one entry per spatial axis")
+        self._set_faithful()
+        self._sensor: SensorEstimate | None = None
+        self._table: tuple[Tensor, Tensor, Tensor] | None = None
+        self._fitted = False
+
+    def _set_faithful(self) -> None:
+        """Faithful: the constrained Gaussian 2-D model, any σ or sensor."""
+        o = self.options
         self.is_faithful = (
             o["lam"] is None
             and o["data_term"] == "gaussian"
@@ -616,9 +700,6 @@ class ROF(Estimator):
             and o["axis_weights"] is None
             and o["ndim"] == 2
         )
-        self._sensor: SensorEstimate | None = None
-        self._table: tuple[Tensor, Tensor, Tensor] | None = None
-        self._fitted = False
 
     # -- fit -----------------------------------------------------------------
     def fit(
@@ -670,6 +751,13 @@ class ROF(Estimator):
             for name in ("offset", "variance", "gain"):
                 if getattr(sensor, name) is None:
                     raise ValueError(f"init SensorEstimate lacks {name}")
+            if o["sigma"] is not None:
+                raise ValueError(
+                    "sigma is not used with a SensorEstimate: the "
+                    "stabilised data have σ = 1; drop sigma= or init="
+                )
+            if not bool((torch.as_tensor(sensor.gain) > 0).all()):
+                raise ValueError("the SensorEstimate gain must be > 0")
             self.estimates = {"sensor": sensor}
         elif (
             o["data_term"] == "gaussian"
@@ -694,7 +782,8 @@ class ROF(Estimator):
             for t in (s.gain, s.variance.clamp(min=0).sqrt(), s.offset)
         )
 
-    def _denoise(self, x: Tensor, group: tuple[int, ...]) -> Tensor:
+    def _denoise(self, x: Tensor, group: tuple[int, ...]) -> tuple:
+        """Denoised image and the `TVResult` of the solve."""
         o = self.options
         w = o["weights"]
         if w is not None:
@@ -706,17 +795,20 @@ class ROF(Estimator):
             axis_weights=o["axis_weights"],
             max_iter=o["max_iter"],
             tol=o["tol"],
+            warn=False,
         )
         if self._sensor is None:
-            return tv_denoise(x, sigma=o["sigma"], **kwargs).x
+            res = tv_denoise(x, sigma=o["sigma"], **kwargs)
+            return res.x, res
         alpha, s, mu = self._maps(group, x)
         if o["data_term"] == "kl":
             e = (x - mu) / alpha
-            u = tv_denoise(e, variance=(s / alpha).square(), **kwargs).x
-            return u * alpha + mu
+            res = tv_denoise(e, variance=(s / alpha).square(), **kwargs)
+            return res.x * alpha + mu, res
         z = anscombe(x, alpha, s, mu)
         sigma = 1.0 if o["lam"] is None else None
-        d = tv_denoise(z, sigma=sigma, **kwargs).x
+        res = tv_denoise(z, sigma=sigma, **kwargs)
+        d = res.x
         method = o["inverse"]
         if method == "exact" and self._table is None:
             sn = self._sensor
@@ -724,7 +816,7 @@ class ROF(Estimator):
             self._table = build_table(s2.reshape(-1).cpu())
         return inverse_anscombe(
             d, alpha, s, mu, method=method, table=self._table
-        )
+        ), res
 
     def _apply(
         self, data: ArrayLike, out: WritableArrayLike | None
@@ -738,6 +830,19 @@ class ROF(Estimator):
         if len(spatial) != nd:
             raise ValueError(
                 f"ROF needs {nd} spatial axes, got {len(spatial)}"
+            )
+        shape = tuple(data.shape)
+        dtype = self._backend(data)["dtype"]
+        itemsize = torch.empty((), dtype=dtype).element_size()
+        peak = _peak_memory(nd, self.options["data_term"])
+        need = peak * itemsize * math.prod(shape[i] for i in spatial)
+        budget = get_config().memory
+        if need > budget:
+            raise MemoryError(
+                f"ROF solves each image whole and needs about {peak} image "
+                f"sizes ({need / 2**20:.0f} MiB) of working memory, above "
+                f"the memory budget ({budget / 2**20:.0f} MiB); raise it "
+                "with optix.config(memory=...)"
             )
         raw = data.array
         target = out.array if isinstance(out, Labeled) else out
@@ -753,12 +858,28 @@ class ROF(Estimator):
             dtype=self.dtype,
             device=self.device,
         )
+        o = self.options
+        extras = self.history.extras
+        iterations = extras.setdefault("iterations", [])
+        gaps = extras.setdefault("gap", [])
+        stalled: list[float] = []
+        start = len(iterations)
         for chunk in chunks:
             x = chunk.data
             if not x.is_floating_point():
                 x = x.to(self._backend(x)["dtype"])
-            chunk.store(out, self._denoise(x, chunk.group)[chunk.inner])
+            u, res = self._denoise(x, chunk.group)
+            iterations.append(float(res.n_iter))
+            gaps.append(float(res.gap))
+            if _not_converged(res, o["max_iter"], o["tol"]):
+                stalled.append(res.gap)
+            chunk.store(out, u[chunk.inner])
         flush(out)
+        if stalled:
+            n = len(iterations) - start
+            _warn_max_iter(
+                "ROF", stalled, n, o["max_iter"], o["tol"], stacklevel=4
+            )
         return out
 
     def _extra_state(self) -> dict[str, object]:
@@ -768,3 +889,4 @@ class ROF(Estimator):
         self._fitted = bool(state.get("fitted", False))
         self._sensor = self.estimates.get("sensor")
         self._table = None
+        self._set_faithful()

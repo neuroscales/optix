@@ -407,7 +407,7 @@ are $\mathbf{y}$, $\mathbf{x}$ and $\boldsymbol\varepsilon$ as in the
 | $\mathbf{p}$ | dual field of the total variation, $\lVert\mathbf{p}_j\rVert_2 \le 1$, with $\lambda(\mathbf{x} - \mathbf{y}) = -\nabla^\top\mathbf{p}$ | `duals` of `chambolle_pock` |
 | $\mathbf{K}$, $F$, $G$, $\mathbf{v}$, $\bar{\mathbf{x}}$ | operator, dual and primal functions, dual variable and extrapolated iterate of $\min_{\mathbf{x}} G(\mathbf{x}) + F(\mathbf{K}\mathbf{x})$ | `op`, `dual`, `primal` of `chambolle_pock` |
 | $\tau_{\mathrm{p}}$, $\tau_{\mathrm{d}}$, $\theta$ | primal and dual steps (written $\tau$ and $\sigma$ by Chambolle and Pock) and extrapolation parameter | `tau`, `sigma` |
-| $\kappa$ | scale of the data term in data units, that sets the split of the steps ($\sigma/\sqrt{\bar\omega}$ for the noise constraint); not the constant of the default weights | |
+| $\kappa$ | scale of the data term in data units, that sets the split of the steps ($\sigma/(8\sqrt{\bar\omega})$ for the noise constraint); not the constant of the default weights | |
 | $\gamma$ | strong-convexity modulus of $G$ in `chambolle_pock` (not the step of `primal_dual`) | `strong_convexity` |
 
 Here $\sigma$ is always the standard deviation of the noise, never the dual step, and

@@ -642,8 +642,11 @@ $$
 Algorithm 1 of the paper with $\theta = 1$ (its $\tau$ and $\sigma$ are written
 $\tau_{\mathrm{p}}$ and $\tau_{\mathrm{d}}$ here, as $\sigma$ is the noise level elsewhere in the
 documentation). The prox of $F^*$ comes from that of $F$ by the Moreau identity
-(`prox_conjugate`). It converges when $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\mathbf{K}\rVert^2 < 1$
-(Theorem 1), at the ergodic rate $O(1/N)$. When $G$ is $\gamma$-strongly convex, the steps
+(`prox_conjugate`), or from the method `prox_conjugate` of $F$ when it has one (`GroupL2`).
+It converges when $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\mathbf{K}\rVert^2 < 1$
+(Theorem 1), at the ergodic rate $O(1/N)$; `chambolle_pock` accepts
+$\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\mathbf{K}\rVert^2 \le 1$ (the starting condition of Algorithm 2), and returns
+the last iterate, not the ergodic average (the iterates converge too). When $G$ is $\gamma$-strongly convex, the steps
 follow Algorithm 2 ($\theta_k = 1/\sqrt{1 + 2\gamma\tau_{\mathrm{p},k}}$, $\tau_{\mathrm{p},k+1} =
 \theta_k\tau_{\mathrm{p},k}$, $\tau_{\mathrm{d},k+1} = \tau_{\mathrm{d},k}/\theta_k$) and the rate is
 $O(1/N^2)$ (Theorem 2).
@@ -652,7 +655,7 @@ $O(1/N^2)$ (Theorem 2).
 |---|---|
 | `op`, `dual`, `primal` | $\mathbf{K}$ (a `LinearOperator`, with `norm2`), $F$ and $G$ (`Function`s; only their prox is used) |
 | `x0`, `y0` | starting primal point (sets dtype and device) and dual variable (zeros by default) |
-| `tau`, `sigma` | steps $\tau_{\mathrm{p}}$, $\tau_{\mathrm{d}} > 0$ with $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\mathbf{K}\rVert^2 < 1$; both $0.99/\lVert\mathbf{K}\rVert$ by default (the paper leaves the split open) |
+| `tau`, `sigma` | steps $\tau_{\mathrm{p}}$, $\tau_{\mathrm{d}} > 0$ with $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\mathbf{K}\rVert^2 \le 1$; both $0.99/\lVert\mathbf{K}\rVert$ by default (the paper leaves the split open). The names are those of the paper: `sigma` is the dual step, not a noise level |
 | `strong_convexity` | $\gamma \ge 0$, the modulus of strong convexity of $G$; 0 is Algorithm 1 |
 | `max_iter`, `tol` | stop after `max_iter` iterations (1000), or when the measure of convergence is at most `tol` ($10^{-5}$); `tol=None` runs them all. Neither default is in the paper |
 | `gap`, `check_every` | `gap(x, y)`, the measure of convergence, for instance a relative primal–dual gap (Section 5), evaluated every `check_every` iterations; by default the relative change of $\mathbf{x}$ |
@@ -663,7 +666,8 @@ The result is a `PrimalDualResult`: `x`, the last primal iterate, `duals` the li
 evaluated `gap` (infinite without one). The steps set the scale of the iterates: when $G$ acts
 on data of scale $\kappa$ (the noise level of a discrepancy constraint, say), the steps
 $\tau_{\mathrm{p}} = \kappa/\lVert\mathbf{K}\rVert$ and $\tau_{\mathrm{d}} = 0.99/(\kappa\lVert\mathbf{K}\rVert)$ keep
-the two updates balanced, as [ROF](../algorithms/denoise/rof.md#algorithm) does.
+the two updates balanced; [ROF](../algorithms/denoise/rof.md#algorithm) takes $\kappa = \sigma/8$,
+which converges several times faster than $\kappa = \sigma$ on its test scenes.
 
 The example is the constrained total-variation denoising of the ADMM example above: minimise
 $\sum_j \lVert(\nabla\mathbf{x})_j\rVert_2$ subject to $\lVert\mathbf{x} - \mathbf{y}\rVert^2 \le M\sigma^2$, with

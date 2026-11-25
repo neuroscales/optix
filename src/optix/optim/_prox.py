@@ -58,6 +58,13 @@ def prox_box(
     return torch.clamp(v, min=lower, max=upper)
 
 
+def _sum64(t: Tensor) -> float:
+    """Sum, accumulated in float64 across rows without a float64 copy."""
+    if t.dtype == torch.float64 or t.ndim == 0:
+        return float(t.sum(dtype=torch.float64))
+    return float(t.reshape(-1, t.shape[-1]).sum(dim=-1).double().sum())
+
+
 def _group_norm(v: Tensor, dim: int) -> Tensor:
     """‖vⱼ‖₂ over `dim`, kept as a size-1 dim, floored at the tiny value."""
     norm = torch.linalg.vector_norm(v, dim=dim, keepdim=True)
@@ -125,7 +132,7 @@ def project_l2_ball(
     center: Tensor | float = 0.0,
     weight: Tensor | float = 1.0,
     *,
-    max_iter: int = 50,
+    max_iter: int = 500,
 ) -> Tensor:
     """Projection onto the weighted ℓ2 ball ∑ⱼ wⱼ (zⱼ − cⱼ)² ≤ r².
 
@@ -142,6 +149,14 @@ def project_l2_ball(
     `max_iter` steps (then the point is scaled radially onto the ball,
     so the result is always feasible). The scalar reductions are in
     float64.
+
+    Far from the ball each Newton step increases μ by at most a factor
+    of about 1.5, so the number of steps grows like log₁.₅ of
+    √(∑ⱼ wⱼeⱼ²)/r. If the cap `max_iter` is reached (r tiny against
+    the distance, or weights spread over many decades), the result is
+    feasible but not the exact projection. Points close to the ball, as
+    in the iterations of [`tv_denoise`][optix.denoise.utils.tv_denoise],
+    take a few steps.
 
     Parameters
     ----------
@@ -165,7 +180,7 @@ def project_l2_ball(
     e = v - center
     if not isinstance(weight, Tensor) or weight.numel() == 1:
         w = float(weight)
-        norm2 = w * float(e.double().square().sum())
+        norm2 = w * _sum64(e.square())
         if norm2 <= r2:
             return v.clone()
         return center + e * math.sqrt(r2 / norm2)
@@ -175,11 +190,12 @@ def project_l2_ball(
     phi = float(we2.sum()) - r2
     if phi <= 0:
         return v.clone()
-    for _ in range(max_iter):
+    for k in range(max_iter):
         den = 1 + mu * w
-        phi = float((we2 / den.square()).sum()) - r2
-        if phi <= 1e-12 * r2:
-            break
+        if k:
+            phi = float((we2 / den.square()).sum()) - r2
+            if phi <= 1e-12 * r2:
+                break
         slope = float((-2 * w * we2 / den.pow(3)).sum())
         mu -= phi / slope
     z = e / (1 + mu * weight)

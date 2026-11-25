@@ -45,14 +45,20 @@ def chambolle_pock(
         x̄ₖ₊₁ = xₖ₊₁ + θ(xₖ₊₁ − xₖ)
 
     with prox_{σF*} from the prox of F by Moreau's identity
-    ([`prox_conjugate`][optix.optim.prox_conjugate]). It converges for
-    τσ‖K‖² < 1 (Theorem 1), at the ergodic rate O(1/N). When G is
+    ([`prox_conjugate`][optix.optim.prox_conjugate]), or from the
+    method `dual.prox_conjugate(v, σ)` when F has one. Theorem 1 states
+    convergence for τσ‖K‖² < 1, at the rate O(1/N) of the ergodic
+    average; the steps are accepted up to τσ‖K‖² ≤ 1 (the starting
+    condition of Algorithm 2). The iterates themselves converge, and the
+    last one is returned, not the ergodic average. When G is
     γ-strongly convex (`strong_convexity` = γ > 0), the steps follow
     Algorithm 2 (θₖ = 1/√(1 + 2γτₖ), τₖ₊₁ = θₖτₖ, σₖ₊₁ = σₖ/θₖ), which
     converges at the rate O(1/N²) (Theorem 2).
 
     The default steps are τ = σ = 0.99/‖K‖, with ‖K‖² the bound
-    `op.norm2` (the paper leaves the split between τ and σ open).
+    `op.norm2` (the paper leaves the split between τ and σ open). The
+    names `tau` and `sigma` are those of the paper: `sigma` is the dual
+    step, not a noise level.
     Iterations stop after `max_iter` iterations, or when the measure of
     convergence is at most `tol`: `gap(x, y)` when given (for example a
     relative primal–dual gap, Section 5), else the relative change
@@ -82,14 +88,15 @@ def chambolle_pock(
     op : LinearOperator
         K, mapping `(*N)` to the dual space.
     dual : Function
-        F, acting on Kx (only its prox is used).
+        F, acting on Kx (only its prox, or its `prox_conjugate`, is
+        used).
     primal : Function
         G (only its prox is used).
     x0 : Tensor
         Starting point x₀, `(*N)`; it sets the dtype and device.
     tau, sigma : float, optional
-        Primal and dual steps τ, σ > 0 with τσ‖K‖² < 1. Default: both
-        0.99/‖K‖.
+        Primal and dual steps τ, σ > 0 with τσ‖K‖² ≤ 1 (`sigma` is a
+        step, not a noise level). Default: both 0.99/‖K‖.
     strong_convexity : float
         γ ≥ 0, the modulus of strong convexity of G (0: Algorithm 1).
     y0 : Tensor, optional
@@ -124,11 +131,17 @@ def chambolle_pock(
     sigma = 0.99 / norm if sigma is None else float(sigma)
     if not (tau > 0 and sigma > 0):
         raise ValueError("tau and sigma must be positive")
-    if tau * sigma * norm * norm >= 1 + 1e-12:
-        raise ValueError("tau·sigma·‖K‖² must be below 1")
+    if tau * sigma * norm * norm > 1 + 1e-12:
+        raise ValueError("tau·sigma·‖K‖² must be at most 1")
     gamma = float(strong_convexity)
     if not gamma >= 0:
         raise ValueError("strong_convexity must be >= 0")
+    conj = getattr(dual, "prox_conjugate", None)
+    if conj is None:
+
+        def conj(v: Tensor, t: float) -> Tensor:
+            return prox_conjugate(dual.prox, v, t)
+
     x = x0.clone()
     xbar = x.clone()
     y = op.forward(x).zero_() if y0 is None else y0.to(x).clone()
@@ -140,14 +153,18 @@ def chambolle_pock(
     measure = math.inf
     n = 0
     while n < max_iter:
-        y = prox_conjugate(dual.prox, y + sigma * op.forward(xbar), sigma)
-        x_new = primal.prox(x - tau * op.adjoint(y), tau)
+        v = torch.add(y, op.forward(xbar), alpha=sigma)
+        del y
+        y = conj(v, sigma)
+        v = torch.add(x, op.adjoint(y), alpha=-tau)
+        x_new = primal.prox(v, tau)
+        del v
         theta = 1.0
         if gamma > 0:
             theta = 1 / math.sqrt(1 + 2 * gamma * tau)
             tau, sigma = theta * tau, sigma / theta
         diff = x_new - x
-        xbar = x_new + theta * diff
+        torch.add(x_new, diff, alpha=theta, out=xbar)  # x̄ in place
         n += 1
         size = _norm(x_new)
         change = _norm(diff) / size if size > 0 else _norm(diff)

@@ -24,8 +24,8 @@ Use it when the noise is white and Gaussian with a known standard deviation, or 
 data are Poisson–Gaussian (a camera) and a [`SensorEstimate`](../../reference/estimates.md)
 is available, and the object is made of regions of nearly constant intensity bounded by
 sharp edges. It is a local, edge-preserving smoother, where [BM3D and BM4D](bm3d.md) also
-exploit similar structures that recur in the image; its solver converges slowly on large
-images (see [Slow convergence](#slow-convergence)). It is not a deconvolution: it does not know about the optics
+exploit similar structures that recur in the image; its first-order solver needs a few
+hundred iterations per image (see [Slow convergence](#slow-convergence)). It is not a deconvolution: it does not know about the optics
 (see [Richardson–Lucy with TV](../deconv/richardson-lucy-tv.md) and
 [Chouzenoux](../deconv/chouzenoux.md) for TV-regularised deconvolution). The noise must be
 uncorrelated between pixels.
@@ -112,10 +112,12 @@ axis (the image is extended by replicating its border, Eqs. 2.8b and 2.9a of the
     $$
     \int_\Omega \sqrt{u_x^2 + u_y^2}\,\mathrm{d}x\,\mathrm{d}y
     \;\approx\;
-    h^2 \sum_{i,j} \sqrt{(\Delta^x_+ u_{ij})^2 + (\Delta^y_+ u_{ij})^2}
+    h \sum_{i,j} \sqrt{(\Delta^x_+ u_{ij})^2 + (\Delta^y_+ u_{ij})^2}
     $$
 
-with the pixel spacing $h = 1$ in optix. The sum over $a$ runs over the axes of the image:
+with the pixel spacing $h = 1$ in optix (the differences $\Delta_+$ of Eq. 2.9a are not divided
+by $h$, so the area $h^2$ of a pixel and the $1/h$ of the gradient leave one factor $h$, as in
+Eq. 2.9c). The sum over $a$ runs over the axes of the image:
 two for an image, three for a volume (an extension, see below). This is the isotropic
 total variation; the gradient is not smoothed at zero.
 
@@ -165,10 +167,15 @@ $1/(2\sigma^2)$, in Eq. 2.6.
 
 **The equality relaxed to an inequality.** The constraint of the paper is an equality.
 optix writes $\le$, a convex set. The two problems have the same solution unless
-$M\sigma^2$ exceeds $\lVert\mathbf{y} - \bar{y}\mathbf{1}\rVert^2$, the energy of the data around
+$M\sigma^2$ is at least $\lVert\mathbf{y} - \bar{y}\mathbf{1}\rVert^2$, the energy of the data around
 their mean: then the constant image $\bar{y}\mathbf{1}$ is inside the ball and has the
-smallest possible total variation, 0, so it is the solution, whereas the equality
-has no solution of low variation. The convex form is what the solver needs.
+smallest possible total variation, 0, whereas the equality has no solution of low
+variation. In that case the minimiser is **not unique**: every constant $c\mathbf{1}$ with
+$\lVert\mathbf{y} - c\mathbf{1}\rVert^2 \le M\sigma^2$ has a total variation of 0. optix checks for it
+before iterating and returns the mean $\bar{y}\mathbf{1}$ (the $\omega$-weighted mean with pixel
+weights) at once, with $\lambda = 0$, no iteration and a gap of 0. This is not rare: a frame
+of pure noise denoised with its true $\sigma$ has $\lVert\mathbf{y} - \bar{y}\mathbf{1}\rVert^2 \approx (M - 1)\sigma^2$,
+below $M\sigma^2$ about half of the time. The convex form is what the solver needs.
 
 **The Lagrange multiplier.** The Euler–Lagrange equation of the problem with the
 multipliers $\lambda_1$ (mean) and $\lambda_2$ (variance) is Eq. 2.4a, with the Neumann
@@ -306,15 +313,19 @@ The first projection rescales each pixel's vector $\mathbf{v}_j$ to length 1 if 
 (`GroupL2` through the Moreau identity, `prox_conjugate`). The second is the radial
 projection onto the ball of `L2Ball` ([`project_l2_ball`][optix.optim.project_l2_ball]):
 $\mathbf{x} \leftarrow \mathbf{y} + (\mathbf{x} - \mathbf{y})\min\bigl(1, \sqrt{M}\sigma/\lVert\mathbf{x} - \mathbf{y}\rVert\bigr)$.
-The iteration converges when $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\nabla\rVert^2 < 1$, where
+The iteration converges when $\tau_{\mathrm{p}}\tau_{\mathrm{d}}\lVert\nabla\rVert^2 < 1$ (Theorem 1;
+`chambolle_pock` accepts $\le 1$), where
 $\lVert\nabla\rVert^2 \le 4d$ for unit axis weights (8 for an image).
 
 **Steps.** The paper of Chambolle & Pock leaves the split of $\tau_{\mathrm{p}}\tau_{\mathrm{d}}$ open. The
 primal variable lives on the scale of the data and the dual variable on that of a unit
 gradient, so the steps are balanced with the scale $\kappa$ of the data term in data
 units: $\tau_{\mathrm{p}} = \kappa/\lVert\nabla\rVert$, $\tau_{\mathrm{d}} = 0.99/(\kappa\lVert\nabla\rVert)$, with
-$\kappa = \sigma/\sqrt{\bar\omega}$ for the constraint ($\bar\omega$ the mean pixel weight, 1
-by default). The split is a choice of optix, and it makes the iteration independent of the units of the data.
+$\kappa = \sigma/(8\sqrt{\bar\omega})$ for the constraint ($\bar\omega$ the mean pixel weight, 1
+by default; the factor is the module constant `SPLIT` = 1/8). The split is a choice of optix,
+and it makes the iteration independent of the units of the data. The factor 1/8 was chosen
+on synthetic scenes (see [Slow convergence](#slow-convergence)): it needs 3 to 8 times fewer
+iterations than $\kappa = \sigma$ for the same gap.
 
 **Stopping rule.** The relative primal–dual gap $(P - D)/P$ is evaluated every 10 iterations,
 with the primal value $P = \mathrm{TV}(\mathbf{x})$ and the dual value (Section 5 of Chambolle & Pock) of the
@@ -326,7 +337,8 @@ $$
 
 which is the minimum over the ball of $\langle\mathbf{z}, \mathbf{x}\rangle$, and a lower bound on the
 optimal value for any $\mathbf{v}$ with $\lVert\mathbf{v}_j\rVert \le 1$. The iteration stops when the gap is at most
-`tol` = $10^{-4}$, or after `max_iter` = 2000 iterations. These are not in the paper.
+`tol` = $10^{-4}$, or after `max_iter` = 2000 iterations, with a `RuntimeWarning` in that
+case (see [Slow convergence](#slow-convergence)). These are not in the paper.
 
 After the last iteration, the multiplier is computed from the dual variable by the
 first form of the equation for $\lambda$ above.
@@ -338,7 +350,9 @@ deviation $\sigma$ (or a `SensorEstimate`); `max_iter` = 2000, `tol` = $10^{-4}$
 **Output:** the denoised image $\hat{\mathbf{x}}$, and the multiplier $\lambda$ (with `tv_denoise`).
 
 1. **Prepare.** With a `SensorEstimate`, first replace $\mathbf{y}$ by the generalised Anscombe
-   transform of the data and take $\sigma = 1$. Compute $\kappa = \sigma/\sqrt{\bar\omega}$ ($\bar\omega = 1$ by default), $\lVert\nabla\rVert$
+   transform of the data and take $\sigma = 1$. If a constant is feasible,
+   $\lVert\mathbf{y} - \bar{y}\mathbf{1}\rVert^2 \le M\sigma^2$, return $\bar{y}\mathbf{1}$ and $\lambda = 0$.
+   Compute $\kappa = \sigma/(8\sqrt{\bar\omega})$ ($\bar\omega = 1$ by default), $\lVert\nabla\rVert$
    (from `Gradient.norm2`), $\tau_{\mathrm{p}} = \kappa/\lVert\nabla\rVert$ and
    $\tau_{\mathrm{d}} = 0.99/(\kappa\lVert\nabla\rVert)$.
 2. **Initialise** $\mathbf{x}_0 = \bar{\mathbf{x}}_0 = \mathbf{y}$ and $\mathbf{v}_0 = \mathbf{0}$. The start is the data
@@ -371,8 +385,10 @@ are chosen by their own keywords. `is_faithful` is `True` as long as none of the
 2. **The noise constraint is $\lVert\mathbf{x} - \mathbf{y}\rVert^2 \le M\sigma^2$.** The paper has
    a factor $\tfrac12$ in Eq. 2.3c and not in Eqs. 2.2c and 2.7d (see
    [above](#probabilistic-model)); optix takes the version without it.
-3. **Equality relaxed to $\le$.** The solutions are the same, except for $\sigma^2$ larger
-   than the variance of the data, where the result is the constant mean of the data.
+3. **Equality relaxed to $\le$.** The solutions are the same, except when a constant image
+   is feasible ($\sigma^2$ at least the variance of the data). Then the minimiser is not
+   unique (every feasible constant has a total variation of 0), and the mean of the data is
+   returned, without iterating.
 4. **The discretisation.** The exact isotropic total variation of the forward differences with
    a Neumann boundary, minimised as such, and pixel spacing 1. The paper's scheme
    (Eq. 2.8a) uses a minmod-regularised stencil of the Euler–Lagrange equation, which is
@@ -384,7 +400,8 @@ are chosen by their own keywords. `is_faithful` is `True` as long as none of the
    denoised with $\sigma = 1$, then transformed back. The paper treats additive Gaussian
    noise only; this is an application of the generalised Anscombe transform, not part of the
    method. It leaves `is_faithful` at `True`: the model solved is the paper's, on
-   transformed data. When a `SensorEstimate` is given, `sigma` is not used.
+   transformed data. `sigma` and a `SensorEstimate` together are refused by `fit`: the
+   stabilised data have $\sigma = 1$.
 
 ### Extensions
 
@@ -450,38 +467,62 @@ constraint couples all pixels), so no halo would give the whole-image result, as
 [BM3D](bm3d.md#memory-and-streaming). Tiling is left to the user, who then accepts the
 change of model.
 
-One image needs about 17 times its own size, measured at the peak of the solver in float32 on
-$1024^2$ and $64 \times 256^2$ images: the image, its iterate and extrapolation, the data, the
-dual variable (with one component per axis) and temporaries for the operators, and the double
-precision copies for the sums of the gap. The cost of an iteration is linear in the number of
-pixels, with $2d$ differences. The number of iterations is the issue (below). The computation
-is vectorised in torch and runs on any device.
+One image needs about $2d + 5$ times its own size ($d$ the number of spatial axes), measured
+at the peak of the solver in float32: 7.3 times on a $2048^2$ image and 10.3 times on a
+$64 \times 256^2$ volume. That is the image, its iterate and extrapolation, the dual variable
+(with one component per axis) and temporaries for the operators; the sums of the gap are
+accumulated in float64 without double-precision copies of the fields. The KL data term
+evaluates its gap in float64 and needs about three times as much (26 times the image in 2-D).
+`apply` raises a `MemoryError` when this estimate exceeds the memory budget of
+[`optix.config`](../../reference/configuration.md) (`memory=`, 256 MiB by default, so about $2400^2$
+pixels in float32 in 2-D). The cost of an iteration is linear in the number of pixels, with
+$2d$ differences. The computation is vectorised in torch and runs on any device.
 
 ### Slow convergence
 
 First-order methods on the total variation converge slowly: the constrained problem has no
-strong convexity ($G$ is an indicator), so the rate is $O(1/N)$, and the information has to
-propagate across the image over the iterations. The number of iterations needed grows with the
-size of the image and with the noise level. Iterations needed for a relative gap of
-$10^{-4}$ on the cells scene of the [results](#results-on-synthetic-data), scaled with the image (radius
-$10 \times$ side$/128$), float32 (one realisation of the noise each):
+strong convexity ($G$ is an indicator), so the rate is $O(1/N)$. In practice the split of the
+steps matters more than the size of the image. With $\kappa = \sigma$ (equal scaling of the
+primal and dual steps in data units) the iterations needed grow with the size of the image and
+the noise level, up to 7790 for a $256^2$ image at $\sigma = 25$; with the default
+$\kappa = \sigma/8$ they stay below 600. Iterations needed for a relative gap of $10^{-4}$, by
+the factor of the split, on the scenes of the [results](#results-on-synthetic-data)
+($128^2$; float64, one realisation of the noise each), and on a $32 \times 64^2$ volume of
+cells in 3-D:
+
+| Scene, $\sigma$ | $\kappa = \sigma$ | $\sigma/4$ | $\sigma/8$ (default) | $\sigma/16$ |
+|---|---|---|---|---|
+| cells, 10 | 1310 | 360 | 360 | 500 |
+| cells, 25 | 2710 | 700 | 450 | 610 |
+| cells, 50 | 4080 | 1070 | 530 | 660 |
+| filaments, 10 | 720 | 190 | 150 | 190 |
+| filaments, 25 | 1610 | 420 | 220 | 250 |
+| filaments, 50 | 3110 | 810 | 400 | 310 |
+| cells 3-D, 10 | 1670 | 440 | 340 | 440 |
+| cells 3-D, 25 | 2950 | 790 | 430 | 510 |
+
+With the default split the count hardly depends on the size of the image: on the cells scene
+scaled with the image (radius $10 \times$ side$/128$), float32:
 
 | Image | $\sigma = 10$ | $\sigma = 25$ | $\sigma = 50$ |
 |---|---|---|---|
-| $64^2$ | 580 | 1310 | 1570 |
-| $128^2$ | 1390 | 2210 | 4750 |
-| $256^2$ | 3230 | 7330 | 10420 |
+| $64^2$ | 360 | 450 | 490 |
+| $128^2$ | 370 | 470 | 550 |
+| $256^2$ | 340 | 420 | 500 |
 
-The default `max_iter=2000` stops earlier than the gap tolerance for a $128^2$ image at
-$\sigma \ge 25$. The returned image is the last iterate, and still satisfies the noise
-constraint; it differs from the converged one by at most 0.5 grey levels on a range of 255 in the
-[results below](#results-on-synthetic-data). `TVResult.gap` of
-[`tv_denoise`][optix.denoise.utils.tv_denoise] reports the gap reached (`rof` and `ROF`
-return the image only), and `max_iter` and `tol` are the knobs: raise `max_iter` for large
-images or strong noise, or relax `tol` to go faster. The penalised model (`lam`) is strongly convex and
-converges much faster: about 200 iterations for the $128^2$ image with $\lambda = 0.017$, close to the
-multiplier of the constrained solution at $\sigma = 25$. When many images of one kind are denoised, the multiplier of one of them
-(`tv_denoise(...).lam`) can be reused with `lam=`, which is a different, penalised, model.
+The default `max_iter=2000` is therefore rarely reached. When it is, the returned image is the
+last iterate, which still satisfies the noise constraint, and `rof` and `ROF.apply` emit one
+`RuntimeWarning` per call with the number of images concerned and the worst gap
+(`tv_denoise` warns too, and reports the gap in `TVResult.gap`). `ROF` also appends the
+iterations and the final gap of every image to `history.extras["iterations"]` and
+`history.extras["gap"]`. `max_iter` and `tol` are the knobs: raise `max_iter`, or relax `tol`
+to go faster. A tolerance of $10^{-4}$ leaves differences of 0.1 to 0.5 grey levels (on a
+range of 255) from a solution converged to $2 \times 10^{-6}$, with the same PSNR to 0.01 dB.
+The penalised model (`lam`) is strongly convex and uses accelerated steps, but it is not faster
+here: 630 iterations for the $128^2$ cells image with $\lambda = 0.017$, close to the
+multiplier of the constrained solution at $\sigma = 25$. When many images of one kind are
+denoised, the multiplier of one of them (`tv_denoise(...).lam`) can be reused with `lam=`, which
+is a different, penalised, model.
 
 ## Usage
 
@@ -590,21 +631,20 @@ rms residual is $\sigma$ to four digits in every case.
 
 | Scene | $\sigma$ | Noisy | `ROF` | Iterations | Gap |
 |---|---|---|---|---|---|
-| cells | 10 | 28.11 | 36.24 | 1390 | $1.0 \times 10^{-4}$ |
-| cells | 25 | 20.15 | 30.20 | 2000 | $1.5 \times 10^{-4}$ |
-| cells | 50 | 14.13 | 25.93 | 2000 | $3.0 \times 10^{-4}$ |
-| filaments | 10 | 28.11 | 33.06 | 700 | $1.0 \times 10^{-4}$ |
-| filaments | 25 | 20.15 | 27.18 | 1440 | $1.0 \times 10^{-4}$ |
-| filaments | 50 | 14.13 | 23.31 | 2000 | $1.4 \times 10^{-4}$ |
+| cells | 10 | 28.11 | 36.24 | 370 | $9.2 \times 10^{-5}$ |
+| cells | 25 | 20.15 | 30.20 | 470 | $8.9 \times 10^{-5}$ |
+| cells | 50 | 14.13 | 25.93 | 550 | $9.6 \times 10^{-5}$ |
+| filaments | 10 | 28.11 | 33.06 | 140 | $9.6 \times 10^{-5}$ |
+| filaments | 25 | 20.15 | 27.18 | 210 | $9.5 \times 10^{-5}$ |
+| filaments | 50 | 14.13 | 23.31 | 340 | $9.8 \times 10^{-5}$ |
 
-The solver stopped at `max_iter` in the three cases with 2000 iterations. Solving the same
-noisy image in float64 to a gap of $10^{-4}$ (2570 and 3850 iterations for the cells at
-$\sigma = 25$ and $50$, 2430 for the filaments at $\sigma = 50$) gives the same PSNR to 0.01 dB,
-and an image that differs from the float32 one by at most 0.2, 0.5 and 0.07 grey levels in those
-cases, and by less than $10^{-4}$ in the others. With `ROF` on a camera image, the root mean
-square error of the Anscombe-stabilised estimate is less than half that of the data (see the
-example above). These numbers describe the synthetic scenes only, not the images of the paper,
-and no comparison with the figures of the paper or with another implementation is given.
+Every case reaches the gap tolerance well before `max_iter`. Solving the same noisy images in
+float64 takes the same number of iterations, gives the same PSNR to 0.01 dB, and an image that
+differs from the float32 one by less than $3 \times 10^{-4}$ grey levels. With `ROF` on a camera
+image, the root mean square error of the Anscombe-stabilised estimate is less than half that of
+the data (see the example above). These numbers describe the synthetic scenes only, not the
+images of the paper, and no comparison with the figures of the paper or with another
+implementation is given.
 
 ## References
 

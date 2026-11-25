@@ -10,6 +10,7 @@ from ..special import poisson_normal_logpdf, poisson_normal_ratio
 from ._prox import (
     _packed_ndim,
     _schatten_p,
+    project_group_l2,
     project_l2_ball,
     prox_box,
     prox_group_l2,
@@ -177,6 +178,14 @@ class GroupL2:
     def prox(self, v: Tensor, t: float) -> Tensor:
         """Block soft threshold at t·w."""
         return prox_group_l2(v, t * self.weight, dim=self.dim)
+
+    def prox_conjugate(self, v: Tensor, t: float) -> Tensor:
+        """Prox of t·F*: the projection of each vⱼ onto the ball of radius w.
+
+        The same as `prox_conjugate(self.prox, v, t)` (Moreau), for any
+        t, with fewer temporaries.
+        """
+        return project_group_l2(v, self.weight, dim=self.dim)
 
 
 class Schatten:
