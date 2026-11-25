@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - PURELET
         - NLMeans
 
 ## Transforms
@@ -24,6 +25,8 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - pure_let
+        - pure_let_halo
         - nl_means
         - nl_means_halo
 
@@ -58,6 +61,10 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - haar_uwt
+        - let_threshold
+        - let_basis
+        - PureSums
         - patch_kernel
         - default_h
         - search_offsets
