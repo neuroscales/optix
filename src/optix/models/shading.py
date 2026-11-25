@@ -51,19 +51,7 @@ def random_shading(
     backend = resolve_backend(dtype, device)
     gen = generator(seed, torch.device("cpu"))
     shape = tuple(shape)
-    k = [min(order, n) for n in shape]
-    coef = torch.randn(k, generator=gen, dtype=torch.float64)
-    coef.view(-1)[0] = 0
-    bases = [
-        dct_basis(n, kk, dtype=torch.float64, device="cpu")
-        for n, kk in zip(shape, k, strict=True)
-    ]
-    log_flat = reconstruct(coef, bases)
-    sd = log_flat.std()
-    if sd > 0:
-        log_flat = log_flat * (strength / sd)
-    flat = log_flat.exp()
-    flat = flat / flat.mean()
+    flat = _smooth_field((), shape, order, strength, gen)
     return ShadingEstimate(
         flat=flat.to(**backend),
         dark=torch.full(shape, dark, **backend),
@@ -71,12 +59,40 @@ def random_shading(
     )
 
 
-def simulate_shading(x: Tensor, shading: ShadingEstimate) -> Tensor:
-    """Apply a shading model: y = f ⊙ (x + bᵢ) + d.
+def _smooth_field(
+    sample: tuple[int, ...],
+    spatial: tuple[int, ...],
+    order: int,
+    strength: float,
+    gen: torch.Generator,
+) -> Tensor:
+    """Smooth positive fields of mean 1, one per sample (CPU, float64).
 
-    The baseline bᵢ is in the units of `shading.baseline_units` (see
+    exp(f) / mean(exp(f)), f a random combination of the lowest `order`
+    DCT-II functions per spatial dim (no DC term), with std(f) =
+    `strength`.
+    """
+    k = [min(order, n) for n in spatial]
+    coef = torch.randn((*sample, *k), generator=gen, dtype=torch.float64)
+    coef.view(*sample, -1)[..., 0] = 0
+    bases = [
+        dct_basis(n, kk, dtype=torch.float64, device="cpu")
+        for n, kk in zip(spatial, k, strict=True)
+    ]
+    log_flat = reconstruct(coef, bases)
+    dims = tuple(range(len(sample), log_flat.ndim))
+    sd = log_flat.std(dims, keepdim=True)
+    log_flat = torch.where(sd > 0, log_flat * (strength / sd), log_flat)
+    flat = log_flat.exp()
+    return flat / flat.mean(dims, keepdim=True)
+
+
+def simulate_shading(x: Tensor, shading: ShadingEstimate) -> Tensor:
+    """Apply a shading model: y = f ⊙ (x + bₙ) + d.
+
+    The baseline bₙ is in the units of `shading.baseline_units` (see
     [`ShadingEstimate`][optix.estimates.ShadingEstimate]): with
-    `"raw"`, the model is y = f · x + d + bᵢ.
+    `"raw"`, the model is y = f · x + d + bₙ.
 
     Parameters
     ----------

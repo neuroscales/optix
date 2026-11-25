@@ -168,7 +168,7 @@ def test_recovery():
     assert shading.meta["flat_norm"] == "geomean"
     assert abs(shading.flat.log().mean()) < 1e-5
     # 63 coefficients from ~24 tissue values per pixel: the statistical
-    # error of log m is about 0.04 per pixel
+    # error of log f is about 0.04 per pixel
     error = (shading.flat.log() - truth["flat"].log()).abs()
     assert error.mean() < 0.06 and error.max() < 0.2
     assert _rel(classes.parameters[:2, 0], truth["means"]) < 0.1
@@ -1026,7 +1026,7 @@ def _tiles(
     """(tile, x, y, z) tiles of one scene whose brightness varies along y.
 
     Tile t is dimmed by exp(−fade·t) (a uniform per-tile fade), and
-    starts `xstep`·t frames into the scene along x. The true log m is
+    starts `xstep`·t frames into the scene along x. The true log f is
     projected onto the DCT basis of `order` (that of `_tile_fit`): a truth
     outside the model's span measures basis truncation, which the precise
     flat ratios of the overlaps amplify along weakly identified modes.
@@ -1296,7 +1296,7 @@ def test_tile_gain_removes_fade_ramp(fade):
     nogain = _tile_fit(data, TileOverlap(step=(0, 16, 0)))
     plain = error(nogain)
     est = _tile_fit(data, TileOverlap(step=(0, 16, 0), fit_gain=True))
-    # without gains the fade becomes a ramp of m (measured ≈ 0.025 and
+    # without gains the fade becomes a ramp of f (measured ≈ 0.025 and
     # 0.049 against ≈ 0.0095 without fade, truth in the span of the
     # basis); with gains, ≈ 0.0092 and 0.0089; gain ratios within 2.6 %
     # and 1.9 % at the stop (Newton decrement)

@@ -35,15 +35,15 @@ def cubic_mode(
 ) -> Tensor:
     """Mode û of the integrand over u (in t = log u), "full" noise model.
 
-    With c = gm, r = r₀ − m·u and σ² = v + c·u, multiplying
+    With c = gf, r = r₀ − f·u and σ² = v + c·u, multiplying
 
-        l′(t) = ν − β·u + u·[m·r/σ² + ½c·(r² + δ − σ²)/σ⁴]
+        l′(t) = ν − β·u + u·[f·r/σ² + ½c·(r² + δ − σ²)/σ⁴]
 
     by σ⁴ > 0 gives a cubic P(u) = c₃u³ + c₂u² + c₁u + c₀ with
 
-        c₃ = −βc² − ½m²c                                  < 0
-        c₂ = νc² − 2βvc − m²v − ½c²
-        c₁ = 2νvc − βv² + m·r₀·v + ½c·(r₀² + δ − v)
+        c₃ = −βc² − ½f²c                                  < 0
+        c₂ = νc² − 2βvc − f²v − ½c²
+        c₁ = 2νvc − βv² + f·r₀·v + ½c·(r₀² + δ − v)
         c₀ = νv²                                          > 0
 
     Since P(0) > 0 > P(+∞), it has one positive root or three. With
@@ -54,18 +54,18 @@ def cubic_mode(
     """
     # Every in-place operation below acts on a temporary of this function.
     # In float32, the mode loses accuracy when shot noise is negligible
-    # (g·m·û / v ≲ 5·10⁻³, e.g. g ≈ 0.02 with v ≈ 10⁵): the cubic then
+    # (g·f·û / v ≲ 5·10⁻³, e.g. g ≈ 0.02 with v ≈ 10⁵): the cubic then
     # degenerates and x − a/3 cancels. Such settings are not realistic for
     # this model, and the prototype's mode is kept as is.
     tiny = torch.finfo(R0.dtype).tiny
     c = M * gain  # gm
     M2 = M.square()
     Vc = V * c
-    c3 = (beta * c).add_(M2, alpha=0.5).mul_(c).neg_()  # −(βc + ½m²)·c
-    c2 = (  # (ν − ½)c² − 2βvc − m²v
+    c3 = (beta * c).add_(M2, alpha=0.5).mul_(c).neg_()  # −(βc + ½f²)·c
+    c2 = (  # (ν − ½)c² − 2βvc − f²v
         c.square().mul_(nu - 0.5).sub_(Vc.mul(2 * beta)).sub_(M2.mul_(V))
     )
-    c1 = (  # ½c(r₀² + δ − v) + m·r₀·v + 2νvc − βv²
+    c1 = (  # ½c(r₀² + δ − v) + f·r₀·v + 2νvc − βv²
         R0.square()
         .add_(dq)
         .sub_(V)
@@ -141,7 +141,7 @@ def quadratic_mode(
 ) -> Tensor:
     """Mode û of the integrand over u (in t = log u), "constant" noise.
 
-    With a fixed variance v, l′(t) = ν − β·u + u·m·(r₀ − m·u)/v = 0 is a
+    With a fixed variance v, l′(t) = ν − β·u + u·f·(r₀ − f·u)/v = 0 is a
     quadratic in u with a single positive root, computed without
     cancellation.
     """
@@ -168,21 +168,21 @@ def quadrature(
     logws: tuple[float, ...],
     full: bool,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Integrate Gamma(u | ν, ν/μ) · N(y | c + m·u, σ²(u)) over u > 0.
+    """Integrate Gamma(u | ν, ν/μ) · N(y | c + f·u, σ²(u)) over u > 0.
 
     For one tissue class and one batch of frames. The integral is taken
     in t = log u by Gauss-Hermite quadrature centred on the mode t̂ of
     the integrand, with the scale given by its curvature there:
     tⱼ = t̂ + √2·s·xⱼ and
 
-        I(f) ≈ √2·s ∑ⱼ wⱼ e^{xⱼ²} · uⱼ · p(uⱼ, y) · f(uⱼ)
+        I(h) ≈ √2·s ∑ⱼ wⱼ e^{xⱼ²} · uⱼ · p(uⱼ, y) · h(uⱼ)
 
     Parameters
     ----------
     Y : (n, H, W) Tensor
         Data.
     C, V, M : (H, W) Tensor
-        Offset c, variance v and modulation m.
+        Offset c, variance v and modulation f.
     gain : () Tensor
         Gain g.
     mu, nu : () Tensor
@@ -192,7 +192,7 @@ def quadrature(
     nodes, logws : tuple of float
         Gauss-Hermite nodes xⱼ and log(wⱼ) + xⱼ².
     full : bool
-        Noise model: σ² = v + g·m·u if True, σ² = v otherwise.
+        Noise model: σ² = v + g·f·u if True, σ² = v otherwise.
 
     Returns
     -------
@@ -240,7 +240,7 @@ def quadrature(
         # Terms that come from the dependence of σ² on u
         tmp1 = (M * iS2).mul_(gain)  # gm/σ²
         G.addcmul_(R.square().add_(dq).sub_(S2), tmp1 * iS2, value=0.5)
-        F.addcmul_(tmp1, tmp1, value=0.5)  # + ½g²m²/σ⁴
+        F.addcmul_(tmp1, tmp1, value=0.5)  # + ½g²f²/σ⁴
         tmp2 = R * tmp1  # gmr/σ²
         H = (  # −∂²/∂u² log N
             tmp1.square()
@@ -398,7 +398,7 @@ def shared_mode(
     """Mode û of the summed integrand over u (in τ = log u).
 
     `R0`, `V`, `B` are `(S, n, h, w)` (or broadcastable): residuals at
-    u = 0, variances and b = g·m of the S tiles seeing each voxel.
+    u = 0, variances and b = g·f of the S tiles seeing each voxel.
 
     Constant noise: l′(τ) = ν − β·u + u·∑ₜ bₜ(r₀ₜ − bₜu)/vₜ is a quadratic
     in u, solved exactly. Full noise: the stationarity polynomial has
@@ -485,7 +485,7 @@ def quadrature_shared(
     Y : (S, n, h, w) Tensor
         Observations of the voxels by each of their S tiles.
     C, V, B : (S, 1, h, w) or (S, n, h, w) Tensor
-        Offset, variance and b = gₜ·m of each observation.
+        Offset, variance and b = gₜ·f of each observation.
     gain, mu, nu : () Tensor
         Sensor gain γ, mean and shape of the Gamma class.
     dq, nodes, logws, full
@@ -500,7 +500,7 @@ def quadrature_shared(
     Emom : (10, S, n, h, w) Tensor
         Per observation, the conditional expectations of the statistics
         of `_model`, with u in place of the per-tile signal (multiply the
-        u-weighted ones by gₜ, or gₜ², to express them in terms of m).
+        u-weighted ones by gₜ, or gₜ², to express them in terms of f).
     """
     beta = nu / mu
     R0 = Y - C

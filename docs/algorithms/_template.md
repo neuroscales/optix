@@ -8,11 +8,11 @@ what each section holds.
 -->
 
 !!! info "At a glance"
-    **Estimates:** the result type, for instance `ShadingEstimate` (fields it fills) \
-    **Noise model:** none, Gaussian, Poisson or Poisson-Gaussian \
-    **Streaming:** pointwise, per-frame, halo, per-pixel-stats or whole-stack \
-    **Needs many frames:** yes or no \
-    **Reference:** Author, Journal, Year, DOI
+    - **Estimates:** the result type, for instance `ShadingEstimate` (fields it fills)
+    - **Noise model:** none, Gaussian, Poisson or Poisson-Gaussian
+    - **Streaming:** pointwise, per-frame, halo, per-pixel-stats or whole-stack
+    - **Needs many frames:** yes or no
+    - **Reference:** Author, Journal, Year, DOI
 
 ## Overview
 
@@ -21,15 +21,43 @@ another algorithm is a better choice. What it returns.*
 
 ## Image formation (optics)
 
-*The physical process behind the data that the algorithm assumes. Refer to the
-shared models in [Image formation and noise](../concepts/image-formation.md)
-and state only what is specific here.*
+*The forward model: the physical process behind the data that the algorithm
+assumes, more concisely than the paper but precisely. Refer to the shared
+models in [Image formation and noise](../concepts/image-formation.md) and state
+only what is specific here. Give the equations in tabs, in optix notation and
+in the paper's, followed by a table mapping one set of symbols onto the other.*
+
+=== "optix"
+
+    $$
+    \mathbf{y}_n = \ldots
+    $$
+
+=== "Author et al. 2000"
+
+    $$
+    I_n = \ldots
+    $$
+
+| optix | Author et al. 2000 | Meaning | Shape |
+|---|---|---|---|
+| $\mathbf{y}_n$ | $I_n$ | recorded frame $n$ | $\lvert\Omega\rvert$, one per frame |
+| $\mathbf{f}$ | $S$ | flat field | $\lvert\Omega\rvert$, shared by all frames of a group |
+
+*Every table of symbols says in words what each symbol means, gives the shape
+of vectors and matrices ($\mathbf{y}_n \in \mathbb{R}^{\lvert\Omega\rvert}$,
+$\boldsymbol{\Phi} \in \mathbb{R}^{\lvert\Omega\rvert \times K}$), with pixels $i \in \Omega$ and frames
+$n = 1, \ldots, N$ as in the [notation](../concepts/notation.md#indices-and-layouts), and says what each
+parameter is shared across: one value per pixel, per frame, per group, or one
+for the whole stack. Annotate terms of an equation with `\underbrace`, never
+with text such as `mode=""` inside the equation.*
 
 ## Probabilistic model
 
-*The generative model and its assumptions as equations: observation model,
-noise, priors or regularisers. Define every symbol when it first appears, in the
-notation of [Concepts](../concepts/notation.md).*
+*The assumptions, stated explicitly, and the generative model or objective
+they lead to: observation model, noise, priors or regularisers. Define every
+symbol when it first appears, in the [notation](../concepts/notation.md); use
+the same tabs as above wherever the paper has its own notation.*
 
 $$
 y = \ldots
@@ -37,22 +65,31 @@ $$
 
 ## Inference / derivation
 
-*From the model to the update equations, one step at a time. State how any
-ambiguity is resolved (normalisation of a flat field, for instance).*
+*The estimation strategy, clearly explained but without every derivation.
+Name its statistical counterpart whenever there is one: maximum likelihood,
+MAP, EM, variational Bayes, iteratively reweighted least squares, method of
+moments (for instance, Richardson–Lucy is EM for a Poisson likelihood).
+what is optimised or inferred, by what kind of scheme (alternation, convex
+splitting, EM, fixed point, ...), which terms are fixed or updated in turn, and
+how any ambiguity is resolved (normalisation of a flat field, for instance).
+Full update equations are only needed where the strategy cannot be understood
+without them.*
 
 ## Algorithm
 
-*Pseudocode: inputs, initialisation, iterations, stopping rule, outputs, and
-the default hyper-parameters.*
+*The steps of the algorithm as a numbered list, with the maths rendered:
+inputs, initialisation, iterations, stopping rule, outputs, and the default
+hyper-parameters. No raw-text pseudocode block.*
 
-```text
-Input: data Y, hyper-parameters ...
-Initialise ...
-Repeat until the relative change of the objective is below tol:
-    1. Update ...
-    2. Update ...
-Return the estimate
-```
+**Input:** frames $\mathbf{y}_1, \ldots, \mathbf{y}_N \in \mathbb{R}^{\lvert\Omega\rvert}$;
+hyper-parameters $\lambda$, ... \
+**Output:** the estimate, for instance $\hat{\mathbf{f}}$.
+
+1. **Initialise** $\mathbf{f}^{(0)} = \mathbf{1}$, ...
+2. **Repeat** until the relative change of the objective is below `tol`:
+    1. update ... with ...;
+    2. update ... with ....
+3. **Normalise** ... and return the estimate.
 
 ## Faithful mode and extensions
 

@@ -18,7 +18,8 @@ from ..io import (
     prepare_out,
 )
 from ._lockstep import lockstep
-from ._rl import _OVERHEAD_ACCEL, RichardsonLucy
+from ._rl import RichardsonLucy
+from ._shiftvariant import ShiftVariantPSF
 
 __all__ = ["BiggsAndrews", "biggs_andrews"]
 
@@ -264,7 +265,7 @@ class BiggsAndrews(RichardsonLucy):
             data,
             self.options["block"],
             self._halo(psf),
-            overhead=_OVERHEAD_ACCEL,
+            overhead=self._overhead_for(psf, data),
             contiguous=True,
             align=chunks_of(out),
             **backend,
@@ -298,6 +299,11 @@ class BiggsAndrews(RichardsonLucy):
                 damping=float(self.options["damping"]),
                 memory=get_config().memory,
                 backend=backend,
+                operator=(
+                    (lambda c, s: self._block_operator(psf, c, s, {}))
+                    if isinstance(psf, ShiftVariantPSF)
+                    else None
+                ),
             )
             extras = self.history.extras
             for report in reports:
@@ -342,7 +348,7 @@ def biggs_andrews(
     data : array-like or Labeled
         Images; `(*samples, *spatial)` without a layout, with as many
         spatial dims as the PSF.
-    psf : Tensor
+    psf : Tensor or ShiftVariantPSF
         Point spread function, centred at index `K // 2`.
     out : writable array-like, optional
         Output (tensor, numpy, zarr, ...). Default: a new tensor.

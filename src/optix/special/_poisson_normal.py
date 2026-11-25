@@ -17,7 +17,11 @@ from torch import Tensor
 
 from ._stable import stirling_residual
 
-__all__ = ["poisson_normal_logpdf", "poisson_normal_mean"]
+__all__ = [
+    "poisson_normal_logpdf",
+    "poisson_normal_mean",
+    "poisson_normal_ratio",
+]
 
 #: Mass left out of the window, as a log-ratio to the largest term.
 _TAIL = 50.0
@@ -144,12 +148,76 @@ def _series(
     return lse.reshape(data.shape), mean.reshape(data.shape)
 
 
+def _log_ratio(
+    data: Tensor,
+    rate: Tensor,
+    variance: Tensor,
+    offset: Tensor | float,
+    max_terms: int,
+) -> Tensor:
+    """log s(μ, x − 1) − log s(μ, x), x = r − m, elementwise, for σ² > 0.
+
+    Both series are summed over one window, that of s(μ, x) widened by
+    one term on each side, n = l + k (k = 0, 1, …). Only ratios of
+    terms enter, so the terms are taken relative to the first one,
+
+        log(wₙ/w_l) = k log μ − ∑ⱼ₌₁ᵏ log(l + j) − k(k − 2(x − l))/2σ²,
+
+    and the terms of s(μ, x − 1), μⁿ⁻¹/(n − 1)! · e^{−(x − n)²/2σ²},
+    are wₙ·n/μ.
+    """
+    wd = _work_dtype(data)
+    x = (data.to(wd) - torch.as_tensor(offset).to(data.device, wd)).reshape(-1)
+    tiny = torch.finfo(wd).tiny
+    mu = rate.to(wd).clamp(min=tiny).reshape(-1)
+    log_mu = mu.log()
+    var = variance.to(wd).reshape(-1)
+    inv_var = 1 / var
+    lo, size = _window(x, log_mu, inv_var, var)
+    lo = (lo - 1).clamp(min=0)
+    size = size + 2
+    out = torch.empty_like(x)
+    bucket = size.log2().ceil().clamp(min=0)
+    for b in torch.unique(bucket).tolist():
+        idx = (bucket == b).nonzero().squeeze(1)
+        width = int(2**b)
+        k = torch.arange(width, device=x.device, dtype=wd)
+        step = max(1, max_terms // width)
+        for start in range(0, idx.numel(), step):
+            i = idx[start : start + step]
+            n = lo[i, None] + k
+            log_n = torch.log(n)  # -inf at n = 0
+            # ∑ⱼ₌₁ᵏ log(l + j): the first term is left out
+            fact = torch.cumsum(log_n[:, 1:], dim=1)
+            fact = torch.cat([torch.zeros_like(fact[:, :1]), fact], dim=1)
+            quad = (
+                k
+                * (k - 2 * (x[i, None] - lo[i, None]))
+                * (0.5 * inv_var[i, None])
+            )
+            log_w = k * log_mu[i, None] - fact - quad
+            log_v = log_w + (log_n - log_mu[i, None])
+            out[i] = torch.logsumexp(log_v, dim=1) - torch.logsumexp(
+                log_w, dim=1
+            )
+    return out.reshape(data.shape)
+
+
 def _broadcast(
     data: Tensor, rate: Tensor | float, variance: Tensor | float
 ) -> tuple[Tensor, Tensor, Tensor]:
     data = torch.as_tensor(data)
-    rate = torch.as_tensor(rate, device=data.device)
-    variance = torch.as_tensor(variance, device=data.device)
+    # Python scalars in the working dtype of the series (not rounded to
+    # the default float32 before the float64 sums)
+    wd = _work_dtype(data)
+
+    def scalar_or_tensor(v: Tensor | float) -> Tensor:
+        if isinstance(v, Tensor):
+            return v.to(device=data.device)
+        return torch.as_tensor(v, dtype=wd, device=data.device)
+
+    rate = scalar_or_tensor(rate)
+    variance = scalar_or_tensor(variance)
     data, rate, variance = torch.broadcast_tensors(data, rate, variance)
     if (variance < 0).any():
         raise ValueError("variance must be non-negative")
@@ -290,3 +358,90 @@ def poisson_normal_logpdf(
     lse = lse.to(wd)
     out = lse - 0.5 * torch.log(2 * math.pi * var)
     return torch.where(noisy, out, poisson).to(dtype)
+
+
+def poisson_normal_ratio(
+    data: Tensor,
+    rate: Tensor | float,
+    variance: Tensor | float,
+    *,
+    offset: Tensor | float = 0.0,
+    max_terms: int = _MAX_TERMS,
+) -> Tensor:
+    """Ratio ξ(μ) = s(μ, x − 1)/s(μ, x) of Poisson–Gaussian series.
+
+    With x = r − m and
+
+        s(μ, b) = ∑ₙ μⁿ/n! · exp(−(b − n)²/2σ²),
+
+    ξ is the derivative term of the Poisson–Gaussian negative
+    log-likelihood: −∂/∂μ log p(r) = 1 − ξ(μ), with p(r) the density of
+    [`poisson_normal_logpdf`][optix.special.poisson_normal_logpdf]
+    (Chouzenoux et al. 2015, Eqs. 2.8, 2.10, 2.12). It equals
+    E[n | r]/μ (see
+    [`poisson_normal_mean`][optix.special.poisson_normal_mean]).
+
+    Both series are summed in log space and in float64 over one window
+    of n around the mode of the summand of s(μ, x), widened by one term
+    on each side (every term left out is below e⁻⁵⁰ times the largest
+    one); the terms of s(μ, x − 1) are indexed from n − 1 rather than
+    formed as n·μⁿ⁻¹/n!, so that the ratio stays accurate for μ → 0.
+    At μ = 0 the closed form ξ(0) = exp((2x − 1)/2σ²) is returned
+    (Chouzenoux et al. 2015, Eq. 2.29); where σ² = 0, ξ = x/μ (Poisson).
+
+    !!! references "References"
+
+        1. Chouzenoux E, Jezierska A, Pesquet J-C, Talbot H. *A convex
+           approach for image restoration with exact Poisson–Gaussian
+           likelihood.* SIAM J Imaging Sci **8**(4):2662-2682, 2015.
+           [doi:10.1137/15M1014395](https://doi.org/10.1137/15M1014395)
+
+        ??? quote "BibTeX"
+
+            ```bibtex
+            @article{chouzenoux2015convex,
+              author  = {Chouzenoux, Emilie and Jezierska, Anna and
+                         Pesquet, Jean-Christophe and Talbot, Hugues},
+              title   = {A Convex Approach for Image Restoration with
+                         Exact {Poisson}--{Gaussian} Likelihood},
+              journal = {SIAM Journal on Imaging Sciences},
+              volume  = {8},
+              number  = {4},
+              pages   = {2662--2682},
+              year    = {2015},
+              doi     = {10.1137/15M1014395}
+            }
+            ```
+
+    Parameters
+    ----------
+    data : Tensor
+        Observations r.
+    rate : Tensor or float
+        Poisson mean μ ≥ 0.
+    variance : Tensor or float
+        Gaussian variance σ² ≥ 0.
+    offset : Tensor or float
+        Gaussian mean m.
+    max_terms : int
+        Number of series terms evaluated at once (memory bound).
+
+    Returns
+    -------
+    Tensor
+        ξ(μ), in the dtype of `data` (broadcast shape).
+    """
+    data, rate, variance = _broadcast(data, rate, variance)
+    dtype = data.dtype if data.is_floating_point() else torch.float64
+    wd = _work_dtype(data)
+    x = data.to(wd) - torch.as_tensor(offset).to(data.device, wd)
+    mu = rate.to(wd)
+    noisy = variance > 0
+    poisson = x / mu
+    if not bool(noisy.any()):
+        return poisson.to(dtype)
+    var = torch.where(noisy, variance, 1).to(wd)
+    zero = mu == 0
+    log_ratio = _log_ratio(data, rate, var, offset, max_terms).to(wd)
+    log_ratio = torch.where(zero, (2 * x - 1) / (2 * var), log_ratio)
+    return torch.where(noisy, log_ratio.exp(), poisson).to(dtype)

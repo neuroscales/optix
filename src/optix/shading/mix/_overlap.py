@@ -7,13 +7,13 @@ is seen at several positions of the field of view. The model of
 geometry); this module holds the poses and pairs of the tiles, and the
 statistics used to **initialise** the flat field and the tile gains.
 
-Initialiser. For a voxel p of tile i and the matching voxel p − s of
-tile j, both tissue, the log-ratio of the excesses
+Initialiser. For a voxel p of tile t and the matching voxel p − s of
+tile t′, both tissue, the log-ratio of the excesses
 
-    d = log(yᵢ − c) − log(yⱼ − c) ≈ log m(p) − log m(p − s) + aᵢ − aⱼ
+    d = log(yₜ − c) − log(y_{t′} − c) ≈ log f(p) − log f(p − s) + aₜ − a_{t′}
 
 is free of u. `OverlapStats` holds the delta-method weighted sums of d
-over every pair (w = 1 / (Var yᵢ/(yᵢ − c)² + Var yⱼ/(yⱼ − c)²), voxels
+over every pair (w = 1 / (Var yₜ/(yₜ − c)² + Var y_{t′}/(y_{t′} − c)²), voxels
 more than `threshold` background standard deviations above c in both
 tiles), from which the initial θ is fitted (with the moment term,
 `fit_modulation(extra=…)`) and the initial log gains a are profiled
@@ -25,8 +25,8 @@ voxel frame, with one signed component per axis of the (group-free) data
 other than the tile axis, in storage order (for data stored as
 (tile, x, y, z), with pictures in the (y, z) plane indexed by x, a
 position is (x, y, z)). Tile t's voxel q is the scene voxel
-position_t + q; a shift along a sample axis (x here) pairs frame k of
-tile i with frame k − sx of tile j.
+position_t + q; a shift along a sample axis (x here) pairs frame n of
+tile t with frame n − sₓ of tile t′.
 """
 
 import math
@@ -73,7 +73,7 @@ class TileOverlap:
         Default 0.
     fit_gain : bool
         Also fit one gain g_t per tile: tile t sees the scene through
-        b_t = g_t·m, so that a uniform per-tile fade (bleaching, lamp
+        b_t = g_t·f, so that a uniform per-tile fade (bleaching, lamp
         drift) is not mistaken for a ramp of the flat field. The gains
         have a geometric mean of one over the tiles that overlap another
         (the common scale of the gains is that of the class means);
@@ -340,7 +340,7 @@ class OverlapStats:
         return torch.linalg.solve(self._graph(), b)
 
     def bound(self, logm: Tensor) -> float:
-        """−½ ∑ w·(d − Δ log m − Δ log g)², at the profiled gains."""
+        """−½ ∑ w·(d − Δ log f − Δ log g)², at the profiled gains."""
         gains = self.gains
         a = self.log_gain(logm).tolist()
         total = 0.0

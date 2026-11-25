@@ -10,8 +10,8 @@ integral over u and the update of its parameters) is delegated to a
 Per-pixel statistics accumulated by the local step (all posterior
 expectations, summed over frames), with
 
-    r  = y − c − m·u                 (residual)
-    σ² = v + g·m·ũ                   (variance; ũ = u, or 0)
+    r  = y − c − f·u                 (residual)
+    σ² = v + g·f·ũ                   (variance; ũ = u, or 0)
     q  = (r² + δ − σ²) / (2σ⁴)       (score with respect to the variance,
                                       δ = quantisation² / 12)
 
@@ -275,7 +275,7 @@ class MixtureFit:
 
     # -- helpers -----------------------------------------------------------
     def modulation(self) -> Tensor:
-        """m = exp(Φ·θ) on the pixel grid."""
+        """f = exp(Φ·θ) on the pixel grid."""
         return reconstruct(self.param.theta, [self.by, self.bx]).exp()
 
     def frames(
@@ -308,7 +308,7 @@ class MixtureFit:
         )
 
     def tile_gain(self) -> Tensor | None:
-        """Per-tile gains gₜ (b = gₜ·m), or None unless they are fitted."""
+        """Per-tile gains gₜ (b = gₜ·f), or None unless they are fitted."""
         if self.param.A is None:
             return None
         return self.param.A.exp()
@@ -389,7 +389,7 @@ class MixtureFit:
         the cell, their gains, the pixel slices of each tile (layout
         order), the per-sample index of each tile's pictures, the local
         index of the block in each tile, and the `(S, n, h, w)`
-        observations with their offsets, variances and b = g·m.
+        observations with their offsets, variances and b = g·f.
         """
         ov, prm = self.overlap, self.param
         sp, rest = self._sp, self._rest
@@ -462,7 +462,7 @@ class MixtureFit:
                 [elogpi[w].reshape(-1, self.nclass + 1) for w in where]
             )
             st, bnd, cnt, cs = self._cell_chunk(Y, C, V, B, ep)
-            # statistics in terms of m: u-weighted ones times g, g²
+            # statistics in terms of f: u-weighted ones times g, g²
             g = gains.to(st)[:, None, None]
             st[[XU, G1, WU, G2]] *= g
             st[[AU, BU]] *= g.square()
@@ -490,7 +490,7 @@ class MixtureFit:
         As `posterior` with fixed q(π) (`alpha`), but every observation of
         a voxel seen by several tiles gets the joint posterior of that
         voxel (shared class and signal, owner-mixture prior), and tile t
-        has the flat field b = gₜ·m.
+        has the flat field b = gₜ·f.
         """
         from ...io._arrays import store
 
@@ -664,7 +664,7 @@ class MixtureFit:
     def _gain_add(self, t: int, st: Tensor, pix: tuple | None = None) -> None:
         """Add the observations of tile t to the terms of its log gain.
 
-        `st` holds their statistics in terms of m, summed over frames, on
+        `st` holds their statistics in terms of f, summed over frames, on
         the pixels `pix`. aₜ is the coefficient of a per-tile constant
         column of the θ system (log b = aₜ + Φθ): its score sₜ is exact,
         its curvature dₜ and cross term Uₜ = Φᵀ(…) with θ come from the
@@ -802,7 +802,7 @@ class MixtureFit:
             if modulation:
                 M = self.modulation()
             else:
-                # m is held fixed: the given flat field itself, with a
+                # f is held fixed: the given flat field itself, with a
                 # geometric mean of one (θ is only its projection)
                 M = logm.sub(logm.mean()).exp_()
 
@@ -946,8 +946,8 @@ class MixtureFit:
 
         The bound is
 
-            ∑ᵢₖ log ∑_z exp(E[log π_{kz}]) · p(yᵢₖ | z)
-            − ∑ₖ KL(q(πₖ) ‖ p(πₖ)) + log p(θ) + log p(v) + log p(g)
+            ∑ₙᵢ log ∑_z exp(E[log π_{nz}]) · p(yₙᵢ | z)
+            − ∑ₙ KL(q(πₙ) ‖ p(πₙ)) + log p(θ) + log p(v) + log p(g)
         """
         prm, prior, post = self.param, self.prior, self.post
         height, width = self.spatial_shape
@@ -1023,7 +1023,7 @@ class MixtureFit:
         With a boolean `mask` `(n, H, W)`, only the voxels where it is
         True contribute (the others are seen by several tiles and belong
         to the cell pass). With fitted tile gains, `tiles` `(n,)` gives the
-        tile of every frame: its flat field is b = gₜ·m.
+        tile of every frame: its flat field is b = gₜ·f.
         """
         C, V = self.param.C, self.param.V
         M = None
@@ -1092,7 +1092,7 @@ class MixtureFit:
             logZ = torch.where(mask, logZ, 0)
         bound = logZ.sum().to(sdt)
         if tiles is not None:
-            # in terms of m: u-weighted statistics times g, g²
+            # in terms of f: u-weighted statistics times g, g²
             acc[[XU, G1, WU, G2]] *= g
             acc[[AU, BU]] *= g.square()
             stats = torch.zeros_like(acc[:, 0], dtype=sdt)
@@ -1151,11 +1151,11 @@ class MixtureFit:
             Hvv = Hvv + hvp
 
         gM = gam * M
-        Fcm = M * Hcm  # Fisher(c, log m)
-        Fvm = gM * Hvm  # Fisher(v, log m) = Fisher(v, log g)
-        Fmm = M.square().mul_(Hmm)  # Fisher(log m, log m), mean part
-        Vmm = gM.square().mul_(Hmg)  # Fisher(log m, log m), variance part
-        Sm = M.mul(Gm).addcmul(gM, Gmg)  # score of log m
+        Fcm = M * Hcm  # Fisher(c, log f)
+        Fvm = gM * Hvm  # Fisher(v, log f) = Fisher(v, log g)
+        Fmm = M.square().mul_(Hmm)  # Fisher(log f, log f), mean part
+        Vmm = gM.square().mul_(Hmg)  # Fisher(log f, log f), variance part
+        Sm = M.mul(Gm).addcmul(gM, Gmg)  # score of log f
         Sg = gM * Gmg  # score of log g (per pixel)
         tiny = torch.finfo(M.dtype).tiny
         iHcc = Hcc.clamp_min(tiny).reciprocal_()
@@ -1187,7 +1187,7 @@ class MixtureFit:
             H.diagonal().add_(H.diagonal().mean(), alpha=1e-8)
             g = project(Sm, bases).flatten()
             g.addcmul_(weights, prm.theta.flatten(), value=-1)
-            # No DC term: the geometric mean of m stays at one
+            # No DC term: the geometric mean of f stays at one
             H[0, :] = H[:, 0] = 0
             H[0, 0] = 1
             g[0] = 0
@@ -1326,7 +1326,7 @@ class MixtureFit:
 
     # -- mixture step: q(π), then μ, ν, α ----------------------------------
     def update_post(self) -> None:
-        """q(πₖ) = Dirichlet(α + ∑ᵢ zᵢₖ); class fit of the aggregated q(u)."""
+        """q(πₙ) = Dirichlet(α + ∑ᵢ zₙᵢ); class fit of the aggregated q(u)."""
         if self._counts is None:
             raise RuntimeError("Run update_latent() first")
         prior, post = self.prior, self.post
@@ -1389,7 +1389,7 @@ class MixtureFit:
                 _loghalve_(prm.gain, previous[3])
                 if prm.A is not None:
                     _halve_(prm.A, previous[4])
-                if learn_modulation:  # otherwise m stays as given
+                if learn_modulation:  # otherwise f stays as given
                     prm.M = self.modulation()
                 self.history.pop()
                 bound = self.update_latent()
@@ -1548,15 +1548,15 @@ def fit_modulation(
 
     If the tissue signal has the same distribution in every pixel (on
     average over frames, given that the pixel contains tissue), the mean
-    tissue signal of pixel i is mᵢ·E[u]. Its log is fitted by weighted,
+    tissue signal of pixel i is fᵢ·E[u]. Its log is fitted by weighted,
     penalised least squares in the DCT basis,
 
-        min ½ ∑ᵢ wᵢ (log m̂ᵢ − (Φ·θ)ᵢ)² + ½ θᵀ·diag(penalty)·θ,
+        min ½ ∑ᵢ wᵢ (log f̂ᵢ − (Φ·θ)ᵢ)² + ½ θᵀ·diag(penalty)·θ,
 
-    where m̂ᵢ = totalᵢ / countᵢ and wᵢ = info · countᵢ is the information
-    about log mᵢ (info ≈ mean² / variance of one tissue value). Pixels
+    where f̂ᵢ = totalᵢ / countᵢ and wᵢ = info · countᵢ is the information
+    about log fᵢ (info ≈ mean² / variance of one tissue value). Pixels
     with fewer than `min_count` tissue values are ignored. The DC
-    coefficient is then dropped (geometric mean of m = 1). Pixels whose
+    coefficient is then dropped (geometric mean of f = 1). Pixels whose
     residual exceeds `outlier` robust standard deviations (hot pixels)
     are discarded and the fit repeated `robust_iter` times.
 

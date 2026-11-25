@@ -15,6 +15,8 @@ Estimators of the flat field, dark field and per-frame baseline, and the correct
         - DarkFlatCalibration
         - GammaMixture
         - IlluminationFunction
+        - Likar
+        - KaskFlatField
 
 ### Overlapping tiles
 
@@ -24,7 +26,7 @@ and one signal shared by all of them; its contribution to the bound
 integrates the product of the tile likelihoods over that signal, so the
 same structure seen at different places of the field of view constrains
 the flat field. With `TileOverlap(fit_gain=True)` each tile t also gets a
-gain g_t (flat field g_t·m, reported as `GammaMixture.tile_gain_`), so
+gain g_t (flat field g_t·f, reported as `GammaMixture.tile_gain_`), so
 that a uniform per-tile fade is not mistaken for a ramp of the flat field;
 `apply(..., tile_gain=True)` divides tile t by it, and
 `classify(..., joint=True)` gives every observation of a shared voxel its

@@ -1,10 +1,57 @@
+---
+icon: fontawesome/solid/gears
+---
+
 # Algorithms
 
-This section will hold one page for every algorithm in optix. There are none
-yet: the library has so far been built from the bottom up, and the
-[Concepts](../concepts/index.md) pages describe what the algorithm pages will
-stand on. This page explains how the section will be organised and what an
-algorithm page contains, so that contributors and readers know what to expect.
+One page for every estimator in optix. Each page states the model in the common
+[notation](../concepts/notation.md), shows it next to the notation of the paper
+it comes from, and goes from the model to the algorithm, its options and an
+example. The sections follow the modules of the
+[API reference](../reference/index.md).
+
+| Module | Algorithm | Estimates |
+|---|---|---|
+| [`optix.sensor`](../reference/sensor.md) | [Poisson-Gaussian fit](sensor/poisson-gaussian.md) (`PoissonGaussian`) | gain, offset and read noise from one image |
+| | [Generalized Anscombe](sensor/generalized-anscombe.md) (`GeneralizedAnscombe`) | variance-stabilising transform and its inverses |
+| | [Photon-transfer curve](sensor/photon-transfer-curve.md) (`PhotonTransferCurve`) | gain and read noise from a series of exposures (EMVA 1288) |
+| | [sCMOS calibration](sensor/scmos-calibration.md) (`SCMOSCalibration`) | per-pixel offset, gain and read noise |
+| | [Dark and flat calibration](sensor/dark-flat-calibration.md) (`DarkFlatCalibration`) | dark field and flat field from calibration stacks |
+| | [Defective pixels](sensor/defective-pixels.md) (`DefectivePixels`) | hot, dead and noisy pixels |
+| [`optix.shading`](../reference/shading.md) | [BaSiC](shading/basic.md) (`BaSiC`) | flat field, dark field and baseline |
+| | [CIDRE](shading/cidre.md) (`CIDRE`) | flat field and dark field |
+| | [Likar](shading/likar-entropy.md) (`Likar`) | flat field and dark field, from one image |
+| | [Kask](shading/kask.md) (`KaskFlatField`) | foreground and background flat fields |
+| | [Illumination function](shading/illumination-function.md) (`IlluminationFunction`) | flat field |
+| | [Gamma mixture](shading/gamma-mixture.md) (`GammaMixture`) | flat field and classes |
+| [`optix.attenuation`](../reference/attenuation.md) | [Depth-resolved attenuation](attenuation/depth-resolved.md) (`DepthResolved`) | attenuation coefficient along the propagation axis, and the compensated data |
+| [`optix.background`](../reference/background.md) | [Rolling ball](background/rolling-ball.md) (`RollingBall`, `TopHat`) | background, by grey-scale opening |
+| [`optix.deconv`](../reference/deconv.md) | [Richardson–Lucy](deconv/richardson-lucy.md) (`RichardsonLucy`) | deconvolved image |
+| | [Richardson–Lucy with TV](deconv/richardson-lucy-tv.md) (`RichardsonLucyTV`) | deconvolved image, total-variation regularised |
+| | [Biggs–Andrews](deconv/biggs-andrews.md) (`BiggsAndrews`) | deconvolved image, accelerated |
+| | [Snyder](deconv/snyder.md) (`Snyder`) | deconvolved image |
+| | [Nagy–O'Leary](deconv/nagy-oleary.md) (`NagyOLeary`, `NagyOLearyPSF`) | deconvolved image with a spatially variant PSF |
+| | [Denis](deconv/denis.md) (`DenisPSF`) | spatially variant PSF model for the RL family |
+| | [Wiener](deconv/wiener.md) (`Wiener`) | deconvolved image, in one linear step |
+| | [Tikhonov](deconv/tikhonov.md) (`Tikhonov`) | deconvolved image, in one linear step |
+| | [Wiener–Butterworth](deconv/wiener-butterworth.md) (`WienerButterworth`) | deconvolved image |
+| | [Ikoma](deconv/ikoma.md) (`Ikoma`) | deconvolved image, regularised, with shifted-Poisson noise |
+| | [HSPIRAL](deconv/hspiral.md) (`HSPIRAL`) | deconvolved image, Hessian Schatten-norm regularised, with Poisson noise |
+| | [Chouzenoux](deconv/chouzenoux.md) (`Chouzenoux`) | deconvolved image, TV and Hessian regularised, with the exact Poisson–Gaussian likelihood |
+| | [Multiview Richardson–Lucy](deconv/multiview.md) (`MultiviewRL`) | one deconvolved image from several registered views |
+| [`optix.denoise`](../reference/denoise.md) | [BM3D and BM4D](denoise/bm3d.md) (`BM3D`, `BM4D`) | denoised image or volume, by block matching and collaborative filtering |
+| [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
+| | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |
+| | [VSNR](destripe/vsnr.md) (`VSNR`) | stripe-free image, variational |
+| [`optix.psf`](../reference/psf.md) | [Bead PSF](psf/bead-psf.md) (`BeadPSF`) | point-spread function from images of beads |
+| | [Richards–Wolf](psf/richards-wolf.md) (`richards_wolf`) | vectorial point-spread function of a high-aperture objective, from theory |
+| | [Phase retrieval](psf/phase-retrieval.md) (`PhaseRetrieval`) | pupil function and Zernike aberrations from a bead z-stack |
+| | [Gibson–Lanni PSF](psf/gibson-lanni.md) (`gibson_lanni`) | scalar PSF model with refractive-index and thickness mismatch |
+| | [Light-sheet PSF](psf/lightsheet.md) (`lightsheet_psf`, `gaussian_sheet`) | effective PSF of light-sheet imaging: detection PSF times a Gaussian sheet, with a rotation for multiview |
+| [`optix.fusion`](../reference/fusion.md) | [Intensity adjustment](fusion/intensity-adjustment.md) (`IntensityAdjustment`) | gain and offset of each tile of a mosaic |
+
+The rest of this page explains how the section is organised and what an
+algorithm page contains.
 
 ## Organised by what is estimated
 
@@ -27,7 +74,7 @@ estimate**, such as:
 Each target has a *result type*, a small dataclass from
 [`optix.estimates`](../reference/estimates.md), that every algorithm for that
 target returns. `ShadingEstimate`, for instance, holds the flat field, the dark
-image and the baseline, whichever algorithm estimated them. Algorithms that
+field and the baseline, whichever algorithm estimated them. Algorithms that
 estimate several things at once, such as a joint model of sensor, shading and
 tissue, are filed under their main target and return the result type of every
 target they estimate. These shared types are how algorithms are compared, and

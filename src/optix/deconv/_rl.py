@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from .._estimator import Estimator, Tags
+from .._estimator import Tags
 from ..estimates import SensorEstimate
 from ..io import (
     ArrayLike,
@@ -15,11 +15,10 @@ from ..io import (
     Layout,
     WritableArrayLike,
     blocks,
-    chunks_of,
-    flush,
-    prepare_out,
 )
+from ._block import _BlockDeconvolution
 from ._fft import PaddedConvolution
+from ._shiftvariant import ShiftVariantPSF
 
 __all__ = [
     "RichardsonLucy",
@@ -45,6 +44,7 @@ def rl_step(
     mu: Tensor | None = None,
     flat: Tensor | None = None,
     back: Callable[[Tensor], Tensor] | None = None,
+    penalty: Callable[[Tensor], Tensor] | None = None,
 ) -> Tensor:
     """One Richardson–Lucy update on a block.
 
@@ -78,6 +78,10 @@ def rl_step(
         Back projector B, block `(..., *L)` to object `(..., *N)`, used in
         place of Hᵀ (an unmatched back projector); `inv_norm` is then
         1 / B1. Not combined with `flat`. Default: Hᵀ.
+    penalty : callable, optional
+        Denominator d(f) > 0 of a one-step-late regularised update
+        (Green 1990), evaluated at the current estimate: c ← c / d(f)
+        before damping. Default: none (d = 1).
 
     Returns
     -------
@@ -93,6 +97,8 @@ def rl_step(
             raise ValueError("back and flat cannot be combined")
         ratio = ratio * flat
     c = (op.adjoint if back is None else back)(ratio) * inv_norm
+    if penalty is not None:
+        c = c / penalty(f)
     if damping != 1.0:
         c = 1.0 - damping + damping * c
     return (f * c).clamp_(min=0)
@@ -117,9 +123,9 @@ def _expected(
 def chi2_probability(data: Tensor, mu: Tensor) -> float:
     """P(χ² > χ²_obs) of Pearson's statistic for counts.
 
-        χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / μᵢ,   ν = n − 1 degrees of freedom,
+        χ²_obs = ∑ᵢ (yᵢ − μᵢ)² / μᵢ,   ν = |Ω| − 1 degrees of freedom,
 
-    with n the number of pixels
+    with |Ω| the number of pixels
     ([Lucy 1974, §IV](https://doi.org/10.1086/111605)).
 
     Parameters
@@ -188,6 +194,9 @@ def rl_block(
     back: Callable[[Tensor], Tensor] | None = None,
     accelerate: bool = False,
     trace: dict | None = None,
+    penalty: Callable[[Tensor], Tensor] | None = None,
+    tol: float | None = None,
+    step: Callable[..., Tensor] | None = None,
 ) -> tuple[Tensor, int]:
     """Richardson–Lucy iterations on one block, optionally accelerated.
 
@@ -196,7 +205,12 @@ def rl_block(
     data : Tensor
         Observed block y (counts), `op.shape`.
     op : PaddedConvolution
-        Blur operator H.
+        Blur operator H. With a `step` hook, any object with the
+        attributes `norm` (Hᵀ1 on the object grid, which sets the
+        support of the estimate), `shape` (of `data`) and the methods
+        `forward` (object to data) and `adjoint` (data to object, used
+        with `flat`) will do, e.g. a
+        [`Multiview`][optix.deconv.utils.Multiview].
     start : float or Tensor
         Starting estimate f⁽⁰⁾ > 0: a constant or a tensor on `op.grid`.
     n_iter : int, optional
@@ -242,6 +256,35 @@ def rl_block(
         pixels set to 0) and `"effective"` (estimated number of
         unaccelerated iterations, ∑ₖ ηₖ, [Biggs and Andrews 1997,
         Eq. 12](https://doi.org/10.1364/AO.36.001766)).
+    penalty : callable, optional
+        Denominator of a one-step-late regularised update (see
+        [`rl_step`][optix.deconv.utils.rl_step]).
+    tol : float, optional
+        With `n_iter=None`: stop once the relative change of the
+        estimate on the block, ‖f⁽ʳ⁺¹⁾ − f⁽ʳ⁾‖₂ / ‖f⁽ʳ⁾‖₂, is below `tol`
+        (or at `max_iter`), in place of the χ² test.
+    step : callable, optional
+        Update used in place of [`rl_step`][optix.deconv.utils.rl_step],
+        e.g. the update over several views,
+        [`Multiview.step`][optix.deconv.utils.Multiview.step], with `op`
+        a [`Multiview`][optix.deconv.utils.Multiview] and `data` the
+        views stacked. It is called once per iteration as
+        `step(f, data, op, inv_norm=, background=, damping=, mu=,
+        flat=, back=, penalty=)` and returns the new estimate on the
+        object grid: `f` the current estimate (or the extrapolated
+        prediction with `accelerate`), `data` the data (or the
+        conditional mean of the counts with `expect`), `inv_norm` the
+        reciprocal of Hᵀ1 (of Hᵀβ with `flat`, of B1 with `back`) on
+        the support, 0 elsewhere, and `mu` the expected data β·H f + b
+        at `f` if already computed (by the χ² test or `expect`), else
+        None; the other keywords are those given to `rl_block`. A hook
+        may ignore `inv_norm` (it need not be the normaliser of its
+        update) but must accept every keyword, and should raise for an
+        option it does not implement: `Multiview.step` rejects `flat`,
+        `back` and `penalty`, so multiview RL-TV is an error. A hook
+        that also takes `**kwargs` keeps working if keywords are added
+        to this call. Default:
+        `rl_step`.
 
     Returns
     -------
@@ -280,7 +323,7 @@ def rl_block(
                 num = float((g1 * g2).sum(dtype=torch.float64))
                 gamma = (a * num / den) ** 2 if den > 0 else 0.0
         mu = None
-        if n_iter is None:
+        if n_iter is None and tol is None:
             mu = _expected(f, op, background, flat)
             if chi2_probability(data + variance, mu + variance) >= alpha:
                 break
@@ -294,7 +337,7 @@ def rl_block(
             y = f
         if expect is not None and mu is None:
             mu = _expected(y, op, background, flat)
-        new = rl_step(
+        new = (rl_step if step is None else step)(
             y,
             data if expect is None else expect(mu),
             op,
@@ -304,7 +347,16 @@ def rl_block(
             mu=mu,
             flat=flat,
             back=back,
+            penalty=penalty,
         )
+        stop = False
+        if n_iter is None and tol is not None:
+            old = op.crop(f)
+            f64 = torch.float64
+            change = torch.linalg.vector_norm(op.crop(new) - old, dtype=f64)
+            stop = bool(
+                change <= tol * torch.linalg.vector_norm(old, dtype=f64)
+            )
         if accelerate:
             if n > 0:  # the first update only sets the starting image
                 g1, g2 = new - y, g1
@@ -315,6 +367,8 @@ def rl_block(
         eta = 1.0 + gamma * eta
         effective += eta
         n += 1
+        if stop:
+            break
     if trace is not None:
         trace["alpha"] = alphas
         trace["clipped"] = clipped
@@ -332,7 +386,7 @@ class _Block:
     variance: Tensor | float = 0.0
 
 
-class RichardsonLucy(Estimator):
+class RichardsonLucy(_BlockDeconvolution):
     """Richardson–Lucy deconvolution with a known PSF, block by block.
 
     Model: the image y is a Poisson sample of the blurred object,
@@ -355,7 +409,7 @@ class RichardsonLucy(Estimator):
 
     **Stopping rule.** [Lucy (1974, §IV)](https://doi.org/10.1086/111605): stop
     as soon as the χ² test of the fit, P(χ² > χ²_obs) with χ²_obs = ∑ᵢ (yᵢ −
-    μᵢ)²/μᵢ, μ = H f⁽ʳ⁾, and ν = n − 1 degrees of freedom, is not small (≥
+    μᵢ)²/μᵢ, μ = H f⁽ʳ⁾, and ν = |Ω| − 1 degrees of freedom, is not small (≥
     `alpha` = 0.05). The test assumes y in counts (photons or electrons). A
     fixed number of iterations
     ([Richardson](https://doi.org/10.1364/JOSA.62.000055) shows 10, 20 and 30)
@@ -371,6 +425,13 @@ class RichardsonLucy(Estimator):
     plus halo), and only its core is kept. The halo is at least the PSF
     size (default: twice), and the seams fade with the halo width; along
     an image edge, the block-wise and whole-image results coincide.
+
+    **Shift-variant PSF.** Lucy (1974) states the iteration for any
+    kernel P(x|ξ), not only a convolution: with a shift-variant PSF model
+    as `psf`, H is the model's blur (a sum of weighted convolutions, see
+    [`ShiftVariantPSF`][optix.deconv.utils.ShiftVariantPSF]), Hᵀ its
+    exact transpose and Hᵀ1 its normaliser. The weights of each block are
+    evaluated at the global position of its pixels.
 
     Images are independent: sample and group axes of the layout are
     iterated over, the spatial axes (as many as the PSF has dims, in
@@ -454,6 +515,7 @@ class RichardsonLucy(Estimator):
     }
     recommended = dict(paper)
     _accelerate = False
+    _extra_overhead = 0.0  # working buffers of a subclass's update
 
     def __init__(
         self,
@@ -474,10 +536,12 @@ class RichardsonLucy(Estimator):
 
         Parameters
         ----------
-        psf : Tensor
+        psf : Tensor or ShiftVariantPSF
             Point spread function, `(*K)` with 2 or 3 dims, in the order
             of the spatial axes of the layout, centred at index `K // 2`.
-            Normalised to unit sum.
+            Normalised to unit sum. Or a shift-variant PSF model
+            ([`NagyOLearyPSF`][optix.deconv.NagyOLearyPSF],
+            [`DenisPSF`][optix.deconv.DenisPSF]), used as given.
         n_iter : int, optional
             Fixed number of iterations. Default ([Lucy
             1974](https://doi.org/10.1086/111605)): None, the χ² stopping rule.
@@ -524,6 +588,8 @@ class RichardsonLucy(Estimator):
     def _psf(self, backend: dict) -> Tensor:
         if self.psf is None:
             raise ValueError("RichardsonLucy needs a psf")
+        if isinstance(self.psf, ShiftVariantPSF):
+            return self.psf.to(**backend)
         psf = torch.as_tensor(self.psf).to(**backend)
         if (psf < 0).any():
             raise ValueError("psf must be non-negative")
@@ -532,30 +598,21 @@ class RichardsonLucy(Estimator):
             raise ValueError("psf must have a positive sum")
         return psf / total
 
-    def _halo(self, psf: Tensor) -> tuple[int, ...]:
-        halo = self.options["halo"]
-        need = tuple(psf.shape)
-        if halo is None:
-            return tuple(2 * k for k in need)
-        halo = (
-            (int(halo),) * psf.ndim
-            if isinstance(halo, int)
-            else tuple(int(h) for h in halo)
-        )
-        if len(halo) != psf.ndim:
-            raise ValueError("halo must have one entry per PSF dim")
-        if any(h < k for h, k in zip(halo, need, strict=True)):
-            raise ValueError(
-                f"halo {halo} must be at least the PSF size {need}"
-            )
-        return halo
+    def _overhead_for(
+        self, psf: Tensor | ShiftVariantPSF, data: Labeled
+    ) -> float:
+        """Working buffers per voxel, plus the shift-variant terms.
 
-    def _labeled_for(self, data: ArrayLike) -> Labeled:
-        if isinstance(data, Labeled):
-            return data
-        psf = self.psf
-        ndim = 2 if psf is None else psf.ndim
-        return self._labeled(data, Layout.default(len(data.shape), ndim))
+        A shift-variant operator stores, per term, a weight map and a
+        transfer function (≈ 2 floats per voxel), plus a temporary; the
+        number of terms is bounded by those meeting the image
+        ([`n_terms`][optix.deconv.utils.ShiftVariantPSF.n_terms]).
+        """
+        base = self._overhead()
+        if isinstance(psf, ShiftVariantPSF):
+            _, _, spatial = data.layout.shape_of(data.array)
+            return base + 3.0 * psf.n_terms(spatial)
+        return base
 
     def _maps(self, data: Labeled, backend: dict) -> dict[str, Tensor | None]:
         """Sensor maps, broadcast to `(*group, *spatial)`."""
@@ -568,17 +625,6 @@ class RichardsonLucy(Estimator):
                 if value is not None:
                     out[name] = torch.broadcast_to(value.to(**backend), shape)
         return out
-
-    @staticmethod
-    def _region(chunk: Chunk) -> tuple[slice, ...]:
-        """Loaded region (core + halo) along the spatial axes."""
-        region = []
-        for core, inner, n in zip(
-            chunk.spatial, chunk.inner, chunk.data.shape, strict=True
-        ):
-            start = core.start - inner.start
-            region.append(slice(start, start + n))
-        return tuple(region)
 
     def _prepare(self, chunk: Chunk, maps: dict) -> _Block:
         """Counts y (electrons with a sensor)."""
@@ -621,6 +667,28 @@ class RichardsonLucy(Estimator):
             trace=trace,
         )
 
+    def _block_input(self, chunk: Chunk) -> float:
+        """Per-image input of `_solve`: the start level of the image."""
+        return float(self.level[chunk.group + chunk.samples].squeeze())
+
+    def _fitted_images(self) -> tuple[int, ...] | None:
+        return None if self.level is None else tuple(self.level.shape)
+
+    def _begin_apply(self) -> None:
+        if self._accelerate:
+            self.history.extras.setdefault("effective_iterations", [])
+
+    def _after_block(self, trace: dict) -> None:
+        if self._accelerate:
+            self.history.extras["effective_iterations"].append(
+                float(trace["effective"])
+            )
+
+    def _overhead(self) -> float:
+        """Working buffers per loaded voxel, for the block size."""
+        base = _OVERHEAD_ACCEL if self._accelerate else _OVERHEAD
+        return base + self._extra_overhead
+
     # -- estimator protocol ----------------------------------------------
     def _fit(
         self,
@@ -658,66 +726,14 @@ class RichardsonLucy(Estimator):
         if self._accelerate:
             self.history.extras["effective_iterations"] = []
 
-    def _apply(
-        self, data: ArrayLike, out: WritableArrayLike | None
-    ) -> WritableArrayLike:
-        if self.level is None:
-            raise RuntimeError("Call fit(data) before apply(data)")
-        data = self._labeled_for(data)
-        group, sample, _ = data.layout.shape_of(data.array)
-        if tuple(self.level.shape) != group + sample:
-            raise ValueError(
-                "apply(data) needs the data given to fit (images per "
-                f"group/sample {tuple(self.level.shape)}, got "
-                f"{group + sample})"
-            )
-        backend = self._backend(data)
-        psf = self._psf(backend)
-        halo = self._halo(psf)
-        raw = data.array
-        target = out.array if isinstance(out, Labeled) else out
-        if out is not None and target is raw:
-            raise ValueError("In-place deconvolution is not possible")
-        out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
-        maps = self._maps(data, backend)
-        ops: dict[tuple[int, ...], PaddedConvolution] = {}
-        iterations = self.history.extras.setdefault("iterations", [])
-        effective = (
-            self.history.extras.setdefault("effective_iterations", [])
-            if self._accelerate
-            else []
-        )
-        trace: dict = {}
-        chunks = blocks(
-            data,
-            self.options["block"],
-            halo,
-            overhead=_OVERHEAD_ACCEL if self._accelerate else _OVERHEAD,
-            contiguous=True,
-            align=chunks_of(out),
-            **backend,
-        )
-        for chunk in chunks:
-            blk = self._prepare(chunk, maps)
-            key = tuple(blk.data.shape)
-            if key not in ops:
-                ops[key] = PaddedConvolution(psf, key)
-            op = ops[key]
-            start = float(self.level[chunk.group + chunk.samples].squeeze())
-            f, n = self._solve(blk, op, start, trace)
-            iterations.append(float(n))
-            if self._accelerate:
-                effective.append(float(trace["effective"]))
-            chunk.store(out, op.crop(f)[chunk.inner])
-        flush(out)
-        return out
-
     def _extra_state(self) -> dict[str, object]:
+        state = super()._extra_state()
         sensor = None if self.sensor is None else self.sensor._payload()
-        return {"psf": self.psf, "level": self.level, "sensor": sensor}
+        state.update(level=self.level, sensor=sensor)
+        return state
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
-        self.psf = state.get("psf")
+        super()._load_extra_state(state)
         self.level = state.get("level")
         sensor = state.get("sensor")
         if sensor is not None:
@@ -745,7 +761,7 @@ def richardson_lucy(
     data : array-like or Labeled
         Images; `(*samples, *spatial)` without a layout, with as many
         spatial dims as the PSF.
-    psf : Tensor
+    psf : Tensor or ShiftVariantPSF
         Point spread function, centred at index `K // 2`.
     out : writable array-like, optional
         Output (tensor, numpy, zarr, ...). Default: a new tensor.

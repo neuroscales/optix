@@ -11,6 +11,7 @@ from ..estimates import SensorEstimate
 from ..io import ArrayLike, Layout, WritableArrayLike
 from ._fft import PaddedConvolution, next_fast_len
 from ._rl import RichardsonLucy, _Block, rl_block
+from ._shiftvariant import ShiftVariantPSF
 
 __all__ = [
     "BackProjection",
@@ -343,6 +344,16 @@ class BackProjection:
         return torch.where(self.usable, out, self.op.adjoint(r))
 
 
+def _check_single(psf: object) -> None:
+    if isinstance(psf, ShiftVariantPSF):
+        raise TypeError(
+            "WienerButterworth needs a single PSF: its back projector is "
+            "designed from one transfer function, so shift-variant PSF "
+            f"models ({type(psf).__name__}) are not supported; use "
+            "RichardsonLucy, BiggsAndrews or Snyder"
+        )
+
+
 class WienerButterworth(RichardsonLucy):
     r"""Richardson–Lucy deconvolution with an unmatched back projector.
 
@@ -480,9 +491,8 @@ class WienerButterworth(RichardsonLucy):
     --------
     >>> import torch
     >>> from optix.deconv import WienerButterworth
-    >>> x = torch.arange(15.0) - 7
-    >>> g = torch.exp(-(x**2) / 8)
-    >>> psf = g[:, None] * g
+    >>> from optix.models import gaussian_psf
+    >>> psf = gaussian_psf((15, 15), sigma=2.0)
     >>> data = torch.poisson(torch.full((64, 64), 10.0))
     >>> wb = WienerButterworth(psf).fit(data)
     >>> wb.apply(data).shape
@@ -541,7 +551,8 @@ class WienerButterworth(RichardsonLucy):
         psf : Tensor
             Point spread function (forward projector f), `(*K)` with 2 or
             3 dims, in the order of the spatial axes of the layout,
-            centred at index `K // 2`. Normalised to unit sum.
+            centred at index `K // 2`. Normalised to unit sum. A single
+            PSF only: shift-variant PSF models raise a `TypeError`.
         back_projector : str
             `"wiener-butterworth"` (default), `"butterworth"`,
             `"gaussian"` or `"traditional"` (plain Richardson–Lucy); see
@@ -590,6 +601,7 @@ class WienerButterworth(RichardsonLucy):
         self.level: Tensor | None = None
         self._backs: dict[tuple, BackProjection] = {}
         opts = self.options
+        _check_single(psf)
         if psf is not None and psf.ndim not in (2, 3):
             raise ValueError(f"psf must be 2-D or 3-D, got {psf.ndim} dims")
         if opts["back_projector"] not in _KINDS:
@@ -611,6 +623,7 @@ class WienerButterworth(RichardsonLucy):
 
     def _psf(self, backend: dict) -> Tensor:
         """PSF zero-padded to the kernel support (operator grid, halo)."""
+        _check_single(self.psf)
         psf = super()._psf(backend)
         if self.options["back_projector"] == "traditional":
             return psf

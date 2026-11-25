@@ -1,0 +1,435 @@
+"""Finite differences: first and second derivatives, and their symbols."""
+
+import math
+from collections.abc import Sequence
+
+import torch
+from torch import Tensor
+
+from ._operators import _CirculantBase
+
+__all__ = [
+    "Gradient",
+    "Hessian",
+    "diff",
+    "diff_adjoint",
+    "rfft_frequencies",
+]
+
+_BOUNDARY = ("periodic", "neumann")
+#: Boundaries of `Hessian` (adds the mirror extension of Lefkimmiatis,
+#: Ward & Unser 2013, Eq. 10).
+_HESSIAN_BOUNDARY = (*_BOUNDARY, "mirror")
+#: Second-difference stencils of `Hessian`.
+_STENCIL = ("forward",)
+
+
+def _check_boundary(boundary: str) -> str:
+    if boundary not in _BOUNDARY:
+        raise ValueError(f"boundary must be one of {_BOUNDARY}: {boundary!r}")
+    return boundary
+
+
+def diff(x: Tensor, dim: int, *, boundary: str = "periodic") -> Tensor:
+    """Forward difference along `dim`: (D x)ᵢ = xᵢ₊₁ − xᵢ.
+
+    Parameters
+    ----------
+    x : Tensor
+        Image.
+    dim : int
+        Dim along which to differentiate.
+    boundary : {"periodic", "neumann"}
+        `"periodic"`: xₙ = x₀ (wrap-around). `"neumann"`: the difference
+        is 0 at the last index (the image is extended by replication).
+
+    Returns
+    -------
+    Tensor
+        D x, shaped like `x`.
+    """
+    if _check_boundary(boundary) == "periodic":
+        return torch.roll(x, -1, dim) - x
+    out = torch.zeros_like(x)
+    n = x.shape[dim]
+    out.narrow(dim, 0, n - 1).copy_(
+        x.narrow(dim, 1, n - 1) - x.narrow(dim, 0, n - 1)
+    )
+    return out
+
+
+def diff_adjoint(y: Tensor, dim: int, *, boundary: str = "periodic") -> Tensor:
+    """Adjoint of [`diff`][optix.optim.diff]: (Dᵀ y)ᵢ = yᵢ₋₁ − yᵢ.
+
+    Parameters
+    ----------
+    y : Tensor
+        Differences.
+    dim : int
+        Dim of the difference.
+    boundary : {"periodic", "neumann"}
+        As in [`diff`][optix.optim.diff] (with `"neumann"`, y₋₁ = 0 and
+        the last entry of y is ignored).
+
+    Returns
+    -------
+    Tensor
+        Dᵀ y, shaped like `y`.
+    """
+    if _check_boundary(boundary) == "periodic":
+        return torch.roll(y, 1, dim) - y
+    n = y.shape[dim]
+    out = torch.zeros_like(y)
+    out.narrow(dim, 1, n - 1).copy_(y.narrow(dim, 0, n - 1))
+    out.narrow(dim, 0, n - 1).sub_(y.narrow(dim, 0, n - 1))
+    return out
+
+
+def rfft_frequencies(
+    grid: Sequence[int],
+    *,
+    dtype: torch.dtype = torch.float64,
+    device: torch.device | str | None = None,
+) -> list[Tensor]:
+    """Frequencies ξₐ = kₐ/Nₐ of `torch.fft.rfftn` on a grid, per axis.
+
+    Parameters
+    ----------
+    grid : sequence of int
+        Grid shape N.
+    dtype, device : optional
+        Backend of the result.
+
+    Returns
+    -------
+    list of Tensor
+        One tensor per axis, shaped to broadcast against the half
+        spectrum `(*N[:-1], N[-1] // 2 + 1)`.
+    """
+    grid = tuple(int(n) for n in grid)
+    out = []
+    for a, n in enumerate(grid):
+        if a == len(grid) - 1:
+            f = torch.fft.rfftfreq(n, dtype=dtype, device=device)
+        else:
+            f = torch.fft.fftfreq(n, dtype=dtype, device=device)
+        shape = [1] * len(grid)
+        shape[a] = f.numel()
+        out.append(f.reshape(shape))
+    return out
+
+
+def _complex(dtype: torch.dtype) -> torch.dtype:
+    return torch.complex128 if dtype == torch.float64 else torch.complex64
+
+
+class _Differences(_CirculantBase):
+    """Shared parts of the difference operators."""
+
+    def __init__(
+        self,
+        ndim: int,
+        *,
+        weights: Sequence[float] | None = None,
+        boundary: str = "periodic",
+    ) -> None:
+        self.ndim = int(ndim)
+        if self.ndim < 1:
+            raise ValueError("ndim must be positive")
+        if weights is None:
+            weights = (1.0,) * self.ndim
+        self.weights = tuple(float(w) for w in weights)
+        if len(self.weights) != self.ndim:
+            raise ValueError("weights must have one entry per dim")
+        if any(not w >= 0 for w in self.weights):
+            raise ValueError("weights must be non-negative")
+        self.boundary = _check_boundary(boundary)
+        self._dims = tuple(range(-self.ndim, 0))
+
+    def _d(self, x: Tensor, a: int) -> Tensor:
+        return diff(x, self._dims[a], boundary=self.boundary)
+
+    def _dt(self, y: Tensor, a: int) -> Tensor:
+        return diff_adjoint(y, self._dims[a], boundary=self.boundary)
+
+    def _factors(
+        self, grid: Sequence[int], dtype: torch.dtype, device: object
+    ) -> list[Tensor]:
+        """wₐ D̂ₐ(ξ) = wₐ (e^{2πiξₐ} − 1), broadcastable, per axis.
+
+        The phase factors are computed in float64 (cos ω − 1 cancels at
+        low frequencies in float32), then cast.
+        """
+        if self.boundary != "periodic":
+            raise ValueError("Fourier symbols need boundary='periodic'")
+        if len(grid) != self.ndim:
+            raise ValueError(f"grid must have {self.ndim} dims")
+        freqs = rfft_frequencies(grid, dtype=torch.float64, device=device)
+        out = []
+        for w, f in zip(self.weights, freqs, strict=True):
+            omega = 2 * math.pi * f
+            # e^{iω} − 1 = −2 sin²(ω/2) + i sin ω (no cancellation)
+            phase = torch.complex(
+                -2 * torch.sin(omega / 2).square(), torch.sin(omega)
+            )
+            out.append((w * phase).to(_complex(dtype)))
+        return out
+
+
+class Gradient(_Differences):
+    """Discrete gradient by forward differences, ∇x = (w₁D₁x, …, w_dD_dx).
+
+    The C = d components are stacked along dim `-(d + 1)`, so an image
+    `(..., *N)` maps to `(..., d, *N)`. ∑ⱼ ‖(∇x)ⱼ‖₂ is the isotropic
+    total variation.
+    """
+
+    def __init__(
+        self,
+        ndim: int,
+        *,
+        weights: Sequence[float] | None = None,
+        boundary: str = "periodic",
+    ) -> None:
+        """Configure the operator.
+
+        Parameters
+        ----------
+        ndim : int
+            Number d of trailing dims differentiated.
+        weights : sequence of float, optional
+            Weight wₐ ≥ 0 of each axis (Dₐ is replaced by wₐDₐ).
+            Default: 1.
+        boundary : {"periodic", "neumann"}
+            See [`diff`][optix.optim.diff].
+        """
+        super().__init__(ndim, weights=weights, boundary=boundary)
+        self.components = self.ndim
+
+    @property
+    def norm2(self) -> float:
+        """Upper bound on ‖∇‖²: 4∑ₐwₐ² (attained for periodic, even N)."""
+        return 4 * sum(w * w for w in self.weights)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """∇x, `(..., *N)` → `(..., d, *N)`."""
+        return torch.stack(
+            [w * self._d(x, a) for a, w in enumerate(self.weights)],
+            dim=-self.ndim - 1,
+        )
+
+    def adjoint(self, y: Tensor) -> Tensor:
+        """∇ᵀy, `(..., d, *N)` → `(..., *N)`."""
+        out = None
+        for a, w in enumerate(self.weights):
+            t = w * self._dt(y.select(-self.ndim - 1, a), a)
+            out = t if out is None else out + t
+        return out
+
+    def symbols(
+        self,
+        grid: Sequence[int],
+        *,
+        dtype: torch.dtype = torch.float64,
+        device: object = None,
+    ) -> list[Tensor]:
+        """Transfer function of each component, wₐ(e^{2πiξₐ} − 1).
+
+        Parameters
+        ----------
+        grid : sequence of int
+            Periodic grid N.
+        dtype, device : optional
+            Real dtype (the result is complex of the same precision) and
+            device.
+
+        Returns
+        -------
+        list of Tensor
+            d complex tensors that broadcast to the half spectrum of
+            `torch.fft.rfftn` on N.
+        """
+        return self._factors(grid, dtype, device)
+
+
+class Hessian(_Differences):
+    """Discrete Hessian by forward differences, packed as a vector.
+
+    The second differences are forward stencils, D_aa xᵢ = xᵢ₊₂ − 2xᵢ₊₁ +
+    xᵢ and D_ab xᵢ = xᵢ₊ₐ₊ᵦ − xᵢ₊ₐ − xᵢ₊ᵦ + xᵢ (i + a: one step along
+    axis a), as in Ikoma et al. (2018, Eq. S5). In 2-D and away from the
+    border this is also the stencil of Lefkimmiatis, Bourquard & Unser
+    (2012, Eq. 21) and of Lefkimmiatis, Ward & Unser (2013, Eq. 10),
+    used by Lefkimmiatis & Unser (2013): f_xx[i, j] = f[i, j] −
+    2f[i+1, j] + f[i+2, j] and f_xy[i, j] = f[i, j] − f[i+1, j] −
+    f[i, j+1] + f[i+1, j+1]. Eq. 10 as a whole, its border rows
+    included, is `boundary="mirror"` (below); the default `"periodic"`
+    differs from it at the last two indices of every axis. The boundary
+    sets the samples past the last index:
+
+    - `"periodic"`: wrap-around; D_ab = D_a D_b with periodic forward
+      differences, diagonal in Fourier (the HSPIRAL2 solve).
+    - `"neumann"`: D_ab = D_a D_b with forward differences that are 0
+      at the last index ([`diff`][optix.optim.diff]).
+    - `"mirror"`: the image is extended by half-sample symmetry,
+      x_{N+k} = x_{N+1−k} (1-based), before the stencils are applied.
+      This is Eq. (10) of Lefkimmiatis, Ward & Unser (2013), their
+      "Neumann boundary conditions": D_aa x = x_{N−1} − x_N at the last
+      two indices, D_ab x = 0 at the last index of a or b. The mixed
+      terms are those of `"neumann"`; the diagonal ones differ at the
+      last index (0 with `"neumann"`).
+
+    The components are packed as in Ikoma et al. (Eq. S7): the d
+    diagonal terms D_aa, then the off-diagonal terms √2·D_ab for a < b,
+    C = d(d + 1)/2 in all, stacked along dim `-(d + 1)`. Then ‖(Hx)ⱼ‖₂
+    is the Frobenius norm of the d × d Hessian matrix at voxel j, and
+    the adjoint is that of Lefkimmiatis, Ward & Unser (Eq. 14),
+    H*Y = ∑ₐ D_aa*Y⁽ᵃᵃ⁾ + ∑_{a<b} D_ab*(Y⁽ᵃᵇ⁾ + Y⁽ᵇᵃ⁾). With axis weights
+    wₐ, Dₐ is replaced by wₐDₐ.
+    """
+
+    def __init__(
+        self,
+        ndim: int,
+        *,
+        weights: Sequence[float] | None = None,
+        boundary: str = "periodic",
+        stencil: str = "forward",
+    ) -> None:
+        """Configure the operator.
+
+        Parameters
+        ----------
+        ndim : int
+            Number d of trailing dims differentiated.
+        weights : sequence of float, optional
+            Weight wₐ ≥ 0 of each axis. Default: 1.
+        boundary : {"periodic", "neumann", "mirror"}
+            See above. Fourier symbols need `"periodic"`.
+        stencil : {"forward"}
+            Second-difference stencil. `"forward"`: D_ab = D_a D_b, the
+            composition of two forward differences (Ikoma et al. 2018,
+            Eq. S5; Lefkimmiatis et al. 2012, Eq. 21).
+        """
+        if boundary not in _HESSIAN_BOUNDARY:
+            raise ValueError(
+                f"boundary must be one of {_HESSIAN_BOUNDARY}: {boundary!r}"
+            )
+        mirror = boundary == "mirror"
+        super().__init__(
+            ndim, weights=weights, boundary="neumann" if mirror else boundary
+        )
+        #: First differences of the mixed terms.
+        self._first = self.boundary
+        self.boundary = boundary
+        if stencil not in _STENCIL:
+            raise ValueError(f"stencil must be one of {_STENCIL}: {stencil!r}")
+        self.stencil = stencil
+        d = self.ndim
+        self.pairs = [(a, a) for a in range(d)] + [
+            (a, b) for a in range(d) for b in range(a + 1, d)
+        ]
+        self.components = len(self.pairs)
+
+    @property
+    def norm2(self) -> float:
+        """Upper bound on ‖H‖²: (4∑ₐwₐ²)².
+
+        From ‖D_ab‖ ≤ 4wₐw_b and ‖H*H‖ ≤ ∑ₐ‖D_aa‖² + 2∑_{a<b}‖D_ab‖²
+        (Lefkimmiatis, Ward & Unser 2013, Eq. 70: 64 in 2-D).
+        """
+        return (4 * sum(w * w for w in self.weights)) ** 2
+
+    def _d(self, x: Tensor, a: int) -> Tensor:
+        return diff(x, self._dims[a], boundary=self._first)
+
+    def _dt(self, y: Tensor, a: int) -> Tensor:
+        return diff_adjoint(y, self._dims[a], boundary=self._first)
+
+    def _second(self, x: Tensor, a: int, b: int) -> Tensor:
+        if a == b and self.boundary == "mirror":
+            return _mirror_second(x, self._dims[a])
+        return self._d(self._d(x, b), a)
+
+    def _second_adjoint(self, y: Tensor, a: int, b: int) -> Tensor:
+        if a == b and self.boundary == "mirror":
+            return _mirror_second_adjoint(y, self._dims[a])
+        return self._dt(self._dt(y, a), b)
+
+    def _scale(self, a: int, b: int) -> float:
+        w = self.weights[a] * self.weights[b]
+        return w if a == b else math.sqrt(2) * w
+
+    def forward(self, x: Tensor) -> Tensor:
+        """H x, `(..., *N)` → `(..., C, *N)`."""
+        comps = [
+            self._scale(a, b) * self._second(x, a, b) for a, b in self.pairs
+        ]
+        return torch.stack(comps, dim=-self.ndim - 1)
+
+    def adjoint(self, y: Tensor) -> Tensor:
+        """Hᵀ y, `(..., C, *N)` → `(..., *N)`."""
+        out = None
+        for c, (a, b) in enumerate(self.pairs):
+            yc = self._scale(a, b) * y.select(-self.ndim - 1, c)
+            t = self._second_adjoint(yc, a, b)
+            out = t if out is None else out + t
+        return out
+
+    def symbols(
+        self,
+        grid: Sequence[int],
+        *,
+        dtype: torch.dtype = torch.float64,
+        device: object = None,
+    ) -> list[Tensor]:
+        """Transfer function of each component (broadcastable).
+
+        Parameters
+        ----------
+        grid : sequence of int
+            Periodic grid N.
+        dtype, device : optional
+            Real dtype (the result is complex of the same precision) and
+            device.
+
+        Returns
+        -------
+        list of Tensor
+            C complex tensors, D̂_aD̂_b (×√2 off the diagonal), that
+            broadcast to the half spectrum of `torch.fft.rfftn` on N.
+        """
+        if self.boundary != "periodic":
+            raise ValueError("Fourier symbols need boundary='periodic'")
+        unit = _Differences(self.ndim, boundary=self.boundary)
+        f = unit._factors(grid, dtype, device)
+        return [self._scale(a, b) * (f[a] * f[b]) for a, b in self.pairs]
+
+
+def _mirror_second(x: Tensor, dim: int) -> Tensor:
+    """xᵢ₊₂ − 2xᵢ₊₁ + xᵢ with x_{N+k} = x_{N+1−k} (1-based) along `dim`."""
+    n = x.shape[dim]
+    ext = torch.cat(
+        [x, x.narrow(dim, n - 1, 1), x.narrow(dim, max(n - 2, 0), 1)], dim
+    )
+    return (
+        ext.narrow(dim, 2, n)
+        - 2 * ext.narrow(dim, 1, n)
+        + ext.narrow(dim, 0, n)
+    )
+
+
+def _mirror_second_adjoint(y: Tensor, dim: int) -> Tensor:
+    """Adjoint of `_mirror_second`: the stencil's transpose, then the
+    extended samples folded back onto their sources."""
+    n = y.shape[dim]
+    shape = list(y.shape)
+    shape[dim] = n + 2
+    w = y.new_zeros(shape)
+    w.narrow(dim, 0, n).add_(y)
+    w.narrow(dim, 1, n).sub_(2 * y)
+    w.narrow(dim, 2, n).add_(y)
+    out = w.narrow(dim, 0, n).clone()
+    out.narrow(dim, n - 1, 1).add_(w.narrow(dim, n, 1))
+    out.narrow(dim, max(n - 2, 0), 1).add_(w.narrow(dim, n + 1, 1))
+    return out

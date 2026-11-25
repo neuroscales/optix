@@ -423,7 +423,7 @@ def _oracle_bound(model, tiles, pos):
         V = [prm.V[q[1:]].item() for _, q in items]
         B = [
             (loga[t].exp() * prm.M[q[1:]]).item() for t, q in items
-        ]  # b = g·m
+        ]  # b = g·f
         ep = torch.stack([elogpi[t, q[0]] for t, q in items])
         logw = (torch.logsumexp(ep, 0) - math.log(len(items))).tolist()
         terms = [
@@ -591,7 +591,7 @@ def test_gain_step_reaches_the_exact_fixed_point(fade, monkeypatch):
     a, b = fits
     # measured (truth in the span of the basis): iterations within one,
     # bound within 0.6 to 7.7 of ≈ 3.4e5 (≈ 2e-5, depends on the thread
-    # count: the plateau at the stop), gains within 0.01 %, log m within 1e-4
+    # count: the plateau at the stop), gains within 0.01 %, log f within 1e-4
     assert "decrement" in a.history.reason and "decrement" in b.history.reason
     ea, eb = a.history.objective[-1], b.history.objective[-1]
     assert abs(ea - eb) < 5e-5 * abs(eb)

@@ -69,9 +69,9 @@ def sample_scene(
 
     Every scene voxel z has one class k_z and one signal u_z (0 in the
     background); tile t at position `pos[t]` sees y = c + b_t·u +
-    noise with b_t = g_t·m and variance v + γ·b_t·u (Gaussian).
+    noise with b_t = g_t·f and variance v + γ·b_t·u (Gaussian).
 
-    `order` (ky, kx): project the true log m onto the DCT basis of the
+    `order` (ky, kx): project the true log f onto the DCT basis of the
     fitted model, so that the truth lies in its span (None: as given).
 
     Returns (tiles, truth) with truth a dict of u, k, logm, tile_gain.

@@ -115,38 +115,44 @@ def _drop_groups(layout: Layout, ndim: int) -> Layout:
 class GammaMixture(Estimator):
     """Joint model of the sensor, the shading and the tissue classes.
 
-    Image formation. A pixel i of picture k records
+    Image formation. A pixel i of frame n records
 
-        yᵢₖ ~ N(cᵢ + mᵢ·uᵢₖ, vᵢ + g·mᵢ·uᵢₖ)
+        yₙᵢ ~ N(cᵢ + fᵢ·uₙᵢ, vᵢ + g·fᵢ·uₙᵢ)
 
     with the offset c (camera offset plus background, in ADU), the
     variance v of an empty pixel, the gain g (ADU per electron), the
-    smooth modulation m (flat field) and the signal u ≥ 0 in ADU. It is
-    the Gaussian limit of yᵢₖ = oᵢ + g·Poisson(mᵢ·(sᵢₖ + bᵢ) + dᵢ) + read
-    noise, with u = g·s, c = o + g·(m·b + d) and v = σ² + g²·(m·b + d).
+    smooth modulation f (flat field) and the signal u ≥ 0 in ADU. It is
+    the Gaussian limit of
+
+        yₙᵢ = oᵢ + g·Poisson(fᵢ·(sₙᵢ + bᵢ) + d_{ei}) + read noise,
+
+    with the dark signal dₑ, u = g·s, c = o + g·(f·b + dₑ) and
+    v = σ² + g²·(f·b + dₑ).
 
     Probabilistic model. The signal is a mixture of K tissue classes
     and a background class, with proportions drawn per picture:
 
-        πₖ ~ Dirichlet(α),  zᵢₖ ~ Categorical(πₖ)
-        uᵢₖ | zᵢₖ = background ~ δ(0)
-        uᵢₖ | zᵢₖ = c ~ Gamma(ν_c, rate ν_c / μ_c)
-        m = exp(Φ·θ),  θ ~ N(0, (λ·diag(bending energy))⁻¹)
+        πₙ ~ Dirichlet(α),  zₙᵢ ~ Categorical(πₙ)
+        uₙᵢ | zₙᵢ = background ~ δ(0)
+        uₙᵢ | zₙᵢ = k ~ Gamma(νₖ, rate νₖ / μₖ)
+        f = exp(Φ·θ),  θ ~ N(0, (λ·diag(bending energy))⁻¹)
 
     with Φ the separable DCT-II basis without its DC term (geometric mean
-    of m = 1) and an inverse-gamma-like prior on v,
+    of f = 1) and an inverse-gamma-like prior on v,
     log p(v) = −½·v_dof·(log v + v₀/v).
 
     Inference. The variational posterior is
 
-        q = ∏ₖ q(πₖ) · ∏ᵢₖ q(zᵢₖ) q(uᵢₖ | zᵢₖ) · δ(c, v, θ, μ, ν, α)
+        q = ∏ₙ q(πₙ) · ∏ₙᵢ q(zₙᵢ) q(uₙᵢ | zₙᵢ) · δ(c, v, θ, μ, ν, α)
 
     - q(z, u) is exact given everything else: the integral over u is a
       Gauss-Hermite quadrature in t = log u centred on the mode of the
       integrand (the roots of a cubic for the "full" noise model).
-    - q(πₖ) is Dirichlet (conjugate update).
+    - q(πₙ) is Dirichlet (conjugate update).
     - μ, ν are refitted to the aggregated posterior of u in each class,
-      and α by Minka's fixed-point Newton method.
+      and α by
+      [Minka's fixed-point Newton method](
+      https://www.microsoft.com/en-us/research/publication/estimating-dirichlet-distribution/).
     - c, v, θ take one joint Fisher-scoring step per iteration: the
       per-pixel unknowns (c, v) are eliminated exactly, which leaves a
       small dense system in θ. A step that lowers the bound is halved.
@@ -163,7 +169,7 @@ class GammaMixture(Estimator):
     [`TileOverlap`][optix.shading.mix.TileOverlap] of integer tile
     positions), a scene voxel seen by several tiles has one class and one
     signal u shared by all of them: tile t sees y = c + b_t·u + noise at
-    the matching pixel, with b_t = m (or g_t·m with per-tile gains). Its
+    the matching pixel, with b_t = f (or g_t·f with per-tile gains). Its
     term of the bound integrates the product of the tile likelihoods over
     u in one quadrature, with the class prior of a uniformly chosen owner
     among its pictures; a voxel seen once is the single-picture term. The
@@ -173,11 +179,11 @@ class GammaMixture(Estimator):
     excesses only initialise the flat field (and the gains).
 
     With `TileOverlap(fit_gain=True)`, each tile t also has a gain g_t
-    (flat field g_t·m), so that a uniform per-tile fade (bleaching, lamp
-    drift) is not mistaken for a ramp of m. log g_t is a per-tile constant
+    (flat field g_t·f), so that a uniform per-tile fade (bleaching, lamp
+    drift) is not mistaken for a ramp of f. log g_t is a per-tile constant
     column of the θ system; its common scale is that of the class means
     (geometric mean of the gains one over the tiles that overlap another;
-    a tile that overlaps none keeps g = 1). A linear log m along the tile
+    a tile that overlaps none keeps g = 1). A linear log f along the tile
     steps is then identified only through the class prior (it is nearly
     equivalent to gains ∝ exp of the tile position). Such fits stop on the
     Newton decrement of the parameter step.
@@ -211,7 +217,7 @@ class GammaMixture(Estimator):
           with `offset` = c and `variance` = v, `(*group, *spatial)`
           (both **include** the background), and the nominal `gain`.
         - `"shading"`: [`ShadingEstimate`][optix.estimates.ShadingEstimate]
-          with `flat` = m (`meta["flat_norm"] == "geomean"`) and
+          with `flat` = f (`meta["flat_norm"] == "geomean"`) and
           `dark` = c.
         - `"classification"`:
           [`Classification`][optix.estimates.Classification]:
@@ -222,15 +228,15 @@ class GammaMixture(Estimator):
         `(*group, *sample, K + 1)` concentrations of q(π) of the
         training pictures.
     theta_ : Tensor
-        `(*group, ky, kx)` DCT coefficients of log m (of its projection
+        `(*group, ky, kx)` DCT coefficients of log f (of its projection
         on the basis when a given flat field is held fixed).
     quantization_ : Tensor
         `(*group,)` width Δ of the quantisation bins used by the fit.
     tile_gain_ : Tensor or None
         `(*group, ntiles)` per-tile gains g_t (tile t has the flat field
-        g_t·m), with `TileOverlap(fit_gain=True)`; None otherwise.
+        g_t·f), with `TileOverlap(fit_gain=True)`; None otherwise.
         Geometric mean one over the tiles that overlap another, 1 for a
-        tile that overlaps none. `predict` and the default `apply` use m
+        tile that overlaps none. `predict` and the default `apply` use f
         alone; `apply(..., tile_gain=True)` divides tile t by g_t.
 
     Examples
@@ -296,10 +302,10 @@ class GammaMixture(Estimator):
             Number K of tissue classes (besides the background).
             Default 1.
         noise : {"full", "constant"}
-            Variance of the data given the signal: v + g·m·u (`"full"`,
+            Variance of the data given the signal: v + g·f·u (`"full"`,
             the default) or v (`"constant"`, no shot noise; g is unused).
         order : int or (int, int)
-            Number of DCT basis functions of log m along each spatial
+            Number of DCT basis functions of log f along each spatial
             axis. Default (8, 8).
         gain : float, optional
             Nominal gain g in ADU per electron. Default: the (mean) gain
@@ -328,7 +334,7 @@ class GammaMixture(Estimator):
             Stop when the bound changes by less than `tol` per data
             point. Default 10⁻⁶.
         learn_modulation : bool
-            Estimate m (default True); otherwise m = 1, or the flat field
+            Estimate f (default True); otherwise f = 1, or the flat field
             of an initial `ShadingEstimate`.
         learn_alpha : bool
             Estimate the Dirichlet concentrations α (default True).
@@ -338,7 +344,7 @@ class GammaMixture(Estimator):
             When the bound decreases, the last parameter step is halved
             up to this many times. Default 4.
         max_log_step : float
-            Largest change of log m in one step. Default 0.5.
+            Largest change of log f in one step. Default 0.5.
         bg_fraction : float
             Lower bound on the fraction of pictures in which a pixel is
             empty, used by the initialisation. Default 0.5.
@@ -360,7 +366,7 @@ class GammaMixture(Estimator):
             Strength of the prior on v, as a number of pseudo-observations
             (0 disables it). Default 5.
         lam : float
-            Precision λ of the bending-energy prior on log m. Default 1.
+            Precision λ of the bending-energy prior on log f. Default 1.
         overlap : TileOverlap or array-like, optional
             Integer positions of overlapping tiles: a
             [`TileOverlap`][optix.shading.mix.TileOverlap] (from
@@ -892,8 +898,8 @@ class GammaMixture(Estimator):
             With overlapping tiles (`overlap`), use the fitted scene model:
             every observation of a voxel seen by several tiles gets the
             joint posterior of that voxel (one class and one signal for
-            all its tiles), and tile t has the flat field gₜ·m. Default
-            False: each picture on its own, with m.
+            all its tiles), and tile t has the flat field gₜ·f. Default
+            False: each picture on its own, with f.
 
         Returns
         -------
@@ -990,7 +996,7 @@ class GammaMixture(Estimator):
     ) -> tuple[WritableArrayLike, WritableArrayLike | None, Tensor]:
         """Classify pictures with the fitted model.
 
-        c, v, m, g, μ, ν and α are kept fixed; only the proportions q(π)
+        c, v, f, g, μ, ν and α are kept fixed; only the proportions q(π)
         of each picture are inferred, by alternating q(z) and q(π) for
         each batch of pictures. The class likelihoods do not depend on π,
         so they are computed once per batch: the cost is that of one
@@ -1044,14 +1050,14 @@ class GammaMixture(Estimator):
             Output (tensor, numpy, zarr, ...). Default: a new tensor.
         output : {"corrected", "foreground", "classes", "mean"}
             - `"corrected"` (default): the data without the background and
-              the modulation, x = (y − c) / m, with c the fitted offset
+              the modulation, x = (y − c) / f, with c the fitted offset
               (camera offset plus background, `estimates["sensor"].offset`)
-              and m the flat field (geometric mean 1,
+              and f the flat field (geometric mean 1,
               `estimates["shading"].flat`). x is the signal u plus noise,
               in ADU, of the shape of `data`.
             - `"foreground"`: p(z ≠ background | y), of the shape of
               `data`.
-            - `"classes"`: p(z = c | y) of each tissue class,
+            - `"classes"`: p(z = k | y) of each tissue class,
               `(K, *data.shape)`.
             - `"mean"`: E[u | y] (0 in the background), of the shape of
               `data`.
@@ -1062,7 +1068,7 @@ class GammaMixture(Estimator):
         tile_gain : bool
             `"corrected"` only: also divide tile t by its fitted gain gₜ
             (`tile_gain_`, with `TileOverlap(fit_gain=True)`), which
-            equalises the tiles of the training mosaic: x = (y − c)/(gₜ·m).
+            equalises the tiles of the training mosaic: x = (y − c)/(gₜ·f).
             `data` must then have the tile axis of the fit. Default False.
 
         Returns
@@ -1101,7 +1107,7 @@ class GammaMixture(Estimator):
         out: WritableArrayLike | None,
         tile_gain: bool = False,
     ) -> WritableArrayLike:
-        """Corrected data (y − c) / m, or (y − c) / (gₜ·m)."""
+        """Corrected data (y − c) / f, or (y − c) / (gₜ·f)."""
         self._fitted()
         shading = self.estimates["shading"]
         layout = self._layout_of(data)
