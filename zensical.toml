@@ -54,6 +54,9 @@ nav = [
       "algorithms/deconv/hspiral.md",
       "algorithms/deconv/chouzenoux.md",
     ]},
+    {"Denoising" = [
+      "algorithms/denoise/bm3d.md",
+    ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",
       "algorithms/destripe/general-stripe-remover.md",
@@ -90,6 +93,7 @@ nav = [
     "reference/sensor.md",
     "reference/shading.md",
     "reference/deconv.md",
+    "reference/denoise.md",
     "reference/destripe.md",
     "reference/psf.md",
     "reference/attenuation.md",

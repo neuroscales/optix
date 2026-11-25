@@ -340,6 +340,38 @@ shared with the other destriping pages.
 | $\phi_i$, $\alpha_i$ | prior of $\boldsymbol{\lambda}_i$ and its weight | `prior`, `alpha` |
 | $\epsilon$, $h_\epsilon$ | Huber parameter and function; $\lVert \cdot \rVert_{2,1}^{\epsilon}$ is the total variation with $h_\epsilon$ in place of the norm (unrelated to the read noise $\varepsilon$) | `eps` |
 | $\vartheta$ | over-relaxation of a primal-dual scheme (unrelated to $\theta$) | |
+
+## Block-matching denoising
+
+The symbols of [BM3D and BM4D](../algorithms/denoise/bm3d.md). A *block* is a
+square patch of an image, a *cube* a cubic patch of a volume; both are written
+as vectors of $K$ values.
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{r}$, $\mathbf{r}'$ | position (first corner) of a reference block and of a block of its group | |
+| $\mathbf{p}_{\mathbf{r}}$, $\mathbf{P}_{\mathbf{r}}$ | block at $\mathbf{r}$, $\mathbf{p}_{\mathbf{r}} = \mathbf{P}_{\mathbf{r}}\mathbf{y}$; the operator that cuts it ($\mathbf{P}_{\mathbf{r}}^\top$ puts it back) | `patch_spectra` |
+| $N$, $K$ | side of a block (cube), and its number of values, $N^2$ ($N^3$) | `Stage.size` |
+| $M$, $m$ | largest size of a group; actual size of a group (a power of two) | `Stage.group` |
+| $N_{\text{step}}$, $N_S$ | step between reference blocks; side of the search window | `Stage.step`, `Stage.search`, `search=`, `step=` |
+| $\tau$ | matching threshold on the distance between blocks | `Stage.tau` |
+| $d(\mathbf{r}, \mathbf{r}')$, $S_{\mathbf{r}}$ | normalised squared distance between two blocks; positions of the blocks matched to $\mathbf{r}$ | `block_match` |
+| $\mathbf{G}$ | group: the $m$ matched blocks, as rows | |
+| $\mathbf{T}$, $\mathbf{H}_m$ | separable block transform (bior1.5 or DCT); Haar transform across a group | `transform_matrix`, `haar_matrix` |
+| $\boldsymbol{\Theta}$ | spectrum of a group, $\mathbf{H}_m\mathbf{G}\mathbf{T}^\top$, DC at $\Theta_{00}$ | |
+| $\lambda_{\mathrm{ht}}$, $\lambda_{\mathrm{pre}}$ | hard threshold of the spectrum and threshold of the pre-filter of the matching, in units of $\sigma$ | `Stage.lam`, `Stage.lam2d` |
+| $N_{\mathrm{har}}$ | number of coefficients kept by the hard threshold | |
+| $\mathbf{W}$ | empirical Wiener gain of a group spectrum | `wiener` |
+| $w_{\mathbf{r}}$ | weight of the estimate of the group of $\mathbf{r}$ in the aggregation | `aggregate` |
+| $\boldsymbol{\omega}$, $\beta$ | window of the aggregation (Kaiser) and its parameter | `kaiser_window`, `Stage.beta` |
+
+Here $\mathbf{p}$ is a block, not a dipole orientation or an intermediate point of an
+iteration; $\mathbf{W}$ is a gain, not the pixel weights; $\lambda_{\mathrm{ht}}$ and
+$\lambda_{\mathrm{pre}}$ are thresholds, not a photoelectron count or the weight of a
+regulariser; $\beta$ is the Kaiser parameter, not a background level; $\tau$ a distance
+threshold, not a precision or a penalty weight; $\mathbf{T}$ is a matrix, not
+the PSF transform; $m$ and $M$ count blocks, not the mean of a Normal. The context tells which is meant.
+
 ## Views
 
 | Symbol | Meaning | In code |
