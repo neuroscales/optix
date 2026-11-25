@@ -212,18 +212,47 @@ class Gradient(_Differences):
         return 4 * sum(w * w for w in self.weights)
 
     def forward(self, x: Tensor) -> Tensor:
-        """∇x, `(..., *N)` → `(..., d, *N)`."""
-        return torch.stack(
-            [w * self._d(x, a) for a, w in enumerate(self.weights)],
-            dim=-self.ndim - 1,
-        )
+        """∇x, `(..., *N)` → `(..., d, *N)`.
+
+        The differences are written into the output, with no other
+        image-sized temporary (Neumann boundary).
+        """
+        nd = self.ndim
+        out = x.new_zeros((*x.shape[:-nd], nd, *x.shape[-nd:]))
+        for a, w in enumerate(self.weights):
+            o = out.select(-nd - 1, a)
+            dim = self._dims[a]
+            n = x.shape[dim]
+            if self.boundary == "periodic":
+                torch.sub(torch.roll(x, -1, dim), x, out=o)
+            elif n > 1:
+                torch.sub(
+                    x.narrow(dim, 1, n - 1),
+                    x.narrow(dim, 0, n - 1),
+                    out=o.narrow(dim, 0, n - 1),
+                )
+            if w != 1:
+                o.mul_(w)
+        return out
 
     def adjoint(self, y: Tensor) -> Tensor:
-        """∇ᵀy, `(..., d, *N)` → `(..., *N)`."""
+        """∇ᵀy, `(..., d, *N)` → `(..., *N)`, accumulated in place."""
+        nd = self.ndim
         out = None
         for a, w in enumerate(self.weights):
-            t = w * self._dt(y.select(-self.ndim - 1, a), a)
-            out = t if out is None else out + t
+            ya = y.select(-nd - 1, a)
+            if self.boundary == "periodic":
+                t = w * self._dt(ya, a)
+                out = t if out is None else out.add_(t)
+                continue
+            if out is None:
+                out = torch.zeros_like(ya)
+            dim = self._dims[a]
+            n = ya.shape[dim]
+            if n > 1:
+                src = ya.narrow(dim, 0, n - 1)
+                out.narrow(dim, 1, n - 1).add_(src, alpha=w)
+                out.narrow(dim, 0, n - 1).sub_(src, alpha=w)
         return out
 
     def symbols(

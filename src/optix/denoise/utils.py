@@ -4,7 +4,8 @@ The stages, transforms, block matching and collaborative filters of
 BM3D and BM4D, the patch distances of non-local means, the noise estimate,
 profile and quality score of ACsN, the default intensity range and the memory
 budget; the transform, thresholding functions and PURE system of PURE-LET;
-the OTF mask, cost, solver and segmentation of NCS.
+the OTF mask, cost, solver and segmentation of NCS; the total-variation
+solver of ROF.
 """
 
 from ._acsn import (
@@ -59,11 +60,13 @@ from ._transforms import (
     kaiser_window,
     transform_matrix,
 )
+from ._tv import TVResult, tv_denoise
 
 __all__ = [
     "NcsResult",
     "PureSums",
     "Stage",
+    "TVResult",
     "acsn_noise",
     "acsn_profile",
     "aggregate",
@@ -105,5 +108,6 @@ __all__ = [
     "stage_halo",
     "temporal_psnr",
     "transform_matrix",
+    "tv_denoise",
     "wiener",
 ]

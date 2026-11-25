@@ -14,6 +14,7 @@
         - ACsN
         - PURELET
         - NLMeans
+        - ROF
 
 ## Transforms
 
@@ -35,6 +36,7 @@
         - pure_let_halo
         - nl_means
         - nl_means_halo
+        - rof
 
 ## Utilities
 
@@ -92,3 +94,5 @@
         - search_offsets
         - patch_distances
         - offset_batch
+        - tv_denoise
+        - TVResult

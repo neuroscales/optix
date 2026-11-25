@@ -17,6 +17,7 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - prox_box
         - prox_group_l2
         - project_group_l2
+        - project_l2_ball
         - prox_schatten
         - schatten_norm
         - project_schatten
@@ -37,6 +38,7 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - Function
         - Box
         - GroupL2
+        - L2Ball
         - Schatten
         - HessianSchatten
         - SquaredL2
@@ -86,3 +88,4 @@ blocks of the regularised estimators. See [Optimisation tools](../concepts/optim
         - primal_dual
         - primal_dual_step
         - PrimalDualResult
+        - chambolle_pock

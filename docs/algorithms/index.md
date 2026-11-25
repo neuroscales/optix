@@ -44,6 +44,7 @@ example. The sections follow the modules of the
 | | [PURE-LET](denoise/pure-let.md) (`PURELET`) | denoised image or volume for Poisson–Gaussian noise, by thresholding in an undecimated Haar wavelet transform |
 | | [Non-local means](denoise/nl-means.md) (`NLMeans`) | denoised image or volume, by averaging pixels with similar patches |
 | | [NCS](denoise/ncs.md) (`NCS`) | sCMOS noise-corrected image, from the per-pixel camera maps and the optical cut-off |
+| | [ROF total variation](denoise/rof.md) (`ROF`) | denoised image or volume, by total-variation minimisation under a noise constraint |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |
 | | [VSNR](destripe/vsnr.md) (`VSNR`) | stripe-free image, variational |
