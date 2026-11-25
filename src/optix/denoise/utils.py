@@ -1,8 +1,9 @@
 """Building blocks of `optix.denoise` (no stability promise).
 
 The stages, transforms, block matching and collaborative filters of
-BM3D and BM4D, the noise estimate, profile and quality score of
-ACsN, the default intensity range and the memory budget.
+BM3D and BM4D, the patch distances of non-local means, the noise estimate,
+profile and quality score of ACsN, the default intensity range and the memory
+budget.
 """
 
 from ._acsn import (
@@ -32,6 +33,13 @@ from ._engine import (
     stage_halo,
     wiener,
 )
+from ._nlm import (
+    default_h,
+    offset_batch,
+    patch_distances,
+    patch_kernel,
+    search_offsets,
+)
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -48,6 +56,7 @@ __all__ = [
     "bior15_matrix",
     "block_match",
     "block_overhead",
+    "default_h",
     "bm3d_profile",
     "bm4d_profile",
     "clean_range",
@@ -60,11 +69,15 @@ __all__ = [
     "match_batch",
     "noise_ratio",
     "otf_cutoff",
+    "offset_batch",
+    "patch_distances",
+    "patch_kernel",
     "patch_spectra",
     "quality_score",
     "reference_grid",
     "run_stage",
     "sigma_from_highpass",
+    "search_offsets",
     "stage_halo",
     "temporal_psnr",
     "transform_matrix",

@@ -41,6 +41,7 @@ example. The sections follow the modules of the
 | | [Multiview Richardson–Lucy](deconv/multiview.md) (`MultiviewRL`) | one deconvolved image from several registered views |
 | [`optix.denoise`](../reference/denoise.md) | [BM3D and BM4D](denoise/bm3d.md) (`BM3D`, `BM4D`) | denoised image or volume, by block matching and collaborative filtering |
 | | [ACsN](denoise/acsn.md) (`ACsN`) | denoised sCMOS frames in photoelectrons, with the noise level estimated from the frequencies outside the OTF |
+| | [Non-local means](denoise/nl-means.md) (`NLMeans`) | denoised image or volume, by averaging pixels with similar patches |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
 | | [General stripe remover](destripe/general-stripe-remover.md) (`GeneralStripeRemover`) | stripe-free image, variational |
 | | [VSNR](destripe/vsnr.md) (`VSNR`) | stripe-free image, variational |

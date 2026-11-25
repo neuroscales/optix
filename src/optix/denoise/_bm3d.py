@@ -666,6 +666,9 @@ class _BlockMatching(Estimator):
                 "fit(init=SensorEstimate) (Poisson-Gaussian noise)"
             )
         self._set_sensor(sensor)
+        self._fit_range(data)
+
+    def _fit_range(self, data: ArrayLike | None) -> None:
         self._range = self.options["data_range"]
         if self._range is None:
             if data is None:
@@ -754,16 +757,10 @@ class _BlockMatching(Estimator):
             out.append(t[tuple(index)].to(x))
         return tuple(out)
 
-    def _filter(
-        self,
-        x: Tensor,
-        origin: tuple[int, ...],
-        vst: tuple[Tensor | float, ...] | None = None,
-    ) -> Tensor:
+    def _core(self, x: Tensor, origin: tuple[int, ...]) -> Tensor:
+        """Gaussian denoising of one block (σ of `_sigma`)."""
         scale = _unit(self._ndim) / self._range
-        if vst is not None:
-            x = anscombe(x, *vst)
-        out = (
+        return (
             _denoise(
                 x * scale,
                 self._sigma() * scale,
@@ -773,6 +770,16 @@ class _BlockMatching(Estimator):
             )
             / scale
         )
+
+    def _filter(
+        self,
+        x: Tensor,
+        origin: tuple[int, ...],
+        vst: tuple[Tensor | float, ...] | None = None,
+    ) -> Tensor:
+        if vst is not None:
+            x = anscombe(x, *vst)
+        out = self._core(x, origin)
         if vst is not None:
             method = self.options["inverse"]
             if method == "exact" and self._table is None:
@@ -795,13 +802,20 @@ class _BlockMatching(Estimator):
             raise RuntimeError("Call fit before halo()")
         return _halo(self._stages_fitted(), self.options["output"])
 
-    def _apply(
-        self, data: ArrayLike, out: WritableArrayLike | None
-    ) -> WritableArrayLike:
+    def _check_fitted(self) -> None:
         if self._range is None or (
             self._vst is None and self.options["sigma"] is None
         ):
             raise RuntimeError("Call fit before apply")
+
+    def _overhead(self) -> float:
+        k = max(s.size for s in self._stages_fitted()) ** self._ndim
+        return block_overhead(k)
+
+    def _apply(
+        self, data: ArrayLike, out: WritableArrayLike | None
+    ) -> WritableArrayLike:
+        self._check_fitted()
         if not isinstance(data, Labeled):
             data = self._labeled(data, self._layout_of(data, self._ndim))
         _, _, spatial = data.layout.positions(len(data.shape))
@@ -818,12 +832,11 @@ class _BlockMatching(Estimator):
                 "separate output."
             )
         out = prepare_out(out, tuple(data.shape), like=raw, dtype=self.dtype)
-        k = max(s.size for s in self._stages_fitted()) ** self._ndim
         chunks = blocks(
             data,
             self.options["block"],
             self.halo(),
-            overhead=block_overhead(k),
+            overhead=self._overhead(),
             contiguous=True,
             align=chunks_of(out),
             dtype=self.dtype,

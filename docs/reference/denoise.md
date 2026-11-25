@@ -11,6 +11,7 @@
         - BM3D
         - BM4D
         - ACsN
+        - NLMeans
 
 ## Transforms
 
@@ -25,6 +26,8 @@
         - bm3d_halo
         - bm4d_halo
         - acsn
+        - nl_means
+        - nl_means_halo
 
 ## Utilities
 
@@ -65,3 +68,8 @@
         - sigma_from_highpass
         - quality_score
         - temporal_psnr
+        - patch_kernel
+        - default_h
+        - search_offsets
+        - patch_distances
+        - offset_batch

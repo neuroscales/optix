@@ -398,6 +398,27 @@ a noise, not a weight of the total variation, a natural parameter or an efficien
 $\varrho$ is a ratio, not the pupil radius $\rho$; and $\nu_c$ is a frequency in cycles, as
 $\boldsymbol{\nu}$ is.
 
+## Non-local means
+
+The symbols of [Non-local means](../algorithms/denoise/nl-means.md). A *patch* is
+a square (cubic) neighbourhood centred on a pixel, written as a vector of $K$
+values; unlike a block of BM3D, it is indexed by its centre.
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{p}_i$, $\mathbf{P}_i$ | patch centred on pixel $i$, $\mathbf{p}_i = \mathbf{P}_i\mathbf{y}$; the operator that cuts it | |
+| $N$, $K$ | side of a patch (odd) and its number of values, $N^d$ ($d$ = 2 or 3 spatial dimensions); the same symbols as for blocks | `patch` |
+| $N_S$, $W_i$ | side of the search window; search window of pixel $i$, clipped to the image | `search` |
+| $\boldsymbol{\omega}$, $a$ | Gaussian window on the patch and its standard deviation in pixels; the sum of $\boldsymbol{\omega}$ is $K$ (`kernel_norm="mean"`) or 1 (`"sum"`) | `patch_kernel`, `a`, `kernel_norm` |
+| $d_{ij}$ | $\boldsymbol{\omega}$-weighted squared distance between the patches at $i$ and $j$ | `patch_distances` |
+| $h$ | filtering parameter of the weights $\exp(-d_{ij}/h^2)$, in the units of the data (default $10\sigma\sqrt{K/49}$, $10\sigma$ for $7 \times 7$ patches); local to this section (the PSF or the grid spacing elsewhere) | `h` |
+| $w_{ij}$, $Z_i$ | weight of pixel $j$ (an index of pixels here, of basis functions elsewhere) in the estimate of $i$, and its normalising constant, $\sum_j w_{ij} = 1$ | |
+| $\mathbf{t}$ | offset in the search window, $j = i + \mathbf{t}$ | `search_offsets` |
+
+Here $\boldsymbol{\omega}$ is a window on the patch, as the Kaiser window of the aggregation of BM3D is on
+a block, and not an angular frequency; $w_{ij}$ is a weight between two pixels, not the pixel weights $\mathbf{w}_s$ of a
+shift-variant model; $\mathbf{t}$ is an offset, not an iteration.
+
 ## Views
 
 | Symbol | Meaning | In code |
