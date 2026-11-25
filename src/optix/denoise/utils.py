@@ -1,7 +1,8 @@
 """Building blocks of `optix.denoise` (no stability promise).
 
 The stages, transforms, block matching and collaborative filters of
-BM3D and BM4D, the default intensity range and the memory budget.
+BM3D and BM4D, the default intensity range and the memory budget; the
+OTF mask, cost, solver and segmentation of NCS.
 """
 
 from ._bm3d import clean_range
@@ -21,6 +22,16 @@ from ._engine import (
     stage_halo,
     wiener,
 )
+from ._ncs import (
+    NcsResult,
+    ncs_gradient,
+    ncs_mask,
+    ncs_objective,
+    ncs_precorrect,
+    ncs_solve,
+    raised_cosine,
+    segment_bounds,
+)
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -30,6 +41,7 @@ from ._transforms import (
 )
 
 __all__ = [
+    "NcsResult",
     "Stage",
     "aggregate",
     "bior15_matrix",
@@ -44,9 +56,16 @@ __all__ = [
     "hard_threshold",
     "kaiser_window",
     "match_batch",
+    "ncs_gradient",
+    "ncs_mask",
+    "ncs_objective",
+    "ncs_precorrect",
+    "ncs_solve",
     "patch_spectra",
+    "raised_cosine",
     "reference_grid",
     "run_stage",
+    "segment_bounds",
     "stage_halo",
     "transform_matrix",
     "wiener",

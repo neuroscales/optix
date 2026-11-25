@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - NCS
 
 ## Transforms
 
@@ -23,6 +24,8 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - ncs
+        - ncs_halo
 
 ## Utilities
 
@@ -55,3 +58,11 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - ncs_mask
+        - raised_cosine
+        - ncs_precorrect
+        - ncs_objective
+        - ncs_gradient
+        - ncs_solve
+        - NcsResult
+        - segment_bounds
