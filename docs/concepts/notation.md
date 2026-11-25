@@ -372,6 +372,32 @@ regulariser; $\beta$ is the Kaiser parameter, not a background level; $\tau$ a d
 threshold, not a precision or a penalty weight; $\mathbf{T}$ is a matrix, not
 the PSF transform; $m$ and $M$ count blocks, not the mean of a Normal. The context tells which is meant.
 
+## sCMOS noise estimation
+
+The symbols of [ACsN](../algorithms/denoise/acsn.md), which removes the offset and
+gain of an sCMOS camera, estimates the noise level from the frequencies outside the
+OTF, and filters with the block matching of the previous section. The camera
+symbols $\mathbf{g}$, $\mathbf{o}$ and $\boldsymbol{\varepsilon}$ (one value per pixel),
+$\mathrm{NA}$, $\lambda_0$ and $\boldsymbol{\nu}$ are those of the sections above.
+
+| Symbol | Meaning | Unit | In code |
+|---|---|---|---|
+| $\mathbf{m}$ | frame corrected for offset and gain, $(\mathbf{y} - \mathbf{o}) / \mathbf{g}$ | e⁻ | `_frame` |
+| $\boldsymbol{\eta}$, $\sigma_{\mathrm{N}}$ | white Gaussian noise of $\mathbf{m}$, $\mathbf{m} = \boldsymbol{\lambda} + \boldsymbol{\eta}$, and its standard deviation (read noise in electrons plus shot noise) | e⁻ | `ACsN.sigma_`, `sigma=` |
+| $d_{\mathrm{px}}$ | pixel size in the image plane: camera pixel divided by the magnification (written $\Delta$ in docstrings) | length | `pixel_size` |
+| $\nu_c$, $\bar\nu$ | cutoff of the OTF, $2\,\mathrm{NA}/\lambda_0$; cutoff of the camera, `camera_cutoff` times the Nyquist frequency $1/(2 d_{\mathrm{px}})$ | 1 / length | `otf_cutoff`, `camera_cutoff` |
+| $\mathbf{m}_{\mathrm{hp}}$, $\sigma_{\mathrm{hp}}$ | high-pass image outside the OTF, and its standard deviation | e⁻ | `highpass`, `sigma_from_highpass` |
+| $\varrho$ | noise ratio $\sigma_{\mathrm{N}} / \sigma_{\mathrm{hp}}$ | | `noise_ratio` |
+| $S(\mathbf{a}, \mathbf{b})$ | local structure similarity of two images | | `quality_score` |
+| $\mathbf{s}_{\mathrm{N}}$, $\mathbf{s}_{\mathrm{P}}$, $Q$ | structure maps of the Q-score (noisy image against the method noise, and against the denoised image); the score, $-\operatorname{corr}(\mathbf{s}_{\mathrm{N}}, \mathbf{s}_{\mathrm{P}})$ | | `ACsN.quality_` |
+
+The sparse filter uses the symbols of the previous section: $N$, $N_S$, $M$,
+$\lambda_{\mathrm{ht}}$, $N_{\mathrm{har}}$ and $\mathbf{W}$. The paper writes the
+gain $\gamma$, the offset $\beta$ and the patch size $k$. Here $\boldsymbol{\eta}$ is
+a noise, not a weight of the total variation, a natural parameter or an efficiency;
+$\varrho$ is a ratio, not the pupil radius $\rho$; and $\nu_c$ is a frequency in cycles, as
+$\boldsymbol{\nu}$ is.
+
 ## Wavelet shrinkage
 
 The symbols of [PURE-LET](../algorithms/denoise/pure-let.md). The data are
@@ -443,6 +469,30 @@ are $\mathbf{y}$, $\mathbf{x}$ and $\boldsymbol\varepsilon$ as in the
 Here $\sigma$ is always the standard deviation of the noise, never the dual step, and
 $\mathbf{p}$ a dual field, not a block of block matching; $\mathbf{v}$ is the dual variable
 $\mathbf{v}_r$ of `primal_dual`. The context tells which is meant.
+
+## Noise correction of sCMOS images
+
+The symbols of [NCS](../algorithms/denoise/ncs.md). The data in electrons
+$\tilde{\mathbf{y}}$ and the read-noise variance in electrons² $\tilde\sigma^2$ are
+those of the [Optimisation](#optimisation) section; the camera maps $\mathbf{o}$,
+$\mathbf{g}$, $\boldsymbol\sigma^2$ and the optics $\mathrm{NA}$, $\lambda_0$ are
+those of the sections on [image formation](#image-formation) and [optics](#optics).
+
+| Symbol | Meaning | In code |
+|---|---|---|
+| $\mathbf{x}$, $\hat{\mathbf{x}}$ | image in electrons that the camera sees (the paper's $\mu$, the effective photon count), and its estimate | the result of `ncs`, `apply` |
+| $d$ | pixel size in the object plane, in the unit of $\lambda_0$ (the paper's $\Delta$; not the dark field $\mathbf{d}$) | `pixel_size` |
+| $M$, $L$ | side of a segment, and of the padded segment, $L = M + 2$ (the paper also calls the mask $M$) | `segment`, `segment_bounds` |
+| $\mathbf{F}$, $\mathbf{k} = (k_x, k_y)$, $k_r$ | unitary 2-D discrete Fourier transform of a segment; spatial frequency in cycles per unit length and its modulus | `ncs_mask` |
+| $\mathbf{m}$, $\mathbf{Q}$ | OTF mask on the frequency grid (the paper's $M(k_x, k_y)$), between 0 and 1; $\mathbf{Q} = \mathbf{F}^{\dagger}\operatorname{diag}(\mathbf{m}^{\odot 2})\mathbf{F}$ | `ncs_mask`, `mask=` |
+| $\beta$, $T$, $k_{\mathrm{lo}}$, $k_{\mathrm{hi}}$ | roll-off and period of the raised-cosine mask, and the edges of its transition band, $(1 \mp \beta)/(2T)$; local to this section | `raised_cosine(beta, period)` |
+| $\mathrm{LL}_{\mathrm{s}}$, $E_{\mathrm{N}}$ | simplified negative log-likelihood (shifted Poisson) and noise contribution outside the OTF (the paper's $LL_S$ and $\sigma_N$) | `ncs_objective` |
+| $J$, $\alpha$ | cost $\mathrm{LL}_{\mathrm{s}} + \alpha E_{\mathrm{N}}$ (the paper's $f$), and the weight of the noise contribution | `ncs_objective`, `alpha` |
+
+Here $\alpha$ is a weight, not the semi-aperture of the objective or a Dirichlet
+concentration; $\beta$ is a roll-off, not a background level or the Kaiser
+parameter; $E_{\mathrm{N}}$ is an energy, and $\mathrm{LL}_{\mathrm{s}}$ a cost, not a
+distribution. The paper's $\gamma$ is $\tilde\sigma^2$ here, not a gain or a step size.
 
 ## Views
 
