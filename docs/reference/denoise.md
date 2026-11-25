@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - ACsN
         - PURELET
         - NLMeans
 
@@ -25,6 +26,8 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - acsn
+        - acsn_halo
         - pure_let
         - pure_let_halo
         - nl_means
@@ -61,6 +64,14 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - acsn_profile
+        - acsn_noise
+        - otf_cutoff
+        - highpass
+        - noise_ratio
+        - sigma_from_highpass
+        - quality_score
+        - temporal_psnr
         - haar_uwt
         - let_threshold
         - let_basis
