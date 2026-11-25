@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - NCS
         - ACsN
         - PURELET
         - NLMeans
@@ -26,6 +27,8 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - ncs
+        - ncs_halo
         - acsn
         - acsn_halo
         - pure_let
@@ -64,6 +67,14 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - ncs_mask
+        - raised_cosine
+        - ncs_precorrect
+        - ncs_objective
+        - ncs_gradient
+        - ncs_solve
+        - NcsResult
+        - segment_bounds
         - acsn_profile
         - acsn_noise
         - otf_cutoff

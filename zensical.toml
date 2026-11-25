@@ -59,6 +59,7 @@ nav = [
       "algorithms/denoise/acsn.md",
       "algorithms/denoise/pure-let.md",
       "algorithms/denoise/nl-means.md",
+      "algorithms/denoise/ncs.md",
     ]},
     {"Destriping" = [
       "algorithms/destripe/wavelet-fft.md",

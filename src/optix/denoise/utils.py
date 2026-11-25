@@ -3,7 +3,8 @@
 The stages, transforms, block matching and collaborative filters of
 BM3D and BM4D, the patch distances of non-local means, the noise estimate,
 profile and quality score of ACsN, the default intensity range and the memory
-budget; the transform, thresholding functions and PURE system of PURE-LET.
+budget; the transform, thresholding functions and PURE system of PURE-LET;
+the OTF mask, cost, solver and segmentation of NCS.
 """
 
 from ._acsn import (
@@ -33,6 +34,16 @@ from ._engine import (
     stage_halo,
     wiener,
 )
+from ._ncs import (
+    NcsResult,
+    ncs_gradient,
+    ncs_mask,
+    ncs_objective,
+    ncs_precorrect,
+    ncs_solve,
+    raised_cosine,
+    segment_bounds,
+)
 from ._nlm import (
     default_h,
     offset_batch,
@@ -50,6 +61,7 @@ from ._transforms import (
 )
 
 __all__ = [
+    "NcsResult",
     "PureSums",
     "Stage",
     "acsn_noise",
@@ -58,11 +70,11 @@ __all__ = [
     "bior15_matrix",
     "block_match",
     "block_overhead",
-    "default_h",
     "bm3d_profile",
     "bm4d_profile",
     "clean_range",
     "dct_matrix",
+    "default_h",
     "filter_batch",
     "haar_matrix",
     "haar_uwt",
@@ -72,17 +84,24 @@ __all__ = [
     "let_basis",
     "let_threshold",
     "match_batch",
+    "ncs_gradient",
+    "ncs_mask",
+    "ncs_objective",
+    "ncs_precorrect",
+    "ncs_solve",
     "noise_ratio",
-    "otf_cutoff",
     "offset_batch",
+    "otf_cutoff",
     "patch_distances",
     "patch_kernel",
     "patch_spectra",
     "quality_score",
+    "raised_cosine",
     "reference_grid",
     "run_stage",
-    "sigma_from_highpass",
     "search_offsets",
+    "segment_bounds",
+    "sigma_from_highpass",
     "stage_halo",
     "temporal_psnr",
     "transform_matrix",
