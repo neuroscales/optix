@@ -294,7 +294,8 @@ def bm3d(
            [doi:10.1109/TIP.2007.901238](https://doi.org/10.1109/TIP.2007.901238)
         2. Maggioni M, Katkovnik V, Egiazarian K, Foi A. *A nonlocal
            transform-domain filter for volumetric data denoising and
-           reconstruction.* IEEE Trans Image Process, 2013.
+           reconstruction.* IEEE Trans Image Process
+           **22**(1):119–133, 2013.
            [doi:10.1109/TIP.2012.2210725](https://doi.org/10.1109/TIP.2012.2210725)
 
         ??? quote "BibTeX"
@@ -314,6 +315,7 @@ def bm3d(
               title   = {A nonlocal transform-domain filter for volumetric
                          data denoising and reconstruction},
               journal = {IEEE Transactions on Image Processing},
+              volume  = {22}, number = {1}, pages = {119--133},
               year    = {2013}, doi = {10.1109/TIP.2012.2210725}
             }
             ```
@@ -430,7 +432,8 @@ def bm4d(
            [doi:10.1109/TIP.2007.901238](https://doi.org/10.1109/TIP.2007.901238)
         2. Maggioni M, Katkovnik V, Egiazarian K, Foi A. *A nonlocal
            transform-domain filter for volumetric data denoising and
-           reconstruction.* IEEE Trans Image Process, 2013.
+           reconstruction.* IEEE Trans Image Process
+           **22**(1):119–133, 2013.
            [doi:10.1109/TIP.2012.2210725](https://doi.org/10.1109/TIP.2012.2210725)
 
         ??? quote "BibTeX"
@@ -450,6 +453,7 @@ def bm4d(
               title   = {A nonlocal transform-domain filter for volumetric
                          data denoising and reconstruction},
               journal = {IEEE Transactions on Image Processing},
+              volume  = {22}, number = {1}, pages = {119--133},
               year    = {2013}, doi = {10.1109/TIP.2012.2210725}
             }
             ```
@@ -908,7 +912,8 @@ class BM3D(_BlockMatching):
            [doi:10.1109/TIP.2007.901238](https://doi.org/10.1109/TIP.2007.901238)
         2. Maggioni M, Katkovnik V, Egiazarian K, Foi A. *A nonlocal
            transform-domain filter for volumetric data denoising and
-           reconstruction.* IEEE Trans Image Process, 2013.
+           reconstruction.* IEEE Trans Image Process
+           **22**(1):119–133, 2013.
            [doi:10.1109/TIP.2012.2210725](https://doi.org/10.1109/TIP.2012.2210725)
 
         ??? quote "BibTeX"
@@ -928,6 +933,7 @@ class BM3D(_BlockMatching):
               title   = {A nonlocal transform-domain filter for volumetric
                          data denoising and reconstruction},
               journal = {IEEE Transactions on Image Processing},
+              volume  = {22}, number = {1}, pages = {119--133},
               year    = {2013}, doi = {10.1109/TIP.2012.2210725}
             }
             ```
@@ -1040,7 +1046,8 @@ class BM4D(_BlockMatching):
            [doi:10.1109/TIP.2007.901238](https://doi.org/10.1109/TIP.2007.901238)
         2. Maggioni M, Katkovnik V, Egiazarian K, Foi A. *A nonlocal
            transform-domain filter for volumetric data denoising and
-           reconstruction.* IEEE Trans Image Process, 2013.
+           reconstruction.* IEEE Trans Image Process
+           **22**(1):119–133, 2013.
            [doi:10.1109/TIP.2012.2210725](https://doi.org/10.1109/TIP.2012.2210725)
 
         ??? quote "BibTeX"
@@ -1060,6 +1067,7 @@ class BM4D(_BlockMatching):
               title   = {A nonlocal transform-domain filter for volumetric
                          data denoising and reconstruction},
               journal = {IEEE Transactions on Image Processing},
+              volume  = {22}, number = {1}, pages = {119--133},
               year    = {2013}, doi = {10.1109/TIP.2012.2210725}
             }
             ```
