@@ -67,6 +67,15 @@ class Stage:
         Never threshold the DC coefficient of the group spectrum.
     strict : bool
         Matching with d < τ (Wiener stage) instead of d ≤ τ.
+    pixel_distance : bool
+        Hard-thresholding stage: match on the blocks' samples,
+        d = ‖Z_{x_R} − Z_x‖²/K, instead of their spectra (ACsN,
+        Mandracchia et al. 2020, Supplementary Eq. (12)). Same as the
+        spectra for an orthonormal transform.
+    sigma_weight : bool
+        Hard-thresholding weight 1/(σ²·N_har) (BM3D, Eq. (10)) or
+        1/N_har (ACsN, Supplementary Eq. (15)); both are 1 when
+        N_har = 0.
     """
 
     transform: str
@@ -80,6 +89,8 @@ class Stage:
     beta: float | None = None
     keep_dc: bool = False
     strict: bool = False
+    pixel_distance: bool = False
+    sigma_weight: bool = True
 
 
 def bm3d_profile(sigma: float, profile: str = "normal") -> tuple[Stage, Stage]:
@@ -396,13 +407,18 @@ def block_match(
 
 # -- collaborative filtering -------------------------------------------------
 def hard_threshold(
-    spectrum: Tensor, threshold: float, sigma: float, keep_dc: bool
+    spectrum: Tensor,
+    threshold: float,
+    sigma: float,
+    keep_dc: bool,
+    sigma_weight: bool = True,
 ) -> tuple[Tensor, Tensor]:
     """Collaborative hard thresholding of group spectra.
 
     Υ(c) = c·[|c| > λσ] (Dabov et al. 2007, Eq. (6)), with weight
     w = 1/(σ²·N_har) for N_har ≥ 1 retained coefficients, else 1
-    (Eq. (10)).
+    (Eq. (10)); w = 1/N_har without `sigma_weight` (Mandracchia et al.
+    2020, Supplementary Eq. (15)).
 
     !!! note
         The weight 1 of a group with N_har = 0 does not scale with the
@@ -422,6 +438,8 @@ def hard_threshold(
     keep_dc : bool
         Never threshold the DC (BM4D, Maggioni et al. 2013, Section
         II-B).
+    sigma_weight : bool
+        Include σ² in the weight.
 
     Returns
     -------
@@ -432,9 +450,10 @@ def hard_threshold(
     if keep_dc:
         keep[:, 0, 0] = True
     nhar = keep.sum((1, 2))
+    scale = sigma * sigma if sigma_weight else 1.0
     weight = torch.where(
         nhar >= 1,
-        1.0 / (sigma * sigma * nhar.clamp(min=1).to(spectrum.dtype)),
+        1.0 / (scale * nhar.clamp(min=1).to(spectrum.dtype)),
         torch.ones((), dtype=spectrum.dtype, device=spectrum.device),
     )
     return spectrum * keep, weight
@@ -552,7 +571,10 @@ def run_stage(
     spectra = patch_spectra(noisy, mat)
     if pilot is None:
         dist = spectra
-        if stage.lam2d > 0:
+        if stage.pixel_distance:
+            eye = torch.eye(n, dtype=dtype, device=device)
+            dist = patch_spectra(noisy, eye)
+        elif stage.lam2d > 0:
             dist = spectra * (spectra.abs() > stage.lam2d * sigma)
     else:
         dist = patch_spectra(pilot, mat)
@@ -597,7 +619,7 @@ def run_stage(
             group = torch.einsum("ij,bjk->bik", haar, spectra[members])
             if pilot is None:
                 group, weight = hard_threshold(
-                    group, stage.lam, sigma, stage.keep_dc
+                    group, stage.lam, sigma, stage.keep_dc, stage.sigma_weight
                 )
             else:
                 ref = torch.einsum("ij,bjk->bik", haar, dist[members])
