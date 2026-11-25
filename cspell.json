@@ -1155,7 +1155,17 @@
     "κᵐᵃᵈₙ",
     "κᵐᵃᵈₙᵢ",
     "σ̂ᵐᵃᵈ",
-    "σ̂ᵐᵃᵈᵢ"
+    "σ̂ᵐᵃᵈᵢ",
+    "CVPR",
+    "oversmooths",
+    "Morel",
+    "NLMeans",
+    "nlm",
+    "inproceedings",
+    "buades2005nonlocal",
+    "Bartomeu",
+    "Antoni",
+    "Nadaraya"
   ],
   "language": "en,en-GB",
   "ignorePaths": [

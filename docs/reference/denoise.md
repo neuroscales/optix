@@ -10,6 +10,7 @@
       members:
         - BM3D
         - BM4D
+        - NLMeans
         - ROF
 
 ## Transforms
@@ -24,6 +25,8 @@
         - bm4d
         - bm3d_halo
         - bm4d_halo
+        - nl_means
+        - nl_means_halo
         - rof
 
 ## Utilities
@@ -57,5 +60,10 @@
         - haar_matrix
         - dct_matrix
         - kaiser_window
+        - patch_kernel
+        - default_h
+        - search_offsets
+        - patch_distances
+        - offset_batch
         - tv_denoise
         - TVResult
