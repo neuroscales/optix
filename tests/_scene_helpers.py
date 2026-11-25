@@ -20,6 +20,7 @@ __all__ = [
     "oracle_loglik",
     "oracle_moments",
     "reference_fit",
+    "in_span",
     "sample_scene",
 ]
 
@@ -28,6 +29,23 @@ def digest(t: torch.Tensor) -> str:
     """sha256 of the bytes of a tensor (exact comparison of results)."""
     a = t.detach().cpu().contiguous().numpy()
     return hashlib.sha256(a.tobytes() + str(a.dtype).encode()).hexdigest()
+
+
+def in_span(logm, order):
+    """`logm` projected onto the (ky, kx) DCT basis of the shading model.
+
+    Synthetic truths used to judge a fit must lie in the span of the
+    model's basis; otherwise the error measures basis truncation, which
+    the precise flat ratios of tile overlaps turn into large errors along
+    weakly identified modes.
+    """
+    from optix.basis._dct import dct_basis
+
+    H, W = logm.shape
+    by = dct_basis(H, min(order[0], H), dtype=torch.float64)
+    bx = dct_basis(W, min(order[1], W), dtype=torch.float64)
+    L = logm.to(torch.float64)
+    return by @ (by.T @ L @ bx) @ bx.T
 
 
 def sample_scene(
@@ -43,6 +61,7 @@ def sample_scene(
     offset=100.0,
     read_sd=3.0,
     logm=None,
+    order=None,
     dtype=torch.float64,
     integer=True,
 ):
@@ -51,6 +70,9 @@ def sample_scene(
     Every scene voxel z has one class k_z and one signal u_z (0 in the
     background); tile t at position `pos[t]` sees y = c + b_t·u +
     noise with b_t = g_t·m and variance v + γ·b_t·u (Gaussian).
+
+    `order` (ky, kx): project the true log m onto the DCT basis of the
+    fitted model, so that the truth lies in its span (None: as given).
 
     Returns (tiles, truth) with truth a dict of u, k, logm, tile_gain.
     """
@@ -74,6 +96,8 @@ def sample_scene(
         xx = torch.linspace(-1, 1, W, dtype=torch.float64)[None]
         logm = 0.3 * yy - 0.2 * yy**2 + 0.15 * xx * yy
         logm = logm - logm.mean()
+    if order is not None:
+        logm = in_span(logm, order)
     g = torch.ones(T, dtype=torch.float64)
     if tile_gain is not None:
         g = torch.as_tensor(tile_gain, dtype=torch.float64)

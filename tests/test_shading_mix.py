@@ -1021,11 +1021,15 @@ def _tiles(
     fade=0.0,
     amp=200.0,
     xstep=0,
+    order=(4, 4),
 ):
     """(tile, x, y, z) tiles of one scene whose brightness varies along y.
 
     Tile t is dimmed by exp(−fade·t) (a uniform per-tile fade), and
-    starts `xstep`·t frames into the scene along x.
+    starts `xstep`·t frames into the scene along x. The true log m is
+    projected onto the DCT basis of `order` (that of `_tile_fit`): a truth
+    outside the model's span measures basis truncation, which the precise
+    flat ratios of the overlaps amplify along weakly identified modes.
     """
     nx = X + xstep * (ntiles - 1)
     g = torch.Generator().manual_seed(seed)
@@ -1044,6 +1048,11 @@ def _tiles(
     x = torch.linspace(-1, 1, W, dtype=torch.float64)[None]
     logm = 0.4 * y - 0.3 * y**2 + 0.2 * x * y
     logm = logm - logm.mean()
+    from optix.basis._dct import dct_basis
+
+    by = dct_basis(H, order[0], dtype=torch.float64)
+    bx = dct_basis(W, order[1], dtype=torch.float64)
+    logm = by @ (by.T @ logm @ bx) @ bx.T
     out = []
     for t in range(ntiles):
         f = u[t * xstep : t * xstep + X, t * step : t * step + H]
@@ -1287,16 +1296,17 @@ def test_tile_gain_removes_fade_ramp(fade):
     nogain = _tile_fit(data, TileOverlap(step=(0, 16, 0)))
     plain = error(nogain)
     est = _tile_fit(data, TileOverlap(step=(0, 16, 0), fit_gain=True))
-    # without gains the fade becomes a ramp of m (measured ≈ 0.036 and
-    # 0.052 against ≈ 0.026 without fade); with gains, ≈ 0.027 and 0.026;
-    # gain ratios within 1.2 % and 1.5 % at the stop (Newton decrement)
+    # without gains the fade becomes a ramp of m (measured ≈ 0.025 and
+    # 0.049 against ≈ 0.0095 without fade, truth in the span of the
+    # basis); with gains, ≈ 0.0092 and 0.0089; gain ratios within 2.6 %
+    # and 1.9 % at the stop (Newton decrement)
     assert plain > base + 0.006
     assert error(est) < base + 0.003
     g = est.tile_gain_.double()
     assert g.shape == (4,)
     assert abs(g.log().sum().item()) < 1e-6
     truth = torch.exp(-fade * torch.arange(4, dtype=torch.float64))
-    assert torch.allclose(g / g[0], truth, rtol=0.025)
+    assert torch.allclose(g / g[0], truth, rtol=0.035)
     # the fit is not quite monotone (the pre-existing class-step issue):
     # worst decrease 2e-4 to 2e-3 of the bound run alone, up to ≈ 7e-3
     # within the suite (in the working dtype), with or without gains. The

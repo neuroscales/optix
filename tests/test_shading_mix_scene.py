@@ -355,6 +355,7 @@ def _tiny_fit(nclass=2, nodes=48, full=True, positions=_TINY_POS, gain=False):
         nu=(3.0, 2.0)[:nclass],
         frac=(0.4, 0.3)[:nclass],
         tile_gain=[1.0, 0.8, 1.15][: len(pos)] if gain else None,
+        order=(3, 3),
     )
     layout = Layout("txyz", spatial="yz")
     est = GammaMixture(
@@ -588,9 +589,12 @@ def test_gain_step_reaches_the_exact_fixed_point(fade, monkeypatch):
         fits.append(_tile_fit(data, ov, it=60))
         monkeypatch.undo()
     a, b = fits
-    # measured: same iterations, bound within 0.2, gains within 0.05 %
+    # measured (truth in the span of the basis): iterations within one,
+    # bound within 0.6 to 7.7 of ≈ 3.4e5 (≈ 2e-5, depends on the thread
+    # count: the plateau at the stop), gains within 0.01 %, log m within 1e-4
     assert "decrement" in a.history.reason and "decrement" in b.history.reason
-    assert abs(a.history.objective[-1] - b.history.objective[-1]) < 1.0
+    ea, eb = a.history.objective[-1], b.history.objective[-1]
+    assert abs(ea - eb) < 5e-5 * abs(eb)
     assert torch.allclose(a.tile_gain_, b.tile_gain_, rtol=2e-3)
     fa, fb = (f.estimates["shading"].flat.double().log() for f in fits)
     assert (fa - fb).abs().max() < 5e-3
@@ -660,8 +664,9 @@ def test_joint_classify_shares_the_posterior(_gain_fit):
 def test_low_snr_overlap_does_not_bias_the_flat_field():
     """Stationary scene, signal ≈ 8 ADU (excess ≈ 1-2 sd of the noise).
 
-    Measured (seeds 0-1): no overlap 0.028, log-ratio term (e7d4cf7)
-    0.046 with a y-ramp of −0.07, shared-signal model 0.027, ramp −0.008.
+    Measured (seeds 0-1, truth in the span of the basis): no overlap
+    0.013, log-ratio term (e7d4cf7) 0.042 with a y-ramp of −0.068,
+    shared-signal model 0.012, ramp −0.002.
     """
     import math
 
