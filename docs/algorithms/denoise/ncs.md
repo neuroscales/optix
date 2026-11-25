@@ -349,8 +349,9 @@ ADMM solver of [`optix.optim`](../../reference/optim.md), see
    of segments of the same size:
     1. build the mask $\mathbf{m}$ of the padded size (once per size);
     2. start at $\mathbf{x}^{(0)} = \tilde{\mathbf{y}}_s$ (the paper's initial value);
-    3. **repeat** until $\max\lvert\nabla J\rvert \le$ `tol`, the line search fails
-       (round-off), or `max_iter` iterations: solve $\nabla^2 J\,\mathbf{p} = -\nabla J$
+    3. **repeat** until $\max\lvert\nabla J\rvert \le$ `tol`, a full Newton step
+       changes no pixel by more than $10\,\epsilon \max(1, \max\lvert\tilde{\mathbf{y}}_s\rvert)$,
+       the line search fails (round-off), or `max_iter` iterations: solve $\nabla^2 J\,\mathbf{p} = -\nabla J$
        by preconditioned conjugate gradients, then set
        $\mathbf{x} \leftarrow \mathbf{x} + t\,\mathbf{p}$ with the largest step
        $t \in \{1, \tfrac12, \tfrac14, \ldots\}$ that keeps $x_i + \tilde\sigma_i^2$
@@ -359,7 +360,7 @@ ADMM solver of [`optix.optim`](../../reference/optim.md), see
 4. **Assemble** the interiors of the segments into the image.
 5. **Convert** to ADU if `units="adu"`: $\hat{\mathbf{x}} \leftarrow \mathbf{g} \odot \hat{\mathbf{x}} + \mathbf{o}$.
 
-Steps 1 and 3 are those of Supp. Note 2 (Fig. SS1), where step 3 reads "obtain an
+Steps 1 and 3 are those of Supp. Note 2 (Supplementary Fig. 1), where step 3 reads "obtain an
 estimate by minimizing a cost function". The details of step 3.3 are given in
 the next section, as they are not in the paper.
 
@@ -377,23 +378,30 @@ follows.
 1. **The optimiser.** The paper uses "a generic minimization routine such as
    `fminunc`" (MATLAB) and runs it for a fixed number of iterations: its software
    defaults to 15, and the Supplementary Notes say that the regression converges
-   within 20 (Supp. Notes 2 and 13). The cost is strictly convex, so it has one
-   minimiser, which a fixed small number of iterations only approaches. optix runs
-   a damped Newton method with preconditioned conjugate gradients until the
-   gradient is small: $\max\lvert\nabla J\rvert \le$ `tol` (default
+   within 20 (Supp. Note 2), with at least 10 iterations recommended (Supp.
+   Note 13). The cost is strictly convex, so it has one minimiser. optix runs
+   a damped Newton method with preconditioned conjugate gradients to
+   convergence: $\max\lvert\nabla J\rvert \le$ `tol` (default
    $\max(100\,\epsilon, 10^{-10})$ for the machine epsilon $\epsilon$ of the dtype,
    so $10^{-10}$ in float64 and $1.2 \cdot 10^{-5}$ in float32; the gradient is
-   dimensionless), at most `max_iter` $= 50$ Newton iterations. The
+   dimensionless), or a full Newton step that changes no pixel by more than
+   $10\,\epsilon \max(1, \max\lvert\mathbf{x}^{(0)}\rvert)$, at most `max_iter` $= 50$
+   Newton iterations. The second test is relative to the signal: the rounding
+   error of the term $2\alpha\mathbf{Q}\mathbf{x}$ of the gradient grows with
+   $\max\lvert\mathbf{x}\rvert$, so on bright segments in float32 the gradient stops
+   decreasing above `tol` once the iterate has reached its rounding floor. The
    conjugate-gradient solve is preconditioned by the diagonal of the Hessian
    (the diagonal of $\mathbf{Q}$ is the mean of $\mathbf{m}^{\odot 2}$) and stops at a
    residual of $\min(\tfrac12, \lVert\nabla J\rVert^{1/2})\,\lVert\nabla J\rVert$;
    the line search starts at $t = 1$, is capped to 99 % of the distance to the
    boundary $x_i = -\tilde\sigma_i^2$ of the domain, and halves $t$ until the
    Armijo condition holds with a constant of $10^{-4}$. A segment stops when
-   the gradient is small, when the line search fails, or after `max_iter`
-   iterations. The result is therefore the minimiser of the paper's cost, not the
-   iterate of the authors' software after 15 iterations, whose distance from the
-   minimiser depends on the optimiser's settings that the paper does not give. The
+   one of the two tests holds, when the line search fails, or after `max_iter`
+   iterations. The result is the minimiser of the paper's cost where the solver
+   converges; `ncs` and `apply` emit one `RuntimeWarning` per call with the
+   count of segment solves that did not (a small `max_iter`, for instance). The
+   paper's software stops after a fixed number of iterations of its routine,
+   whose settings the paper does not give, so that iterate is not reproduced. The
    gradient and the stopping rule are in
    [`ncs_solve`][optix.denoise.utils.ncs_solve].
 2. **The segment size.** The paper recommends $M$ between 8 and 32 and does not
@@ -435,8 +443,12 @@ follows.
    those of its own length (the paper's Eq. 2 assumes an even $L$).
 7. **The domain.** The paper constrains $D > 0$ so that $\mu \ge 0$ (Supp. Note 6),
    but the cost only requires $\mu_i + \gamma_i > 0$, and that is the constraint
-   the solver keeps. An estimate may therefore be slightly negative, down to
-   $-\gamma_i$, in a pixel of large read noise.
+   the solver keeps. An estimate is therefore bounded below by
+   $-\tilde\sigma_i^2$ only, and can be negative at pixels of large read noise
+   next to brighter neighbours: on the synthetic scene of [Usage](#usage) the
+   minimum is $-7.5$ electrons with the noise-only mask (0.09 % of the pixels are
+   negative), and 0.86 electrons with the OTF-weighted mask. Clip the result
+   before taking a logarithm or a square root.
 
 ### Extensions (opt-in, not faithful)
 
@@ -485,13 +497,16 @@ and a pad of one, so it reaches $2M - 1$ pixels beyond the block.
 
 `apply` reads the data with the [`blocks`](../../reference/io.md) iterator: a core
 of `block` pixels per spatial axis, sized by default so that the block with its
-halo, times a working factor of about 24, fits the memory budget of
+halo, times a working factor of about $35\,(M + 2)^2/M^2$ (44 for $M = 16$, 55 for
+$M = 8$), fits the memory budget of
 [`optix.config`](../../reference/configuration.md), with this halo around it. The
 segments are those of the whole image (the grid starts at the first pixel of the
 image, not of the block), the segments that meet the core of a block are
-estimated, and the core is written to the output. The result therefore equals the
-whole-image computation, up to floating-point rounding, for any `block`, including
-blocks that do not align with the segments. The data may be a zarr array or a
+estimated, and the core is written to the output. The result therefore agrees
+with the whole-image computation to rounding, not bitwise, for any `block`,
+including blocks that do not align with the segments: a segment is solved in
+batches of different sizes, which the FFT may round differently, and that can
+move its stopping iteration by one. The data may be a zarr array or a
 memory-mapped file larger than memory; the output cannot be the input (an
 in-place call is refused, as a halo needs the unchanged neighbours). `fit` does not
 read the data. The camera maps may be scalars, an $(H, W)$ map, or maps of shape
@@ -506,11 +521,13 @@ Newton iteration needs several conjugate-gradient steps of two FFTs of
 $(M + 2)^2$ pixels each. A larger $M$ makes the mask finer and the padding
 overhead $(M + 2)^2 / M^2$ smaller (1.27 for $M = 16$, 1.56 for $M = 8$, 1.13 for
 $M = 32$), but each solve harder; the default is a compromise, and the paper does
-not recommend segments below 8 pixels (Supp. Note 13). `max_iter` and `tol` only
-matter for speed: on synthetic segments with $M = 8$, 16 and 32, in float32 and
-float64, every segment converged to the default `tol` in 10 Newton iterations or
-fewer. In float32 the
-result agrees with float64 to about $10^{-4}$ in electrons.
+not recommend segments below 8 pixels (Supp. Note 13). On the synthetic segments
+of the test suite ($M = 8$, 16 and 32, peak signal of about 100 electrons) the
+solver converges in float64 in 8 to 11 Newton iterations, and in 14 to 21 on
+brighter scenes ($10^3$ to $10^5$ electrons); a `max_iter` below that leaves
+segments without convergence, with a warning. In float32 the result agrees with float64
+to a few $10^{-6}$ relative to the peak signal on scenes of up to about $10^5$
+electrons (about $4 \cdot 10^{-4}$ electrons on the scene of [Usage](#usage)).
 
 ## Usage
 
@@ -642,9 +659,7 @@ any other.
 The synthetic movie above (filaments through the OTF of an ideal pupil, with a
 log-normal read-noise variance map, eight frames) is used by the test suite to
 check that the estimate behaves as the method intends. These numbers describe
-that scene only; no real data and no published figures are used. No
-comparison with the authors' implementation is given: its licence (GPL-3.0) is
-not compatible with that of optix.
+that scene only.
 
 | Quantity | OTF-weighted mask | Noise-only mask |
 |---|---|---|
@@ -670,10 +685,15 @@ ground truth:
   segment alone, in the interior of the image (neighbours as pad) and in a corner
   (the border pixel as pad). The result of an image does not depend on the other
   images of a batch, to rounding.
-- **Streaming.** Block-wise `apply` equals the whole-image `ncs` for blocks that do
-  not align with the segments: exactly in float64, to a relative $4 \cdot 10^{-7}$
-  in float32.
-- **Precision.** float32 and float64 agree to $10^{-4}$ in electrons.
+- **Streaming.** Block-wise `apply` agrees with the whole-image `ncs` for blocks
+  that do not align with the segments, for an image smaller than $M$ and for
+  $1 \times N$ images, to rounding (a relative $10^{-9}$ in float64, $10^{-4}$ in
+  float32).
+- **Precision.** float32 agrees with float64 to $10^{-4}$ on this scene, and to
+  $10^{-5}$ relative to the peak signal on scenes of up to about $10^5$ electrons,
+  where float32 still converges.
+- **Domain.** With the noise-only mask some estimates are negative, and all of
+  them satisfy $x_i + \tilde\sigma_i^2 > 0$.
 
 ## References
 

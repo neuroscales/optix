@@ -1,6 +1,7 @@
 """NCS, the sCMOS noise-correction algorithm (Liu et al. 2017)."""
 
 import math
+import warnings
 
 import pytest
 import torch
@@ -208,6 +209,55 @@ def test_float32_matches_float64():
     torch.testing.assert_close(r32.x.double(), r64.x, rtol=1e-4, atol=1e-4)
 
 
+@pytest.mark.parametrize("scale", [30, 1000])
+def test_float32_converges_on_bright_scenes(scale):
+    """The step test stops float32 at its rounding floor (~10⁵ e⁻)."""
+    truth = band_limited((18, 18)) * scale
+    sensor = camera(truth.shape)
+    d, gamma = U.ncs_precorrect(
+        record(truth, sensor), sensor.offset, sensor.variance, sensor.gain
+    )
+    mask = U.ncs_mask(truth.shape, **OPTICS, **F64)
+    r64 = U.ncs_solve(d[None], gamma[None], mask, 0.2)
+    r32 = U.ncs_solve(d[None].float(), gamma[None].float(), mask.float(), 0.2)
+    assert bool(r64.converged.all()) and bool(r32.converged.all())
+    assert r32.n_iter.item() < 50
+    err = (r32.x.double() - r64.x).abs().max() / d.abs().max()
+    assert err < 1e-5
+
+
+def test_start_and_cg_iterations():
+    """`x0` and `cg_iter` change the path, not the minimiser."""
+    d, gamma, mask = segment()
+    ref = U.ncs_solve(d[None], gamma[None], mask, 0.2)
+    start = (d + 5)[None]
+    res = U.ncs_solve(d[None], gamma[None], mask, 0.2, x0=start)
+    assert bool(res.converged.all())
+    torch.testing.assert_close(res.x, ref.x, rtol=1e-8, atol=1e-8)
+    res = U.ncs_solve(d[None], gamma[None], mask, 0.2, cg_iter=5)
+    assert bool(res.converged.all()) and res.n_iter.item() > ref.n_iter.item()
+    torch.testing.assert_close(res.x, ref.x, rtol=1e-8, atol=1e-8)
+    with pytest.raises(ValueError):
+        U.ncs_solve(d[None], gamma[None], mask, 0.2, x0=-gamma[None] - 1)
+
+
+def test_non_convergence_warns(movie):
+    truth, sensor, raw = movie
+    d, gamma, mask = segment()
+    res = U.ncs_solve(d[None], gamma[None], mask, 0.2, max_iter=1)
+    assert not bool(res.converged.any()) and res.n_iter.item() == 1
+    with pytest.warns(RuntimeWarning, match="did not reach") as record_:
+        ncs(raw[0], sensor, max_iter=1, **OPTICS)
+    assert len(record_) == 1  # one warning per call
+    est = NCS(max_iter=1, block=(23, 41), **OPTICS, **F64).fit(init=sensor)
+    with pytest.warns(RuntimeWarning, match="did not reach") as record_:
+        est.apply(raw[0])
+    assert len(record_) == 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ncs(raw[0], sensor, **OPTICS)
+
+
 # -- segmentation ------------------------------------------------------------
 def test_segment_bounds():
     assert U.segment_bounds(64, 16) == [(0, 16), (16, 32), (32, 48), (48, 64)]
@@ -308,10 +358,34 @@ def test_blocks_match_whole(block, dtype):
     whole = ncs(raw, sensor, segment=8, **OPTICS)
     est = NCS(segment=8, block=block, dtype=dtype, **OPTICS).fit(init=sensor)
     out = est.apply(raw)
+    # to rounding, not bitwise: a segment is solved in batches of
+    # different sizes, which the FFT may round differently
     if dtype == torch.float64:
-        assert torch.equal(out, whole)
+        torch.testing.assert_close(out, whole, rtol=1e-9, atol=1e-9)
     else:
-        torch.testing.assert_close(out, whole, rtol=4e-7, atol=0)
+        torch.testing.assert_close(out, whole, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize("shape", [(5, 6), (1, 40), (40, 1)])
+def test_small_and_thin_images_with_blocks(shape):
+    """An image smaller than M, and 1 × N images, through `apply`."""
+    truth = band_limited((max(shape), max(shape)))[: shape[0], : shape[1]]
+    sensor = camera(shape)
+    raw = record(truth, sensor)
+    whole = ncs(raw, sensor, segment=8, **OPTICS)
+    assert whole.shape == shape and bool(whole.isfinite().all())
+    est = NCS(segment=8, block=(3, 7), **OPTICS, **F64).fit(init=sensor)
+    torch.testing.assert_close(est.apply(raw), whole, rtol=1e-9, atol=1e-9)
+
+
+def test_estimates_can_be_negative_inside_the_domain(movie):
+    """μ is bounded by −γ, not by 0 (the domain μ + γ > 0 of LL_s)."""
+    truth, sensor, raw = movie
+    out = ncs(raw, sensor, mask="noise-only", **OPTICS)
+    gamma = sensor.variance / sensor.gain.square()
+    assert out.min() < -1  # about −7.5 e⁻ on this scene
+    assert bool((out + gamma > 0).all())
+    assert ncs(raw, sensor, **OPTICS).min() > 0  # OTF-weighted mask
 
 
 def test_group_maps_and_adu_units():
@@ -359,8 +433,42 @@ def test_faithful_flags_and_errors():
         )
 
 
+def test_input_validation():
+    shape = (16, 16)
+    sensor = camera(shape)
+    raw = record(band_limited(shape), sensor)
+    bad = raw.clone()
+    bad[3, 4] = math.nan
+    with pytest.raises(ValueError, match="finite"):
+        ncs(bad, sensor, **OPTICS)
+    bad[3, 4] = math.inf
+    with pytest.raises(ValueError, match="finite"):
+        ncs(bad, sensor, **OPTICS)
+    for name in ("gain", "variance"):
+        for value in (0.0, -1.0):
+            maps = {
+                "offset": sensor.offset,
+                "variance": sensor.variance,
+                "gain": sensor.gain,
+            }
+            maps[name] = maps[name].clone()
+            maps[name][2, 2] = value
+            with pytest.raises(ValueError, match=name):
+                ncs(raw, SensorEstimate(**maps), **OPTICS)
+    # sampling rate ≈ 1: the noise-only mask is zero on the whole grid
+    coarse = dict(OPTICS, pixel_size=0.3)
+    with pytest.warns(RuntimeWarning, match="zero everywhere"):
+        out = ncs(raw, sensor, mask="noise-only", **coarse)
+    d, _ = U.ncs_precorrect(raw, sensor.offset, sensor.variance, sensor.gain)
+    torch.testing.assert_close(out, d)
+
+
 def test_save_load(movie):
     truth, sensor, raw = movie
     est = NCS(segment=8, **OPTICS, **F64).fit(init=sensor)
     other = NCS(segment=8, **OPTICS, **F64).load_state_dict(est.state_dict())
+    assert est.is_faithful and other.is_faithful
     torch.testing.assert_close(other.apply(raw[:1]), est.apply(raw[:1]))
+    changed = NCS(alpha=0.5, segment=8, **OPTICS, **F64).fit(init=sensor)
+    other = NCS(**OPTICS, **F64).load_state_dict(changed.state_dict())
+    assert not other.is_faithful and other._st.alpha == 0.5

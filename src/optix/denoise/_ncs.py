@@ -5,6 +5,7 @@ Written from the paper and its Supplementary Notes; the authors' code
 """
 
 import math
+import warnings
 from collections.abc import Callable, Sequence
 from typing import Literal, NamedTuple, Self
 
@@ -93,17 +94,20 @@ def _check_units(units: object) -> None:
 def raised_cosine(k: Tensor, beta: float, period: float) -> Tensor:
     """High-pass raised-cosine filter of the OTF mask (Supp. Note 5).
 
-    With k_lo = (1 − β)/(2T) and k_hi = (1 + β)/(2T),
+    With k_lo = (1 − β)/(2T) and k_hi = (1 + β)/(2T), the mask m (the
+    paper's M) is
 
-        M(k) = 0                                  for k < k_lo,
-        M(k) = ½ − ½ cos[(πT/β)(k − k_lo)]        for k_lo ≤ k ≤ k_hi,
-        M(k) = 1                                  for k > k_hi.
+        m(k) = 0                                  for k < k_lo,
+        m(k) = ½ − ½ cos[(πT/β)(k − k_lo)]        for k_lo ≤ k ≤ k_hi,
+        m(k) = 1                                  for k > k_hi.
 
     !!! note "Sign of the cosine"
         Eq. (4) of the Supplementary Notes prints ½ + ½ cos[…] in the
-        transition band, which jumps from 1 to 0 at k_lo and from 0 to 1
-        at k_hi. The high-pass filter the text describes, continuous at
-        both ends, is ½ − ½ cos[…]; it also gives the curves of Fig. SS4B
+        transition band. With that sign the mask is 0 below k_lo, jumps
+        from 0 to 1 at k_lo, falls to 0 at k_hi and jumps from 0 to 1
+        above k_hi. The high-pass filter the text describes, continuous
+        at both ends, is ½ − ½ cos[…]; it also gives the curves of
+        Fig. SS4B
         (the default mask is about 0.28 at the OTF radius 2NA/λ and
         about 0.7 at 3.5NA/λ) and the mask height of about 0.2 at a
         sampling rate of 1.4 (Supplementary Note 11).
@@ -120,7 +124,7 @@ def raised_cosine(k: Tensor, beta: float, period: float) -> Tensor:
     Returns
     -------
     Tensor
-        M(k), of the shape and dtype of `k`.
+        m(k), of the shape and dtype of `k`.
     """
     beta = float(beta)
     if not 0 <= beta <= 1:
@@ -157,7 +161,7 @@ def ncs_mask(
     dtype: torch.dtype | str | None = None,
     device: torch.device | str | None = None,
 ) -> Tensor:
-    """OTF mask M(k_x, k_y) of an image of `shape` (Supp. Notes 4–5).
+    """OTF mask m(k_x, k_y) of an image of `shape` (Supp. Notes 4–5).
 
     The frequencies of an L₁ × L₂ image of pixel size Δ are
     k = p/(LΔ), p ∈ [−L/2, L/2 − 1] (Eq. 2), here in the order of
@@ -166,7 +170,7 @@ def ncs_mask(
     ([`raised_cosine`][optix.denoise.utils.raised_cosine]) around the
     OTF radius 2NA/λ of an ideal system:
 
-    | mask | β | T | M = 0 below | M = 1 above |
+    | mask | β | T | m = 0 below | m = 1 above |
     |---|---|---|---|---|
     | `"otf-weighted"` (default) | 1 | λ/(5.6 NA) | 0 | 5.6 NA/λ |
     | `"noise-only"` | 0.2 | (1 − β)λ/(4 NA) | 2 NA/λ | 3 NA/λ |
@@ -189,7 +193,7 @@ def ncs_mask(
         Pixel size Δ in the object plane, in the unit of `wavelength`.
     mask : {"otf-weighted", "noise-only"} or callable
         One of the paper's masks, or a function of k_r (cycles per unit
-        of `wavelength`) returning M.
+        of `wavelength`) returning m (the paper's M).
     dtype, device : optional
         Backend.
 
@@ -238,11 +242,28 @@ def ncs_precorrect(
     -------
     D, gamma : Tensor
         In electrons and electrons², of the broadcast shape.
+
+    Raises
+    ------
+    ValueError
+        If `data` or a map is not finite (NaN or ±∞), or if a gain or a
+        variance is zero or negative.
     """
     offset, variance, gain = (
         torch.as_tensor(t, dtype=data.dtype, device=data.device)
         for t in (offset, variance, gain)
     )
+    for name, t in (
+        ("data", data),
+        ("offset", offset),
+        ("variance", variance),
+        ("gain", gain),
+    ):
+        if not bool(torch.isfinite(t).all()):
+            raise ValueError(f"{name} must be finite (no NaN or inf)")
+    for name, t in (("gain", gain), ("variance", variance)):
+        if not bool((t > 0).all()):
+            raise ValueError(f"{name} must be > 0 at every pixel")
     d = (data - offset) / gain
     d = torch.where(d > 0, d, torch.full_like(d, _FLOOR))
     gamma = variance / gain.square()
@@ -251,7 +272,7 @@ def ncs_precorrect(
 
 
 def _half(mask: Tensor) -> Tensor:
-    """Squared mask on the half spectrum of `torch.fft.rfft2`.
+    """Squared mask m² on the half spectrum of `torch.fft.rfft2`.
 
     The masks are even in k (a function of |k|, and the frequency −L/2
     is its own opposite), so the half spectrum is the first L₂//2 + 1
@@ -261,13 +282,9 @@ def _half(mask: Tensor) -> Tensor:
 
 
 def _noise_operator(m2: Tensor, shape: tuple[int, int]) -> Callable:
-    """v ↦ Q v = F⁻¹(M² · F v), so that σ_N(μ) = μᵀQμ (Eq. 3)."""
+    """v ↦ Q v = F⁻¹(m² · F v), so that σ_N(μ) = μᵀQμ (Eq. 3)."""
 
     def apply(v: Tensor) -> Tensor:
-        if v.ndim == 3 and v.shape[0] == 1:
-            # a batch of one takes another FFT code path on the CPU, which
-            # rounds differently: keep results independent of the batch
-            return apply(v.expand(2, *v.shape[1:]))[:1]
         return torch.fft.irfft2(torch.fft.rfft2(v) * m2, s=shape)
 
     return apply
@@ -279,9 +296,10 @@ def ncs_objective(
     """Cost f = LL_s + α σ_N of each image (Supp. Note 2, step 3).
 
         LL_s(μ) = ∑ᵢ μᵢ − (Dᵢ + γᵢ) ln(μᵢ + γᵢ)   (Eq. 7),
-        σ_N(μ)  = ∑_k |μ̂(k) M(k)|²                  (Eq. 3),
+        σ_N(μ)  = ∑_k |μ̂(k) m(k)|²                  (Eq. 3),
 
-    with μ̂ the unitary DFT of Eq. (2) (factor 1/L for an L × L image).
+    with μ̂ the unitary DFT of Eq. (2) (factor 1/L for an L × L image)
+    and m the OTF mask (the paper's M).
 
     Parameters
     ----------
@@ -291,7 +309,7 @@ def ncs_objective(
         D and γ of [`ncs_precorrect`][optix.denoise.utils.ncs_precorrect],
         broadcasting with `x`.
     mask : Tensor
-        M, `(L₁, L₂)` in `fftn` order (see
+        m, `(L₁, L₂)` in `fftn` order (see
         [`ncs_mask`][optix.denoise.utils.ncs_mask]).
     alpha : float
         Weight α.
@@ -313,7 +331,7 @@ def ncs_gradient(
 ) -> Tensor:
     """Gradient of [`ncs_objective`][optix.denoise.utils.ncs_objective].
 
-        ∇f(μ) = 1 − (D + γ)/(μ + γ) + 2α F⁻¹(M² F μ).
+        ∇f(μ) = 1 − (D + γ)/(μ + γ) + 2α F⁻¹(m² F μ).
 
     The first two terms are the gradient of the shifted-Poisson
     likelihood ([`ShiftedPoisson`][optix.optim.ShiftedPoisson] with data
@@ -345,7 +363,9 @@ class NcsResult(NamedTuple):
     n_iter : Tensor
         Newton iterations taken by each image, `(B,)`.
     converged : Tensor
-        Whether max |∇f| ≤ `tol`, `(B,)` (bool).
+        Whether the image met a stopping test of
+        [`ncs_solve`][optix.denoise.utils.ncs_solve] (gradient or step),
+        `(B,)` (bool).
     """
 
     x: Tensor
@@ -357,6 +377,10 @@ class NcsResult(NamedTuple):
 def _default_tol(dtype: torch.dtype) -> float:
     """max(100 ε, 10⁻¹⁰): 10⁻¹⁰ in float64, 1.2·10⁻⁵ in float32."""
     return max(100 * torch.finfo(dtype).eps, 1e-10)
+
+
+#: Step test of the solver, in units of ε·max(1, max|μ⁰|).
+_STEP_TOL = 10.0
 
 
 def _dot(a: Tensor, b: Tensor) -> Tensor:
@@ -382,31 +406,45 @@ def ncs_solve(
     the optimiser open (Supp. Note 2: "a generic minimization routine
     such as fminunc"). The Hessian is
 
-        H = diag((D + γ)/(μ + γ)²) + 2α Q,  Q = F⁻¹ diag(M²) F,
+        H = diag((D + γ)/(μ + γ)²) + 2α Q,  Q = F⁻¹ diag(m²) F,
 
     and each Newton system H p = −∇f is solved by conjugate gradients
     preconditioned by the diagonal of H (the diagonal of Q is the mean
-    of M²), to a residual of min(½, ‖∇f‖^½)·‖∇f‖. The step is the
+    of m²), to a residual of min(½, ‖∇f‖^½)·‖∇f‖. The step is the
     largest of 1, ½, ¼, … that keeps 1 % of the distance to the domain
     boundary μ = −γ and passes the Armijo test
     f(μ + tp) ≤ f(μ) + 10⁻⁴ t ∇fᵀp; the decrease is computed in closed
-    form (with log1p), without forming f. Each image stops once
-    max |∇f| ≤ `tol`, when the line search fails (round-off) or after
-    `max_iter` iterations; the images of the batch are independent, so
-    the result of an image does not depend on the others.
+    form (with log1p), without forming f.
+
+    An image has converged when max |∇f| ≤ `tol`, or when a full Newton
+    step (t = 1) changes no pixel by more than 10 ε · max(1, max|μ⁰|),
+    for the machine epsilon ε of the dtype. The second test is relative
+    to the signal: the rounding error of the term 2αQμ of ∇f grows as
+    ε · 2α max|μ|, so on bright images in float32 the gradient stalls
+    above `tol` while the iterate has reached the rounding floor; Newton
+    converges quadratically, so such a step leaves an error of the order
+    of ε · max|μ|. An image also stops, without converging, when the
+    line search fails (round-off) or after `max_iter` iterations. The
+    images of the batch
+    are solved independently; the result of an image agrees with the
+    result it gives alone to rounding, not bitwise (the FFT may round
+    differently in batches of different sizes, which can also move the
+    stopping iteration by one).
 
     !!! note "Not in the paper"
-        The optimiser, its stopping rule and `max_iter`; the authors'
-        software runs 15 iterations of a generic routine (Supp. Note 13)
-        and stops before convergence. The start is the paper's, μ⁰ = D
-        (Supp. Note 2, step 3).
+        The optimiser, its stopping rule and `max_iter`. The paper uses
+        a generic routine, reports that the regression converges within
+        20 iterations (Supp. Note 2, step 4), and its software runs 15
+        iterations by default, with at least 10 recommended (Supp.
+        Note 13). Here the iterations continue to the tolerance. The
+        start is the paper's, μ⁰ = D (Supp. Note 2, step 3).
 
     Parameters
     ----------
     data, gamma : Tensor
         D and γ, `(B, L₁, L₂)` (γ broadcasts).
     mask : Tensor
-        M, `(L₁, L₂)`, in `fftn` order.
+        m, `(L₁, L₂)`, in `fftn` order.
     alpha : float
         Weight α ≥ 0.
     x0 : Tensor, optional
@@ -415,8 +453,8 @@ def ncs_solve(
         Maximum number of Newton iterations.
     tol : float, optional
         Tolerance on max |∇f| (∇f is dimensionless). Default:
-        max(100 ε, 10⁻¹⁰) for the machine epsilon ε of the dtype (10⁻¹⁰
-        in float64, 1.2·10⁻⁵ in float32).
+        max(100 ε, 10⁻¹⁰) (10⁻¹⁰ in float64, 1.2·10⁻⁵ in float32). The
+        step test above applies as well.
     cg_iter : int
         Maximum number of conjugate-gradient iterations per Newton step.
 
@@ -447,8 +485,11 @@ def ncs_solve(
     x = data.clone() if x0 is None else x0.to(data).clone()
     if not bool((x + gamma > 0).all()):
         raise ValueError("x0 + gamma must be positive")
+    eps = torch.finfo(data.dtype).eps
+    step_tol = _STEP_TOL * eps * x.abs().amax((-2, -1)).clamp(min=1.0)
     batch = data.shape[0]
     active = torch.ones(batch, dtype=torch.bool, device=data.device)
+    settled = torch.zeros_like(active)
     n_iter = torch.zeros(batch, dtype=torch.long, device=data.device)
 
     def gradient(x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -512,9 +553,12 @@ def ncs_solve(
         x = torch.where(move[:, None, None], x + t[:, None, None] * p, x)
         n_iter += move.long()
         active &= accept  # a failed line search ends the image
+        small = (t * p.abs().amax((-2, -1)) <= step_tol) & (t == 1)
+        settled |= move & small
+        active &= ~settled
         g, s, qx = gradient(x)
     gmax = g.abs().amax((-2, -1))
-    return NcsResult(x, gmax, n_iter, gmax <= tol)
+    return NcsResult(x, gmax, n_iter, (gmax <= tol) | settled)
 
 
 # -- segmentation (Supplementary Note 7) -------------------------------------
@@ -579,12 +623,13 @@ def _ncs_tile(
     alpha: float,
     segment: int,
     solver: dict,
-) -> Tensor:
+) -> tuple[Tensor, int]:
     """NCS of the segments of an image that meet `core`.
 
     `data` and `gamma` are D and γ on a tile of the image (shape `full`)
     starting at `start`, which must hold the segments meeting `core`
-    (global slices) and their pads. Returns the estimate on `core`.
+    (global slices) and their pads. Returns the estimate on `core` and
+    the number of segments that did not converge.
     """
     sel, runs, index = [], [], []
     for a in range(2):
@@ -606,6 +651,7 @@ def _ncs_tile(
         if lo < 0 or hi >= data.shape[a]:
             raise ValueError("the tile does not hold the segments of core")
     out = data.new_empty(sel[0][1] - sel[0][0], sel[1][1] - sel[1][0])
+    failed = 0
     for ry, iy in zip(runs[0], index[0], strict=True):
         for rx, ix in zip(runs[1], index[1], strict=True):
             ny, nx = len(ry), len(rx)
@@ -614,6 +660,7 @@ def _ncs_tile(
             d = data[pick].reshape(ny * nx, sy, sx)
             g = gamma[pick].reshape(ny * nx, sy, sx)
             res = ncs_solve(d, g, mask_of((sy, sx)), alpha, **solver)
+            failed += int((~res.converged).sum())
             x = res.x[:, 1:-1, 1:-1].reshape(ny, nx, sy - 2, sx - 2)
             x = x.permute(0, 2, 1, 3).reshape(ny * (sy - 2), nx * (sx - 2))
             y0, x0 = ry[0][0] - sel[0][0], rx[0][0] - sel[1][0]
@@ -621,7 +668,24 @@ def _ncs_tile(
     return out[
         core[0].start - sel[0][0] : core[0].stop - sel[0][0],
         core[1].start - sel[1][0] : core[1].stop - sel[1][0],
-    ]
+    ], failed
+
+
+def _warn_not_converged(failed: int, total: int) -> None:
+    if failed:
+        warnings.warn(
+            f"NCS: {failed} of {total} segment solves did not reach "
+            "the tolerance (raise max_iter, or check the data); the result "
+            "is not the minimiser of the cost there",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _overhead(segment: int) -> float:
+    """Working memory of the solver, in units of the block: the ~35
+    arrays of the padded batch times the padding ratio (M + 2)²/M²."""
+    return 35.0 * (segment + 2) ** 2 / segment**2
 
 
 class _Settings(NamedTuple):
@@ -668,7 +732,7 @@ def _mask_cache(st: _Settings, like: Tensor) -> Callable:
 
     def mask_of(shape: tuple[int, int]) -> Tensor:
         if shape not in cache:
-            cache[shape] = ncs_mask(
+            m = cache[shape] = ncs_mask(
                 shape,
                 numerical_aperture=st.numerical_aperture,
                 wavelength=st.wavelength,
@@ -677,6 +741,16 @@ def _mask_cache(st: _Settings, like: Tensor) -> Callable:
                 dtype=like.dtype,
                 device=like.device,
             )
+            if not bool(m.any()):
+                warnings.warn(
+                    f"NCS: the OTF mask of a {shape[0]} × {shape[1]} "
+                    "segment is zero everywhere, so the result is the "
+                    "pre-corrected image there (check that wavelength and "
+                    "pixel_size are in the same unit, and the sampling "
+                    "rate)",
+                    RuntimeWarning,
+                    stacklevel=4,
+                )
         return cache[shape]
 
     return mask_of
@@ -730,9 +804,9 @@ def ncs(
        constants dropped (Eq. 7). σ_N is the noise contribution near
        and outside the OTF support (Supp. Note 4, Eqs. 2–3),
 
-           σ_N(μ) = ∑_k |μ̂(k) M(k)|²,
+           σ_N(μ) = ∑_k |μ̂(k) m(k)|²,
 
-       with μ̂ the DFT of the segment normalised by 1/L (unitary) and M
+       with μ̂ the DFT of the segment normalised by 1/L (unitary) and m
        the OTF mask ([`ncs_mask`][optix.denoise.utils.ncs_mask]), a
        raised-cosine high-pass filter around the cut-off 2NA/λ (Supp.
        Note 5, Eq. 4). α = 0.2 (Supp. Note 2, Fig. SS6).
@@ -740,13 +814,29 @@ def ncs(
     The output is μ, in electrons (the paper's "effective photon
     count"), or with `units="adu"` μ·g + o.
 
+    Symbols: μ, D, γ, σ_N, LL_s, f and α are the paper's; they are
+    x, ỹ, σ̃², E_N, LL_s, J and α in the
+    [notation](../concepts/notation.md) of optix, with m the OTF mask
+    (the paper's M) and M the segment size.
+
+    !!! warning "Negative estimates"
+        The cost is defined on μᵢ + γᵢ > 0, so μᵢ is bounded below by
+        −γᵢ only, not by 0. Estimates can be negative at pixels of large
+        read noise next to brighter neighbours: on the synthetic scene
+        of the documentation the minimum is −7.5 e⁻ with the noise-only
+        mask (0.86 e⁻ with the OTF-weighted mask). Clip the result before
+        taking a logarithm or a square root.
+
     !!! note "Choices not specified in the paper"
         * The optimiser: damped Newton with conjugate gradients, run to
-          max |∇f| ≤ `tol` ([`ncs_solve`][optix.denoise.utils.ncs_solve]).
+          the tolerance ([`ncs_solve`][optix.denoise.utils.ncs_solve]).
           The paper uses "a generic minimization routine such as
-          fminunc" for 15 iterations by default (Supp. Notes 2 and 13),
-          which stops before the minimum; this implementation returns
-          the minimiser of the paper's cost.
+          fminunc", reports that the regression converges within 20
+          iterations (Supp. Note 2), and its software runs 15 iterations
+          by default, with at least 10 recommended (Supp. Note 13). The
+          result is the minimiser of the paper's cost when every segment
+          converges; a `RuntimeWarning` gives the number of segments
+          that did not.
         * `segment` M = 16, in the recommended range 8–32 (Supp. Notes 2
           and 13). When M does not divide the image, the last segment
           along an axis takes the remaining pixels
@@ -763,7 +853,9 @@ def ncs(
         therefore depends on the data within
         [`ncs_halo`][optix.denoise.ncs_halo]`(segment)` = 2M − 1 pixels,
         and [`NCS`][optix.denoise.NCS] streams large arrays in blocks
-        with this halo, segmenting on the grid of the whole image.
+        with this halo, segmenting on the grid of the whole image. The
+        block-wise result agrees with the whole-image one to rounding,
+        not bitwise: a segment is solved in batches of different sizes.
 
     !!! references "References"
         1. Liu S, Mlodzianoski MJ, Hu Z, Ren Y, McElmurry K, Suter DM,
@@ -812,13 +904,25 @@ def ncs(
     max_iter : int
         Maximum number of Newton iterations per segment.
     tol : float, optional
-        Tolerance on max |∇f| (default: 10⁻¹⁰ in float64, 1.2·10⁻⁵ in
-        float32; see [`ncs_solve`][optix.denoise.utils.ncs_solve]).
+        Tolerance on max |∇f| (default: relative to the signal, see
+        [`ncs_solve`][optix.denoise.utils.ncs_solve]).
 
     Returns
     -------
     Tensor
         The corrected images, of the shape of `data`.
+
+    Raises
+    ------
+    ValueError
+        If the data or the maps are not finite, or a gain or a variance
+        is not positive.
+
+    Warns
+    -----
+    RuntimeWarning
+        Once per call, if segments did not converge, or if the mask of
+        a segment is zero everywhere.
     """
     st = _settings(
         numerical_aperture,
@@ -852,25 +956,33 @@ def ncs(
     full = tuple(int(n) for n in data.shape[-2:])
     core = (slice(0, full[0]), slice(0, full[1]))
     mask_of = _mask_cache(st, d)
-    x = torch.stack(
-        [
-            _ncs_tile(
-                di,
-                gi,
-                (0, 0),
-                full,
-                core,
-                mask_of,
-                st.alpha,
-                st.segment,
-                st.solver,
-            )
-            for di, gi in zip(
-                d.reshape(-1, *full), gamma.reshape(-1, *full), strict=True
-            )
-        ]
-    ).reshape(data.shape)
+    out, failed, total = [], 0, 0
+    for di, gi in zip(
+        d.reshape(-1, *full), gamma.reshape(-1, *full), strict=True
+    ):
+        xi, fi = _ncs_tile(
+            di,
+            gi,
+            (0, 0),
+            full,
+            core,
+            mask_of,
+            st.alpha,
+            st.segment,
+            st.solver,
+        )
+        out.append(xi)
+        failed += fi
+        total += _n_segments(full, st.segment)
+    _warn_not_converged(failed, total)
+    x = torch.stack(out).reshape(data.shape)
     return _output(x, st.units, offset, gain)
+
+
+def _n_segments(full: tuple[int, int], segment: int) -> int:
+    return len(segment_bounds(full[0], segment)) * len(
+        segment_bounds(full[1], segment)
+    )
 
 
 def ncs_halo(segment: int = 16) -> int:
@@ -925,7 +1037,16 @@ class NCS(Estimator):
         paper (`"otf-weighted"`, the default, or `"noise-only"`) and a
         segment size in the recommended range 8–32. Another α, a
         user-defined mask or another segment size are extensions.
-        `units`, `max_iter`, `tol` and `block` do not change the method.
+        `units`, `max_iter`, `tol` and `block` do not change the cost.
+        The result is the minimiser of that cost only where the solver
+        converges; `apply` emits a `RuntimeWarning` with the count of
+        segment solves that did not. The defaults are all the paper's, so
+        `faithful=False` changes nothing.
+
+    !!! warning "Negative estimates"
+        The estimate is bounded below by −γᵢ = −σᵢ²/gᵢ², not by 0, and
+        can be negative at pixels of large read noise next to brighter
+        neighbours (see [`ncs`][optix.denoise.ncs]).
 
     !!! references "References"
         1. Liu S, Mlodzianoski MJ, Hu Z, Ren Y, McElmurry K, Suter DM,
@@ -1029,16 +1150,22 @@ class NCS(Estimator):
         max_iter : int, optional
             Maximum number of Newton iterations per segment. Default: 50.
         tol : float, optional
-            Tolerance on max |∇f|. Default: 10⁻¹⁰ in float64,
-            1.2·10⁻⁵ in float32.
+            Tolerance on max |∇f|. Default: relative to the signal (see
+            [`ncs_solve`][optix.denoise.utils.ncs_solve]).
         block : sequence of int or None, optional
             Core block size per spatial axis (default: from the memory
-            budget). The result does not depend on it.
+            budget, with a working memory of about 35·(M + 2)²/M² times
+            the block). The result does not depend on it, to rounding.
         faithful, dtype, device, layout
             See [`Estimator`][optix.Estimator].
         """
         super().__init__(dtype=dtype, device=device, layout=layout)
         self._resolve(faithful, locals())
+        self._maps: tuple[Tensor, Tensor, Tensor] | None = None
+        self._configure()
+
+    def _configure(self) -> None:
+        """Settings and faithful flag from `self.options`."""
         o = self.options
         self._st = _settings(
             o["numerical_aperture"],
@@ -1051,12 +1178,17 @@ class NCS(Estimator):
             o["max_iter"],
             o["tol"],
         )
+        self._set_faithful()
+
+    def _set_faithful(self) -> None:
+        """The paper's cost: α = 0.2, a paper mask, 8 ≤ M ≤ 32."""
+        mask = self.options["mask"]
         self.is_faithful = (
             self._st.alpha == 0.2
-            and o["mask"] in ("otf-weighted", "noise-only")
+            and isinstance(mask, str)
+            and mask in ("otf-weighted", "noise-only")
             and 8 <= self._st.segment <= 32
         )
-        self._maps: tuple[Tensor, Tensor, Tensor] | None = None
 
     def fit(
         self,
@@ -1165,13 +1297,14 @@ class NCS(Estimator):
             data,
             self.options["block"],
             self.halo(),
-            overhead=24.0,
+            overhead=_overhead(st.segment),
             contiguous=True,
             align=chunks_of(out),
             dtype=self.dtype,
             device=self.device,
         )
         mask_of = None
+        failed = total = 0
         for chunk in chunks:
             x = chunk.data
             if not x.is_floating_point():
@@ -1185,7 +1318,7 @@ class NCS(Estimator):
                 for core, inner in zip(chunk.spatial, chunk.inner, strict=True)
             )
             core = tuple(chunk.spatial)
-            result = _ncs_tile(
+            result, fi = _ncs_tile(
                 d,
                 gamma,
                 start,
@@ -1196,6 +1329,8 @@ class NCS(Estimator):
                 st.segment,
                 st.solver,
             )
+            failed += fi
+            total += _n_core_segments(core, full, st.segment)
             if st.units == "adu":
                 result = _output(
                     result,
@@ -1205,7 +1340,23 @@ class NCS(Estimator):
                 )
             chunk.store(out, result)
         flush(out)
+        _warn_not_converged(failed, total)
         return out
 
     def _load_extra_state(self, state: dict[str, object]) -> None:
+        self._configure()
         self._set_sensor(self.estimates.get("sensor"))
+
+
+def _n_core_segments(
+    core: tuple[slice, slice], full: tuple[int, int], segment: int
+) -> int:
+    """Segments that meet `core` (solved for the block)."""
+    n = 1
+    for a in range(2):
+        n *= sum(
+            1
+            for b in segment_bounds(full[a], segment)
+            if b[0] < core[a].stop and b[1] > core[a].start
+        )
+    return n
