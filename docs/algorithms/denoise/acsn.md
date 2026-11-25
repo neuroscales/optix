@@ -25,8 +25,8 @@ parameters of its own.
 Use it for widefield, light-sheet or other images of an sCMOS camera, when the
 numerical aperture, the emission wavelength and the pixel size in the image
 plane are known, the pixels sample the OTF finely enough (the pixel is smaller
-than $\lambda_0 / (4\,\mathrm{NA})$, so that the Nyquist frequency of the frame lies above the OTF
-cutoff), and a calibration of the camera (offset and gain per pixel, for
+than $1.1\,\lambda_0 / (4\,\mathrm{NA})$, so that the camera cutoff, 1.1 times the Nyquist
+frequency of the frame, lies above the OTF cutoff), and a calibration of the camera (offset and gain per pixel, for
 instance from [`SCMOSCalibration`](../sensor/scmos-calibration.md)) is at hand.
 It does not need the noise level: it estimates it. It is not a
 deconvolution (see [Richardson–Lucy](../deconv/richardson-lucy.md)), it assumes the
@@ -41,7 +41,8 @@ The estimator is [`ACsN`][optix.denoise.ACsN] and the function
 as a [`SensorEstimate`](../../reference/estimates.md), `apply` returns the
 denoised frames in electrons, and sets `sigma_` and `quality_`. The noise
 estimate, the profile of the filter and the quality score are available as
-building blocks in `optix.denoise.utils`.
+building blocks in `optix.denoise.utils`, and the halo of the blocks of the
+sparse filter is given by [`acsn_halo`][optix.denoise.acsn_halo].
 
 ## Image formation (optics)
 
@@ -398,7 +399,8 @@ correlation between the maps, so that it is high for a good result:
     Q\text{-score} = -\rho(N, P)
     $$
 
-The statistics $\sigma_a$, $\sigma_b$, $\sigma_{ab}$ are local (see choice 6 below), the correlation is the
+The statistics $\sigma_a$, $\sigma_b$, $\sigma_{ab}$ are local (see choice 5 of
+[Other choices not in the paper](#other-choices-not-in-the-paper)), the correlation is the
 Pearson coefficient over the pixels of the maps, and $Q \in [-1, 1]$. A higher score is a better
 result. It is computed for each frame, on $\mathbf{m}$ and the denoised frame, and stored
 in `quality_`.
@@ -423,7 +425,7 @@ from it (see [What is not implemented](#what-is-not-implemented)).
 **Input:** frames $\mathbf{y} \in \mathbb{R}^{\lvert\Omega\rvert}$ (ADU), each of $H \times W$ pixels with
 $H, W \ge 8$; offset $\mathbf{o}$ and gain $\mathbf{g}$ (scalars or maps; default 0 and 1,
 for data already in electrons); $\mathrm{NA}$, $\lambda_0$, $d_{\mathrm{px}}$;
-`ratio = "1d"`, `sigma_fit = "histogram"`, `camera_cutoff = 1` \
+`ratio = "1d"`, `sigma_fit = "histogram"`, `camera_cutoff = 1.1` \
 **Output:** denoised frames $\hat{\mathbf{x}}$, in electrons, of the shape of the data;
 $\sigma_{\mathrm{N}}$ and $Q$ of each frame.
 
@@ -432,14 +434,17 @@ Each frame, on its own:
 1. **Correct** the fixed pattern: $\mathbf{m} = (\mathbf{y} - \mathbf{o}) / \mathbf{g}$.
 2. **Estimate the noise.**
     1. $\nu_c = 2\,\mathrm{NA}/\lambda_0$ and $\bar\nu = \texttt{camera\_cutoff} / (2 d_{\mathrm{px}})$
-       (an error if $\nu_c \ge \bar\nu$);
+       (an error if $\nu_c \ge \bar\nu$, which names the largest pixel size,
+       $\lambda_0 \cdot \texttt{camera\_cutoff} / (4\,\mathrm{NA})$);
     2. high-pass: $\mathbf{m}_{\mathrm{hp}}$ keeps the DFT frequencies with $\lvert\boldsymbol{\nu}\rvert > \nu_c$;
     3. $\sigma_{\mathrm{hp}}$: the magnitudes $\lvert\mathbf{m}_{\mathrm{hp}}\rvert$ are binned in 10 equal bins between their minimum and maximum, and
        $a_0 \exp(-x^2 / (2\sigma_{\mathrm{hp}}^2))$ is fitted to the counts at the centres
-       of the bins by nonlinear least squares;
+       of the bins by nonlinear least squares ($\sigma_{\mathrm{hp}} = 0$ if all magnitudes
+       are equal);
     4. $\sigma_{\mathrm{N}} = \varrho\,\sigma_{\mathrm{hp}}$ with $\varrho = \sqrt{\bar\nu / (\bar\nu - \nu_c)}$.
 3. **Scale** to the range of 8 bits: $s = 255 / (\max\mathbf{m} - \min\mathbf{m})$,
-   $\tilde{\mathbf{m}} = s\,(\mathbf{m} - \min\mathbf{m})$, $\tilde\sigma = s\,\sigma_{\mathrm{N}}$.
+   $\tilde{\mathbf{m}} = s\,(\mathbf{m} - \min\mathbf{m})$, $\tilde\sigma = s\,\sigma_{\mathrm{N}}$
+   (for every range; see choice 3 below).
    A constant frame, or $\sigma_{\mathrm{N}} \le 0$, is returned unchanged.
 4. **First estimate.** For each reference block on the grid of step 3:
     1. **group**: the blocks of the $19 \times 19$ window with $d \le 2500$, the
@@ -464,18 +469,42 @@ Each frame, on its own:
 ## Faithful mode and extensions
 
 `faithful=True` (the default) is the method of the paper: the noise ratio of
-Supplementary Eq. 11, $\sigma_{\mathrm{hp}}$ from the histogram, $\bar\nu$ at the
-Nyquist frequency, no hot-pixel removal, $\sigma_{\mathrm{N}}$ estimated, and the
-filter of the table above. The paper leaves a number of choices open. The code
-makes them as follows, in two lists: those taken from the authors' code, and the
-others.
+Supplementary Eq. 11, $\sigma_{\mathrm{hp}}$ from the histogram, $\bar\nu$ at 1.1 times the
+Nyquist frequency (the value of the ACsN code), no hot-pixel removal,
+$\sigma_{\mathrm{N}}$ estimated, and the filter of the table above. The paper leaves a
+number of choices open. The code makes them as follows, in two lists: those taken
+from the authors' code, and the others.
+
+In faithful mode `sigma_` is not the standard deviation of the noise: the 1-D
+ratio makes it about 1.2 to 1.9 times larger, depending on $\nu_c / \bar\nu$
+(see [The 2-D noise ratio](#the-2-d-noise-ratio)). It is the level the filter
+uses, not a measurement of the read noise or of the SNR.
+
+!!! warning "Hot pixels"
+    With `hotspot=False`, the faithful setting, a single hot pixel or cosmic ray
+    makes $\sigma_{\mathrm{N}}$, and so the whole filter, wrong. The 10 bins of the
+    histogram span the range of $\lvert\mathbf{m}_{\mathrm{hp}}\rvert$, which one outlier
+    stretches until the whole noise distribution falls in the first bin, and the
+    same pixel sets the maximum of the mapping to $[0, 255]$. On a $128 \times 128$
+    simulated frame (true $\sigma = 4.17$ e⁻, `ratio="area"`), with one pixel raised:
+
+    | Added to one pixel (e⁻) | $\hat\sigma/\sigma$, `"histogram"` | $\hat\sigma/\sigma$, `"std"` | $\hat\sigma/\sigma$, `"histogram"` after `hotspot` |
+    |---|---|---|---|
+    | 50 | 0.98 | 1.01 | 0.91 |
+    | 200 | 1.44 | 1.07 | 0.93 |
+    | 1000 | 6.3 | 2.1 | 0.96 |
+    | 5000 | 31 | 9.4 | 0.96 |
+
+    On real camera data use `hotspot=True` (as `faithful=False` does), or correct
+    the hot pixels first. Its cost is a $\hat\sigma$ that reads 4 to 9 % low, because
+    the rule of 3 standard deviations also clips the tail of the Gaussian.
 
 ### Choices from the ACsN code, not in the paper
 
-The code of the authors ([ShuJiaLab/ACsN](https://github.com/ShuJiaLab/ACsN),
-BSD 3-Clause; its notice is kept in the header of `_acsn.py`) was read to settle these
-details. Its sparse filter is not used: the filtering runs on the BM3D engine of
-optix.
+These details follow the code of the authors
+([ShuJiaLab/ACsN](https://github.com/ShuJiaLab/ACsN), BSD 3-Clause; its licence is
+reproduced in the header of `_acsn.py`). The sparse filter runs on the BM3D engine
+of optix. Where optix departs from that code, the item says so.
 
 1. **The fit of $\sigma_{\mathrm{hp}}$.** The paper takes it from "the intensity
    distribution of the pixel values in a high-pass filtered image" (Supplementary
@@ -490,18 +519,28 @@ optix.
 3. **The mapping to 8 bits.** The paper takes $\tau = 2500$ for $\sigma_{\mathrm{N}} < 40$, the
    value of BM3D for 8-bit images
    ([Dabov et al. 2007](https://doi.org/10.1109/TIP.2007.901238)), and does not say how
-   the data are brought to that range. Each frame is mapped to $[0, 255]$ by its own
-   minimum and maximum before the sparse filter, with $\sigma_{\mathrm{N}}$ scaled alike,
-   and mapped back afterwards. The result therefore depends on the extremes of the frame.
+   the data are brought to that range. As in the code, each frame is mapped to
+   $[0, 255]$ by its own minimum and maximum before the sparse filter, and mapped
+   back afterwards. The result therefore depends on the extremes of the frame.
+   $\sigma_{\mathrm{N}}$ is always scaled with the frame. The code scales it only when
+   the range of the frame exceeds 255; for a narrower range it passes
+   $\sigma_{\mathrm{N}}$ in electrons, which is $(\max\mathbf{m} - \min\mathbf{m})/255$
+   times the scaled value. For the low-light frames the paper targets (ranges of
+   about 34 to 128 e⁻), the code therefore filters with a $\tilde\sigma$ 0.13 to 0.5
+   times the one used here.
 4. **Hot-pixel removal.** The code replaces the pixels whose high-pass magnitude
    exceeds $\operatorname{mean}\lvert\mathbf{m}_{\mathrm{hp}}\rvert + 3\operatorname{sd}\lvert\mathbf{m}_{\mathrm{hp}}\rvert$ by the $3 \times 3$ median
-   of the frame, before the noise estimate. It is on by default there and is not
-   in the paper. Here it is the extension `hotspot=True`.
+   of the frame, clamps the frame, and recomputes the high-pass image for the noise
+   estimate. It is on by default there and is not in the paper. Here it is the
+   extension `hotspot=True`, which also replaces the pixels and recomputes the
+   high-pass image after the replacement (there is no clamp, see choice 6). It is
+   part of the recommended setting (see the warning above).
 5. **The camera cutoff.** The paper calls $\bar f$ the cutoff of the camera and
    gives no value. The code uses $1.1/(2 d_{\mathrm{px}})$, 1.1 times the Nyquist
-   frequency. optix defaults to the Nyquist frequency (`camera_cutoff=1`);
-   `camera_cutoff=1.1` is the value of the code. For NA 1.4, $\lambda_0 = 0.7$ µm and
-   $d_{\mathrm{px}} = 0.1$ µm it changes $\varrho$ from 2.24 to 1.91.
+   frequency, and so does the faithful mode (`camera_cutoff=1.1`).
+   `camera_cutoff=1` puts $\bar\nu$ at the Nyquist frequency. For NA 1.4,
+   $\lambda_0 = 0.7$ µm and $d_{\mathrm{px}} = 0.1$ µm, $\varrho$ is 1.91 with 1.1 and
+   2.24 with 1.
 6. **Clamps.** The code clamps the gain map to values $\ge 1$ and the corrected
    frame to values $> 0$. Neither is done here: the gain of optix is in ADU per
    electron and may be below 1, and a negative value of $\mathbf{m}$ (a pixel
@@ -509,18 +548,44 @@ optix.
 7. **The neighbours of the video trigger.** The paper compares a frame with "its 5 nearest
    neighbors"; in the code they are the 5 *following* frames
    ([`temporal_psnr`][optix.denoise.utils.temporal_psnr]).
+8. **Under-sampled frames.** The code clips the radius of the filter at the
+   Nyquist frequency and takes $\lvert R - R_2\rvert$ (the distance between the OTF
+   radius and the camera cutoff, in DFT samples) in the ratio, so it runs on frames
+   whose OTF cutoff lies above the camera cutoff. There the corners of the DFT hold
+   aliased signal and the estimate has no meaning; optix raises a `ValueError`
+   that names the largest pixel size, $\lambda_0 \cdot \texttt{camera\_cutoff} / (4\,\mathrm{NA})$.
+   The under-sampled cases of Supplementary Note 3.5 (sampling rates from 1.2 to 2.9,
+   Rayleigh resolution over pixel size, where $\nu_c$ below the camera cutoff needs a
+   rate above about 2.2) are outside what this implementation accepts.
+9. **The radius of the OTF on the DFT grid.** The code computes the radius in DFT
+   samples from the number of rows only, $R = 2\,\mathrm{NA}/\lambda_0 \cdot d_{\mathrm{px}} \cdot H$,
+   and filters a circle in index space, which is an ellipse in frequency for a
+   frame that is not square. optix uses the physical radial frequency
+   $\lvert\boldsymbol{\nu}\rvert$ of each DFT sample, which is correct for any shape.
 
 ### Other choices not in the paper
 
 1. **Transforms and the second run.** The paper does not name the transforms
-   $\tau^h_{3D}$ and $\tau^w_{3D}$, nor the parameters of the second run beyond the
-   group of 8 patches. They are those of BM3D's Normal Profile, which the paper
-   cites: bior1.5 on the blocks of the first run and DCT on those of the second, the Haar
-   transform across the group (the construction is described in
-   [choice 2 of BM3D](bm3d.md#choices-not-in-the-papers)), $\tau = 400$ with
-   a strict test $d < \tau$ in the second run, and the weight
-   $1/(\sigma_{\mathrm{N}}^2\lVert\mathbf{W}\rVert_2^2)$ of Eq. 11 of
-   [Dabov et al. (2007)](https://doi.org/10.1109/TIP.2007.901238).
+   $\tau^h_{3D}$ and $\tau^w_{3D}$. They are those of BM3D's Normal Profile, which
+   the paper cites: bior1.5 on the blocks of the first run and DCT on those of the
+   second, the Haar transform across the group (the construction is described in
+   [choice 2 of BM3D](bm3d.md#choices-not-in-the-papers)). Of the second run,
+   Supplementary Note 2.4 says: "This second-time process is the same as the first
+   one with the only difference being the use of Wiener filtering". The second run
+   departs from that text: it takes BM3D's $\tau = 400$ with the strict test
+   $d < \tau$, the DCT, the distance between the spectra of the first estimate,
+   and the weight $1/(\sigma_{\mathrm{N}}^2\lVert\mathbf{W}\rVert_2^2)$
+   ([Dabov et al. 2007, Table I and Eq. 11](https://doi.org/10.1109/TIP.2007.901238)),
+   in place of the first run's $\tau = 2500$, pixel distance and bior1.5. On a
+   nearly noise-free first estimate, $\tau = 2500$ would accept almost any block;
+   with at most 8 blocks per group, the 8 closest are kept either way. The weight
+   is one number per frame times $\lVert\mathbf{W}\rVert_2^{-2}$, so its factor
+   $\sigma_{\mathrm{N}}^{-2}$ cancels in the aggregation.
+   The paper gives $\tau = 2500$ "for σN < 40" (Supplementary Note 3.1) and
+   nothing above. It is used here for every $\tilde\sigma$, whereas BM3D
+   switches above 40 to a second profile, with $\tau = 5000$ in the first run
+   (Dabov et al. 2007, Table I). After the mapping to 8 bits, $\tilde\sigma > 40$
+   occurs in very dim frames.
 2. **Group sizes.** The group has at most 8 blocks; its size is rounded down to a
    power of two, as the Haar transform needs.
 3. **Reference grid, search window and ties.** As in
@@ -533,19 +598,18 @@ optix.
    exempt the DC, so it is thresholded like the others, as in BM3D (choice 8 there).
    The method is not invariant to an offset of the intensities; after the mapping of
    choice 3 of the list above, the darkest pixel of the frame is 0.
-5. **The camera cutoff $\bar\nu$ is the Nyquist frequency** (see the choice 5 above for the code's value).
-6. **The window of the Q-score.** The paper does not give the local
+5. **The window of the Q-score.** The paper does not give the local
    statistics of Eq. 18. They use the window of the SSIM index
    ([Wang et al. 2004](https://doi.org/10.1109/TIP.2003.819861)): a Gaussian of
    $11 \times 11$ pixels with $\sigma = 1.5$, at the positions where the window lies
    entirely inside the frame, and $c = (0.03\,L)^2 / 2$, with $L$ the range of
    $\mathbf{m}$. A constant map has no correlation and gives $Q = 0$.
-7. **A noise level that varies over the frame.** The paper has one $\sigma_{\mathrm{N}}$. With a
+6. **A noise level that varies over the frame.** The paper has one $\sigma_{\mathrm{N}}$. With a
    gain and a read noise per pixel and a shot noise that follows the signal,
    $\sigma_{\mathrm{N}}^2$ is the mean variance over the frame, estimated from the high
    frequencies of the whole frame. The filter then uses this level at
    every pixel.
-8. **Whole frames.** The noise estimate needs the Fourier transform of a whole
+7. **Whole frames.** The noise estimate needs the Fourier transform of a whole
    frame, so a frame is read at once (see
    [Memory and streaming](#memory-and-streaming)). A frame smaller than $8 \times 8$ raises an error.
 
@@ -562,25 +626,35 @@ and $n_c$ the number with $\lvert\boldsymbol{\nu}\rvert > \nu_c$, the exact rati
 noise is $\sigma_{\mathrm{N}} = \sqrt{n / n_c}\;\sigma_{\mathrm{hp}}$
 ([`noise_ratio`][optix.denoise.utils.noise_ratio] with `ratio="area"`).
 
-The 1-D ratio is larger than this one, and the factor grows with $\nu_c / \bar\nu$
-(a frame of $256^2$ pixels, Nyquist frequency taken for $\bar\nu$):
+The 1-D ratio is larger than this one, and the factor grows with $\nu_c$
+(a frame of $256^2$ pixels; $\nu_c$ in units of the Nyquist frequency
+$1/(2 d_{\mathrm{px}})$):
 
-| $\nu_c / \bar\nu$ | 0.3 | 0.5 | 0.7 | 0.8 | 0.9 |
-|---|---|---|---|---|---|
-| $\varrho$, 1-D (`"1d"`) | 1.20 | 1.41 | 1.83 | 2.24 | 3.16 |
-| $\varrho$, 2-D (`"area"`) | 1.04 | 1.12 | 1.28 | 1.42 | 1.66 |
-| overestimate by the 1-D ratio | 1.15 | 1.27 | 1.43 | 1.58 | 1.91 |
+| $\nu_c$ / Nyquist | 0.3 | 0.5 | 0.7 | 0.8 | 0.9 | 1.0 | 1.05 |
+|---|---|---|---|---|---|---|---|
+| $\nu_c / \bar\nu$, `camera_cutoff=1.1` | 0.27 | 0.45 | 0.64 | 0.73 | 0.82 | 0.91 | 0.95 |
+| $\varrho$, 1-D (`"1d"`), `camera_cutoff=1.1` | 1.17 | 1.35 | 1.66 | 1.91 | 2.35 | 3.32 | 4.69 |
+| $\varrho$, 2-D (`"area"`) | 1.04 | 1.12 | 1.28 | 1.42 | 1.66 | 2.16 | 2.53 |
+| overestimate by the 1-D ratio, `camera_cutoff=1.1` | 1.13 | 1.21 | 1.30 | 1.35 | 1.41 | 1.54 | 1.85 |
+| overestimate by the 1-D ratio, `camera_cutoff=1` | 1.15 | 1.27 | 1.43 | 1.58 | 1.91 | error | error |
 
-For $\nu_c / \bar\nu = 0.8$ (NA 1.4, $\lambda_0 = 0.7$ µm, $d_{\mathrm{px}} = 0.1$ µm, the
-setting of the paper's simulations and of the tests), the 1-D formula
-overestimates $\sigma_{\mathrm{N}}$ by a factor of about 1.5 on simulated white noise
+The 2-D ratio does not depend on $\bar\nu$: the frame records frequencies up to
+$\sqrt{2}$ times the Nyquist frequency in the corners of the DFT.
+
+For $\nu_c = 0.8$ times the Nyquist frequency (NA 1.4, $\lambda_0 = 0.7$ µm,
+$d_{\mathrm{px}} = 0.1$ µm, the setting of the paper's simulations and of the tests),
+the 1-D formula overestimates $\sigma_{\mathrm{N}}$ by 1.35 for white noise (1.58 with
+`camera_cutoff=1`); on the simulated frames the net factor is 1.28 to 1.31 (1.50 to
+1.52 with `camera_cutoff=1`), because the fit of $\sigma_{\mathrm{hp}}$ is 3 to 5 % low
 (see [Results on synthetic data](#results-on-synthetic-data)). The overestimate is
 a property of the formula, not of the fit of $\sigma_{\mathrm{hp}}$. The faithful
-mode uses the 1-D ratio, as the paper does. `ratio="area"` uses the exact 2-D value. The
-filter does not need the noise level to be exact: a $\sigma_{\mathrm{N}}$ 1.5 times
-too large thresholds more coefficients and smooths more, and on the simulated
-frames the PSNR of the result changes by less than 0.6 dB (table below); but
-the quantitative use of $\sigma_{\mathrm{N}}$ (`sigma_`) is off by that factor.
+mode uses the 1-D ratio, as the paper does, and $\lambda_{\mathrm{ht}} = 4.0$
+(Supplementary Table 6) was chosen with that estimate in the loop. `ratio="area"`
+uses the exact 2-D value. The filter does not need the noise level to be exact: a
+$\sigma_{\mathrm{N}}$ 1.3 times too large thresholds more coefficients and smooths more,
+and on the simulated frames the PSNR of the result changes by less than 0.4 dB
+(table below); but the quantitative use of $\sigma_{\mathrm{N}}$ (`sigma_`) is off by
+that factor.
 
 ### Extensions (opt-in, not faithful)
 
@@ -588,11 +662,12 @@ the quantitative use of $\sigma_{\mathrm{N}}$ (`sigma_`) is off by that factor.
 |---|---|---|---|
 | `ratio` | the noise ratio $\varrho$: `"1d"` (Supplementary Eq. 11) or `"area"` (exact for 2-D white noise) | `"1d"` | `"area"` |
 | `sigma_fit` | $\sigma_{\mathrm{hp}}$: `"histogram"` (the code) or `"std"`, the root mean square of $\mathbf{m}_{\mathrm{hp}}$ | `"histogram"` | `"histogram"` |
-| `camera_cutoff` | $\bar\nu$, in units of the Nyquist frequency (1.1 in the code) | 1.0 | 1.0 |
-| `hotspot` | hot-pixel removal of the code (choice 4 above) | `False` | `False` |
+| `camera_cutoff` | $\bar\nu$, in units of the Nyquist frequency (1.1, from the code, not in the paper) | 1.1 | 1.1 |
+| `hotspot` | hot-pixel removal of the code (choice 4 above; see the warning on hot pixels) | `False` | `True` |
 | `sigma` | a known $\sigma_{\mathrm{N}}$, in electrons, in place of the estimate | `None` | `None` |
 
-`faithful=False` selects `ratio="area"` and keeps the other values. Any value that
+`faithful=False` selects `ratio="area"` and `hotspot=True`, and keeps the other
+values. Any value that
 differs from the faithful one sets `is_faithful` to false. The other keywords do
 not change the method:
 
@@ -634,8 +709,18 @@ $2\lfloor N_S/2\rfloor + N - 1 = 25$ pixels, and the halo of the two runs is 50 
 The core of a block is sized from the memory budget of
 [`optix.config`](../../reference/configuration.md), or set with `block`, and the result equals
 the computation on the whole frame, up to floating-point rounding, for any
-`block`. Within a block, the spectra of all blocks are kept: 64 values per pixel,
-and twice that in the second run.
+`block`. Within a block, two sets of 64 values per pixel are kept in both runs:
+in the first, the bior1.5 spectra for the filter and the samples of the blocks for
+the matching; in the second, the spectra of the noisy image and of the first
+estimate. The halo, 50 pixels, is
+[`acsn_halo`][optix.denoise.acsn_halo] (or `ACsN.halo()`). It is the halo of the
+blocks *inside* a frame: a frame cannot be cut into tiles denoised separately,
+because $\sigma_{\mathrm{N}}$ and the mapping to $[0, 255]$ come from the whole frame.
+
+The estimator budgets about 16 arrays of the size of a frame, in its dtype, for each
+frame it processes: the complex spectrum and the high-pass image of the noise
+estimate, and the local statistics of the quality score, which is computed in the
+dtype of the frame.
 
 The cost per pixel and run is about $N_S^2 N^2 / N_{\text{step}}^2 \approx 2600$
 operations, a quarter of the Normal Profile of BM3D, whose window is larger. The noise estimate costs an FFT and a
@@ -652,13 +737,8 @@ $\nu_c = 4$ cycles/µm against a Nyquist frequency of 5), with a signal of 5 to
 ```pycon
 >>> import math
 >>> import torch
->>> from optix.denoise import ACsN, acsn
->>> from optix.denoise.utils import (
-...     acsn_profile,
-...     noise_ratio,
-...     otf_cutoff,
-...     stage_halo,
-... )
+>>> from optix.denoise import ACsN, acsn, acsn_halo
+>>> from optix.denoise.utils import noise_ratio, otf_cutoff
 >>> from optix.estimates import SensorEstimate
 >>> from optix.models import phantoms, simulate_sensor
 >>> na, wavelength, pixel = 1.4, 0.7, 0.1
@@ -685,7 +765,9 @@ $\nu_c = 4$ cycles/µm against a Nyquist frequency of 5), with a signal of 5 to
 The two noise ratios, for this OTF and this pixel size:
 
 ```pycon
->>> round(noise_ratio((128, 128), pixel, nu_c), 2)  # 1-D, the paper
+>>> round(noise_ratio((128, 128), pixel, nu_c), 2)  # 1-D, faithful
+1.91
+>>> round(noise_ratio((128, 128), pixel, nu_c, camera_cutoff=1.0), 2)
 2.24
 >>> round(noise_ratio((128, 128), pixel, nu_c, ratio="area"), 2)  # 2-D
 1.42
@@ -704,11 +786,12 @@ True
 ...     return float(10 * torch.log10(x.max() ** 2 / (a - x).square().mean()))
 >>> round(psnr(noisy)), round(psnr(den))
 (25, 36)
->>> round(float(est.sigma_) / true_sigma, 1)  # the 1-D ratio: about 1.5 too large
-1.5
+>>> round(float(est.sigma_) / true_sigma, 1)  # the 1-D ratio: too large
+1.3
 ```
 
-With `faithful=False` the exact 2-D ratio is used, and $\sigma_{\mathrm{N}}$ is recovered:
+With `faithful=False` the exact 2-D ratio is used, and $\sigma_{\mathrm{N}}$ is
+recovered (to the 3 to 5 % of the fit); hot pixels are also removed:
 
 ```pycon
 >>> area = ACsN(na=na, wavelength=wavelength, pixel_size=pixel, faithful=False)
@@ -739,10 +822,13 @@ True
 
 The sparse filter is streamed in blocks with a halo. Here a frame of
 $128 \times 128$ pixels is cut into blocks of $50 \times 60$ pixels; the result
-does not change, up to rounding, with the size of the blocks.
+does not change, up to rounding, with the size of the blocks. A block reads its
+core plus the halo of 50 pixels on each side, so with this frame every block
+covers the whole frame; blocks become partial only for frames larger than the
+core plus 100 pixels (the tests check that case too).
 
 ```pycon
->>> sum(stage_halo(s) for s in acsn_profile())
+>>> acsn_halo()
 50
 >>> whole = acsn(raw, na, wavelength, pixel, offset=100.0, gain=2.0)
 >>> parts = acsn(
@@ -768,16 +854,19 @@ background, in electrons. Each cell is the mean over 5 realisations of the
 noise, in float64. $\sigma$ is the root mean square of the true noise of $\mathbf{m}$, the shot
 noise of the signal plus the read noise in electrons; PSNR is in dB, with the maximum of the
 noise-free frame as the peak; "true $\sigma$" is the filter run with $\sigma_{\mathrm{N}} = \sigma$ given by `sigma=`.
+`"1d"` is the faithful mode (`camera_cutoff=1.1`) and `"area"` the same with
+`ratio="area"`, both without hot-pixel removal.
 
 | Peak (e⁻) | $\hat\sigma/\sigma$, `"1d"` | $\hat\sigma/\sigma$, `"area"` | PSNR, noisy | PSNR, `"1d"` | PSNR, `"area"` | PSNR, true $\sigma$ | $Q$, `"1d"` | $Q$, `"area"` |
 |---|---|---|---|---|---|---|---|---|
-| 10 | 1.50 | 0.95 | 13.5 | 27.9 | 28.5 | 28.5 | −0.55 | −0.52 |
-| 30 | 1.52 | 0.97 | 20.6 | 33.5 | 33.2 | 33.3 | −0.18 | −0.07 |
-| 100 | 1.52 | 0.96 | 27.2 | 37.5 | 37.3 | 37.4 | 0.10 | 0.18 |
+| 10 | 1.28 | 0.95 | 13.5 | 28.3 | 28.5 | 28.5 | −0.54 | −0.52 |
+| 30 | 1.31 | 0.97 | 20.6 | 33.6 | 33.2 | 33.3 | −0.15 | −0.07 |
+| 100 | 1.30 | 0.96 | 27.2 | 37.6 | 37.3 | 37.4 | 0.12 | 0.18 |
 
-The standard deviation over the realisations is 0.01 to 0.02 for $\hat\sigma/\sigma$ and below 0.6 dB for the PSNR.
-The 1-D ratio overestimates the noise by 1.50 to 1.52 on every row, and the 2-D ratio is 3 to 5 % below the true level. The
-PSNR of the three variants is within 0.6 dB, and the 1-D ratio gives the lowest
+The standard deviation over the realisations is 0.01 for $\hat\sigma/\sigma$ and at most 0.5 dB for the PSNR.
+The 1-D ratio overestimates the noise by 1.28 to 1.31 on every row (1.50 to 1.52 with
+`camera_cutoff=1`), and the 2-D ratio is 3 to 5 % below the true level. The
+PSNR of the three variants is within 0.4 dB, and the 1-D ratio gives the lowest
 PSNR at the lowest peak and the highest at the others, where more smoothing helps on this
 scene. These numbers describe the synthetic frames only. In `float32` and in `float64` the PSNR
 agrees to 0.05 dB, and the blocks of the sparse filter give the result of the whole frame to 1e-9 in `float64`.
@@ -796,13 +885,13 @@ agrees to 0.05 dB, and the blocks of the sparse filter give the result of the wh
        [doi:10.1109/TIP.2007.901238](https://doi.org/10.1109/TIP.2007.901238)
     3. Maggioni M, Boracchi G, Foi A, Egiazarian K. *Video denoising,
        deblocking, and enhancement through separable 4-D nonlocal spatiotemporal
-       transforms.* IEEE Trans Image Process **21**:3952–3966, 2012.
+       transforms.* IEEE Trans Image Process **21**(9):3952–3966, 2012.
        [doi:10.1109/TIP.2012.2199324](https://doi.org/10.1109/TIP.2012.2199324)
     4. Maggioni M, Sánchez-Monge E, Foi A. *Joint removal of random and
        fixed-pattern noise through spatiotemporal video filtering.* IEEE Trans
-       Image Process **23**:4282–4296, 2014.
+       Image Process **23**(10):4282–4296, 2014.
        [doi:10.1109/TIP.2014.2345261](https://doi.org/10.1109/TIP.2014.2345261)
-    5. Kong X, Li K, Yang Q, Wenyin L, Yang M-H. *A new image quality metric for
+    5. Kong X, Li K, Yang Q, Liu W, Yang M-H. *A new image quality metric for
        image auto-denoising.* Proc IEEE Int Conf Comput Vis, 2888–2895, 2013.
        [doi:10.1109/ICCV.2013.359](https://doi.org/10.1109/ICCV.2013.359)
     6. Wang Z, Bovik AC, Sheikh HR, Simoncelli EP. *Image quality assessment:
@@ -837,6 +926,7 @@ agrees to 0.05 dB, and the blocks of the sparse filter give the result of the wh
           title   = {Video denoising, deblocking, and enhancement through separable {4-D} nonlocal spatiotemporal transforms},
           journal = {IEEE Transactions on Image Processing},
           volume  = {21},
+          number  = {9},
           pages   = {3952--3966},
           year    = {2012},
           doi     = {10.1109/TIP.2012.2199324},
@@ -846,12 +936,13 @@ agrees to 0.05 dB, and the blocks of the sparse filter give the result of the wh
           title   = {Joint removal of random and fixed-pattern noise through spatiotemporal video filtering},
           journal = {IEEE Transactions on Image Processing},
           volume  = {23},
+          number  = {10},
           pages   = {4282--4296},
           year    = {2014},
           doi     = {10.1109/TIP.2014.2345261},
         }
         @inproceedings{kong2013new,
-          author    = {Kong, Xiangwei and Li, Kuan and Yang, Qingxiong and Wenyin, Liu and Yang, Ming-Hsuan},
+          author    = {Kong, Xiangfei and Li, Kuan and Yang, Qingxiong and Liu, Wenyin and Yang, Ming-Hsuan},
           title     = {A new image quality metric for image auto-denoising},
           booktitle = {Proceedings of the IEEE International Conference on Computer Vision},
           pages     = {2888--2895},

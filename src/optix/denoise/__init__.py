@@ -9,7 +9,7 @@ block matching, the two filtering stages) are in `optix.denoise.utils`.
 """
 
 from . import utils
-from ._acsn import ACsN, acsn
+from ._acsn import ACsN, acsn, acsn_halo
 from ._bm3d import BM3D, BM4D, bm3d, bm3d_halo, bm4d, bm4d_halo
 from ._nlm import NLMeans, nl_means, nl_means_halo
 
@@ -19,6 +19,7 @@ __all__ = [
     "BM4D",
     "NLMeans",
     "acsn",
+    "acsn_halo",
     "bm3d",
     "bm3d_halo",
     "bm4d",

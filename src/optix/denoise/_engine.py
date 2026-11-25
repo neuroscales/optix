@@ -71,7 +71,10 @@ class Stage:
         Hard-thresholding stage: match on the blocks' samples,
         d = ‖Z_{x_R} − Z_x‖²/K, instead of their spectra (ACsN,
         Mandracchia et al. 2020, Supplementary Eq. (12)). Same as the
-        spectra for an orthonormal transform.
+        spectra for an orthonormal transform. It replaces the λ₂D
+        pre-filter, so `lam2d` must be 0 (a `ValueError` otherwise),
+        and it is ignored with a pilot (Wiener stage), which matches
+        on the pilot's spectra.
     sigma_weight : bool
         Hard-thresholding weight 1/(σ²·N_har) (BM3D, Eq. (10)) or
         1/N_har (ACsN, Supplementary Eq. (15)); both are 1 when
@@ -91,6 +94,13 @@ class Stage:
     strict: bool = False
     pixel_distance: bool = False
     sigma_weight: bool = True
+
+    def __post_init__(self) -> None:
+        if self.pixel_distance and self.lam2d > 0:
+            raise ValueError(
+                "pixel_distance matches on the samples of the blocks and "
+                "cannot be combined with the lam2d pre-filter"
+            )
 
 
 def bm3d_profile(sigma: float, profile: str = "normal") -> tuple[Stage, Stage]:

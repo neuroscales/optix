@@ -1,31 +1,41 @@
 """ACsN: automatic correction of sCMOS-related noise (Mandracchia et al. 2020).
 
 Written from the paper and its Supplementary Information. Details the
-paper leaves open (the fit of the noise level, the intensity mapping and
-the optional hot-pixel removal) follow the authors' MATLAB code,
-github.com/ShuJiaLab/ACsN, released under the BSD 3-Clause licence:
-
-    Copyright (c) 2019, Biagio Mandracchia. All rights reserved.
-
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions
-    are met: (1) redistributions of source code must retain the above
-    copyright notice, this list of conditions and the following
-    disclaimer; (2) redistributions in binary form must reproduce the
-    above copyright notice, this list of conditions and the following
-    disclaimer in the documentation and/or other materials provided with
-    the distribution; (3) neither the name of the copyright holder nor
-    the names of its contributors may be used to endorse or promote
-    products derived from this software without specific prior written
-    permission. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
-    CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES ARE
-    DISCLAIMED; IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS
-    BE LIABLE FOR ANY DAMAGES ARISING IN ANY WAY OUT OF THE USE OF THIS
-    SOFTWARE.
-
-The sparse filter of that code is a compiled third-party BM3D and was
-not used: the collaborative filtering runs on the BM3D engine of
+paper leaves open (the fit of the noise level, the intensity mapping,
+the camera cutoff and the optional hot-pixel removal) follow the
+authors' MATLAB code, github.com/ShuJiaLab/ACsN, whose licence is
+reproduced below. The sparse filter runs on the BM3D engine of
 `optix.denoise`.
+
+BSD 3-Clause License
+
+Copyright (c) 2019, Biagio Mandracchia
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
 import math
@@ -53,6 +63,7 @@ from ._engine import Stage, block_overhead, run_stage, stage_halo
 __all__ = [
     "ACsN",
     "acsn",
+    "acsn_halo",
     "acsn_noise",
     "acsn_profile",
     "highpass",
@@ -138,7 +149,8 @@ def noise_ratio(
     cutoff: float,
     *,
     ratio: Ratio = "1d",
-    camera_cutoff: float = 1.0,
+    camera_cutoff: float = 1.1,
+    like: Tensor | None = None,
 ) -> float:
     """Ratio σ_N/σ_c of the noise to the noise of the high-pass image.
 
@@ -149,14 +161,19 @@ def noise_ratio(
 
         σ_N = √(f̄ / (f̄ − f_c)) · σ_c.
 
-    f̄ is the Nyquist frequency 1/(2Δ) times `camera_cutoff` (the paper
-    calls f̄ the cutoff of the camera; the ACsN code uses 1.1/(2Δ)).
+    f̄ is the Nyquist frequency 1/(2Δ) times `camera_cutoff`. The paper
+    calls f̄ the cutoff of the camera and gives no value; the default
+    1.1 is from the ACsN code, not in the paper. The frame must be
+    sampled finely enough that f_c < f̄, that is a pixel size below
+    λ/(4·NA)·`camera_cutoff`; otherwise a `ValueError` is raised.
 
     `"area"` (extension): the same argument over the 2-D DFT
     frequencies of the frame, where white noise has the same power at
     every frequency: σ_N² = σ_c²·n/n_c, with n the number of
     frequencies and n_c the number above f_c. This is exact for white
-    noise; the 1-D ratio is larger (√5 against 1.42 for f_c = 0.8 f̄).
+    noise; the 1-D ratio is larger (for f_c at 0.8 times the Nyquist
+    frequency, 1.91 with `camera_cutoff=1.1` and √5 with 1, against
+    1.42).
 
     Parameters
     ----------
@@ -166,7 +183,13 @@ def noise_ratio(
         As in [`highpass`][optix.denoise.utils.highpass].
     ratio : {"1d", "area"}
     camera_cutoff : float
-        f̄ in units of the Nyquist frequency (`"1d"` only).
+        f̄ in units of the Nyquist frequency (`"1d"` only; default 1.1,
+        from the ACsN code, not in the paper).
+    like : Tensor, optional
+        Frame whose dtype and device the frequency grid of `"area"`
+        takes, so that it counts the frequencies that
+        [`highpass`][optix.denoise.utils.highpass] removes (default
+        float32 on the CPU).
 
     Returns
     -------
@@ -177,14 +200,19 @@ def noise_ratio(
             2.0 * pixel_size
         )
         if cutoff >= fbar:
+            largest = camera_cutoff / (2.0 * cutoff)
             raise ValueError(
                 f"The OTF cutoff {cutoff:.4g} is not below the camera "
                 f"cutoff {fbar:.4g}: the image is not sampled finely "
-                "enough to estimate the noise outside the OTF"
+                "enough to estimate the noise outside the OTF. The pixel "
+                f"size {pixel_size:.4g} must be below "
+                f"λ/(4·NA)·camera_cutoff = {largest:.4g}"
             )
         return math.sqrt(fbar / (fbar - cutoff))
     if ratio == "area":
-        f = _radial_frequency(shape, pixel_size, torch.empty(0))
+        if like is None:
+            like = torch.empty(0)
+        f = _radial_frequency(shape, pixel_size, like)
         outside = int((f > cutoff).sum())
         if outside == 0:
             raise ValueError("No frequency of the frame lies outside the OTF")
@@ -193,10 +221,8 @@ def noise_ratio(
 
 
 def _matlab_hist(x: Tensor, bins: int = 10) -> tuple[Tensor, Tensor]:
-    """Counts and centres of `bins` equal bins between min and max."""
+    """Counts and centres of `bins` equal bins between min < max."""
     lo, hi = float(x.min()), float(x.max())
-    if hi <= lo:
-        hi = lo + 1.0
     width = (hi - lo) / bins
     centres = lo + width * (torch.arange(bins, dtype=torch.float64) + 0.5)
     counts = torch.histc(x.double().cpu(), bins=bins, min=lo, max=hi)
@@ -206,7 +232,13 @@ def _matlab_hist(x: Tensor, bins: int = 10) -> tuple[Tensor, Tensor]:
 def _gauss_fit(
     x: Tensor, y: Tensor, a0: float, a1: float, iterations: int = 200
 ) -> float:
-    """Least-squares fit of y ≈ a0·exp(−x²/(2a1²)) (Levenberg-Marquardt)."""
+    """Least-squares fit of y ≈ a0·exp(−x²/(2a1²)) (Levenberg-Marquardt).
+
+    The damped normal matrix JᵀJ + μ·diag(JᵀJ) has its diagonal floored
+    at an absolute value, so that a flat Jacobian column (σ driven to
+    large values by nearly flat counts) does not make it singular; a
+    step that still fails returns the current estimate.
+    """
     p = torch.tensor([a0, a1], dtype=torch.float64)
 
     def residual(p: Tensor) -> Tensor:
@@ -220,10 +252,15 @@ def _gauss_fit(
         r = residual(p)
         jtj = jac.T @ jac
         grad = jac.T @ r
+        diag = jtj.diagonal()
+        diag = diag.clamp(min=1e-12 * max(float(diag.max()), 1.0))
         while True:
-            step = torch.linalg.solve(
-                jtj + damping * torch.diag(jtj.diagonal()), -grad
-            )
+            try:
+                step = torch.linalg.solve(
+                    jtj + damping * torch.diag(diag), -grad
+                )
+            except torch.linalg.LinAlgError:
+                return abs(float(p[1]))
             trial = p + step
             new = float(residual(trial).square().sum())
             if math.isfinite(new) and new <= cost:
@@ -249,7 +286,9 @@ def sigma_from_highpass(h: Tensor, method: SigmaFit = "histogram") -> float:
     fitted to the counts at the bin centres by nonlinear least squares,
     starting from a0 = the largest count and σ_c = the centre of bin
     round(k/2), k the (1-based) bin of the smallest count. `"std"`
-    (extension): the root mean square of h (its mean is 0).
+    (extension): the root mean square of h (its mean is 0). An image
+    whose magnitudes |h| are all equal (a constant high-pass image) has
+    no histogram to fit, and gives 0 with `"histogram"`.
 
     Parameters
     ----------
@@ -267,7 +306,10 @@ def sigma_from_highpass(h: Tensor, method: SigmaFit = "histogram") -> float:
         raise ValueError(
             f"sigma_fit must be 'histogram' or 'std', got {method!r}"
         )
-    counts, centres = _matlab_hist(h.abs().reshape(-1))
+    a = h.abs().reshape(-1)
+    if not float(a.max()) > float(a.min()):
+        return 0.0
+    counts, centres = _matlab_hist(a)
     first_min = int(torch.argmin(counts)) + 1  # 1-based, first minimum
     start = float(centres[max(math.floor(first_min / 2 + 0.5), 1) - 1])
     return _gauss_fit(centres, counts, float(counts.max()), start)
@@ -299,7 +341,7 @@ def acsn_noise(
     *,
     ratio: Ratio = "1d",
     sigma_fit: SigmaFit = "histogram",
-    camera_cutoff: float = 1.0,
+    camera_cutoff: float = 1.1,
 ) -> float:
     """Noise level σ_N of one frame, from its frequencies outside the OTF.
 
@@ -310,7 +352,10 @@ def acsn_noise(
     (Supplementary Eq. (11)). The noise, readout plus photon shot noise
     approximated as Gaussian (Supplementary Eq. (5)), is assumed white,
     and the signal confined within the OTF. For noise whose variance
-    varies over the frame, σ_N² is the mean variance.
+    varies over the frame, σ_N² is the mean variance. With the 1-D
+    ratio of the paper (`ratio="1d"`), σ_N is 1.2 to 1.9 times the
+    standard deviation of white noise, depending on f_c/f̄ (see
+    [`noise_ratio`][optix.denoise.utils.noise_ratio]).
 
     Parameters
     ----------
@@ -334,6 +379,7 @@ def acsn_noise(
         cutoff,
         ratio=ratio,
         camera_cutoff=camera_cutoff,
+        like=m,
     )
     return rho * sigma_from_highpass(
         highpass(m, pixel_size, cutoff), sigma_fit
@@ -352,11 +398,20 @@ def acsn_profile() -> tuple[Stage, Stage]:
     1/N_P (Eq. (15)); then the same grouping on the intermediate image
     and empirical Wiener shrinkage (Eqs. (16)-(17)).
 
-    Not specified in the paper (taken from BM3D's normal profile, which
-    the paper cites): the transforms (bior1.5 then DCT for the patches,
-    Haar along the group), τ_match = 400 and the weights
-    σ⁻²‖W‖₂⁻² of the Wiener stage. The paper's aggregation has no
-    Kaiser window, and none is used.
+    The paper does not name the transforms; they are those of BM3D's
+    normal profile (Dabov et al. 2007, Table I): bior1.5 then DCT for the
+    patches, Haar along the group. For the second run, Supplementary
+    Note 2.4 says: "This second-time process is the same as the first
+    one with the only difference being the use of Wiener filtering".
+    The Wiener stage departs from that text: it takes BM3D's
+    τ_match = 400 with the strict test d < τ_match, the DCT and the
+    weights σ⁻²‖W‖₂⁻² (Dabov et al. 2007, Table I and Eq. (11)), in
+    place of the first run's τ_match = 2500, pixel distance and
+    bior1.5. The paper gives τ_match = 2500 "for σ_N < 40"
+    (Supplementary Note 3.1); it is used here for every σ_N, whereas
+    BM3D switches to a second profile (τ_match = 5000 in the first run)
+    above 40. The paper's aggregation has no Kaiser window, and none is
+    used.
 
     Returns
     -------
@@ -378,7 +433,25 @@ def acsn_profile() -> tuple[Stage, Stage]:
     return ht, wie
 
 
-def _halo() -> int:
+def acsn_halo() -> int:
+    """Halo, in pixels, of the blocks of the ACsN sparse filter.
+
+    The sum of the reach 2·⌊m/2⌋ + k − 1 = 25 of the two runs of
+    [`acsn_profile`][optix.denoise.utils.acsn_profile]: 50 pixels.
+
+    !!! warning "Inner blocks only"
+        This is the halo of the blocks into which
+        [`acsn`][optix.denoise.acsn] cuts each frame for its sparse
+        filter. Unlike [`bm3d_halo`][optix.denoise.bm3d_halo] and
+        [`nl_means_halo`][optix.denoise.nl_means_halo], it does not
+        allow a frame to be tiled by the caller: σ_N and the mapping to
+        [0, 255] are computed from the whole frame, so tiles of a frame
+        denoised separately differ from the whole frame.
+
+    Returns
+    -------
+    int
+    """
     return sum(stage_halo(s) for s in acsn_profile())
 
 
@@ -389,8 +462,9 @@ def _sparse_filter(
 ) -> Tensor:
     """Both stages on one frame, in blocks with a halo.
 
-    The frame is mapped to [0, 255] by its minimum and maximum (as in
-    the ACsN code), with σ scaled alike.
+    The frame is mapped to [0, 255] by its minimum and maximum, as in
+    the ACsN code, and σ is always scaled with it. The ACsN code scales
+    σ only when the range of the frame exceeds 255.
     """
     lo, hi = float(m.min()), float(m.max())
     if not hi > lo or sigma <= 0:
@@ -405,7 +479,7 @@ def _sparse_filter(
     chunks = blocks(
         x,
         block,
-        _halo(),
+        acsn_halo(),
         overhead=block_overhead(ht.size**2),
         contiguous=True,
         dtype=x.dtype,
@@ -473,7 +547,7 @@ def acsn(
     sigma: float | None = None,
     ratio: Ratio = "1d",
     sigma_fit: SigmaFit = "histogram",
-    camera_cutoff: float = 1.0,
+    camera_cutoff: float = 1.1,
     hotspot: bool = False,
     block: Sequence[int | None] | None = None,
 ) -> Tensor:
@@ -494,7 +568,8 @@ def acsn(
        h = F⁻¹[F(M)·𝟙(|f| > f_c)] holds noise only. Its standard
        deviation σ_c gives σ_N = √(f̄/(f̄ − f_c))·σ_c, f̄ the camera
        cutoff (Supplementary Eqs. (6)-(11);
-       [`acsn_noise`][optix.denoise.utils.acsn_noise]).
+       [`acsn_noise`][optix.denoise.utils.acsn_noise]). The pixel size
+       must be below λ/(4·NA)·`camera_cutoff`, so that f_c < f̄.
     3. **Sparse filtering.** Collaborative filtering of BM3D type with
        the parameters of [`acsn_profile`][optix.denoise.utils.acsn_profile]
        (Supplementary Note 2.4): 8 × 8 patches grouped by the distance
@@ -506,6 +581,15 @@ def acsn(
 
     The result is the denoised M, in electrons (ADU/gain, offset
     removed).
+
+    !!! warning "Hot pixels"
+        With `hotspot=False` (faithful mode), a single hot pixel or
+        cosmic ray makes σ_N, and so the whole filter, wrong: the 10
+        bins of the histogram span the range of |h|, which one outlier
+        stretches, and the same pixel sets the maximum of the [0, 255]
+        mapping. On a 128 × 128 test frame, raising one pixel by 200 e⁻
+        makes σ_N 1.4 times too large, and by 1000 e⁻ 6 times. On real
+        camera data use `hotspot=True`, or correct hot pixels first.
 
     !!! note "Differences from BM3D (Dabov et al. 2007)"
         The engine is that of [`bm3d`][optix.denoise.bm3d], with the
@@ -520,30 +604,39 @@ def acsn(
         * From the ACsN code (BSD-3), not in the paper: σ_c is fitted
           to the histogram of |h| (see
           [`sigma_from_highpass`][optix.denoise.utils.sigma_from_highpass]);
-          the filter outside the OTF is an ideal step; each frame is
-          mapped to [0, 255] by its minimum and maximum, and σ_N
-          with it, before the sparse filter (the paper's τ_match and λ
-          are in 8-bit units).
-        * f̄ is the Nyquist frequency 1/(2Δ) (`camera_cutoff=1`; the
-          code uses 1.1/(2Δ)).
-        * The transforms and the Wiener-stage τ_match = 400 and weights
-          are those of BM3D's normal profile.
+          the filter outside the OTF is an ideal step; f̄ is 1.1 times
+          the Nyquist frequency 1/(2Δ) (`camera_cutoff=1.1`); each
+          frame is mapped to [0, 255] by its minimum and maximum before
+          the sparse filter (the paper's τ_match and λ are in 8-bit
+          units).
+        * σ_N is always scaled with the frame by the [0, 255] mapping;
+          the code scales it only when the range of the frame exceeds
+          255.
+        * The transforms are those of BM3D's normal profile. The Wiener
+          stage departs from the paper's "the same as the first one":
+          it takes BM3D's τ_match = 400, DCT and strict test (see
+          [`acsn_profile`][optix.denoise.utils.acsn_profile]).
         * The code clamps the gain map to ≥ 1 and M to > 0; neither is
           done here (in optix the gain is in ADU per electron and may
-          be below 1).
+          be below 1). The code also clips the filter radius at Nyquist
+          and takes |f̄ − f_c|, so it runs on under-sampled frames;
+          here they raise a `ValueError`.
 
     !!! note "Extensions"
         * `ratio="area"` replaces the 1-D ratio of Supplementary Eq.
           (11) by its exact value for white noise over the 2-D
           frequencies of the frame (see
-          [`noise_ratio`][optix.denoise.utils.noise_ratio]); the 1-D
-          formula overestimates σ_N (by 58 % for f_c = 0.8·f̄).
+          [`noise_ratio`][optix.denoise.utils.noise_ratio]); on white
+          noise the 1-D formula overestimates σ_N by 1.35 for f_c at
+          0.8 times the Nyquist frequency (1.58 with
+          `camera_cutoff=1`).
         * `sigma_fit="std"`: σ_c is the RMS of h.
         * `sigma`: a known σ_N (electrons) replaces the estimate.
         * `hotspot=True`: the hot-pixel removal of the ACsN code (BSD-3;
           on by default there, not in the paper): pixels whose |h|
           exceeds mean(|h|) + 3·sd(|h|) are replaced by their 3 × 3
-          median before the noise estimate.
+          median, and the high-pass image is recomputed for the noise
+          estimate.
         * The video filtering of Supplementary Note 2.5 (a further
           spatio-temporal grouping along motion trajectories, run when
           [`temporal_psnr`][optix.denoise.utils.temporal_psnr] is below
@@ -551,9 +644,12 @@ def acsn(
 
     !!! note "Cost and memory"
         The noise estimate needs the FFT of the whole frame. The sparse
-        filter runs on blocks of the frame with a halo of 50 pixels,
-        sized from the memory budget (or `block`); the result does not
-        depend on the blocks.
+        filter runs on blocks of the frame with a halo of 50 pixels
+        ([`acsn_halo`][optix.denoise.acsn_halo]), sized from the memory
+        budget (or `block`); the result does not depend on the blocks.
+        [`ACsN`][optix.denoise.ACsN] budgets about 16 frame-sized arrays
+        of the frame's dtype per frame being processed, for the noise
+        estimate and the quality score.
 
     !!! references "References"
         1. Mandracchia B, Hua X, Guo C, Son J, Urner T, Jia S. *Fast and
@@ -610,9 +706,10 @@ def acsn(
     sigma_fit : {"histogram", "std"}
         Estimate of σ_c.
     camera_cutoff : float
-        f̄ in units of the Nyquist frequency.
+        f̄ in units of the Nyquist frequency (1.1, from the ACsN code,
+        not in the paper).
     hotspot : bool
-        Extension: remove hot pixels first.
+        Extension: remove hot pixels first (see the warning above).
     block : sequence of int, optional
         Core block size of the sparse filter (default: memory budget).
 
@@ -683,6 +780,12 @@ def quality_score(noisy: Tensor, denoised: Tensor) -> float:
         11 × 11 Gaussian of σ = 1.5, valid positions only, and
         c = (0.03·L)²/2 with L the range of I.
 
+    !!! note "Precision"
+        The maps are computed in the dtype of `noisy` (float64 for
+        integer frames), after subtracting the mean of I from both
+        frames, which leaves Q unchanged; the constant c and the final
+        correlation are in float64.
+
     Parameters
     ----------
     noisy, denoised : (H, W) Tensor
@@ -692,16 +795,19 @@ def quality_score(noisy: Tensor, denoised: Tensor) -> float:
     -------
     float
     """
-    i = noisy.double()
-    d = denoised.double()
-    if i.shape != d.shape or i.ndim != 2:
+    if noisy.shape != denoised.shape or noisy.ndim != 2:
         raise ValueError("noisy and denoised must be two (H, W) frames")
-    if min(i.shape) < 11:
+    if min(noisy.shape) < 11:
         raise ValueError("Frames must be at least 11 × 11")
+    dtype = noisy.dtype if noisy.is_floating_point() else torch.float64
+    i = noisy.to(dtype)
+    d = denoised.to(dtype)
+    mean = i.mean()
+    i, d = i - mean, d - mean  # Q is invariant to a common shift
     w = _gauss_window(i.dtype, i.device)
-    c = (0.03 * float(i.max() - i.min())) ** 2 / 2 + 1e-30
-    n = _structure(i, i - d, w, c).reshape(-1)
-    p = _structure(i, d, w, c).reshape(-1)
+    c = (0.03 * (float(i.max()) - float(i.min()))) ** 2 / 2 + 1e-30
+    n = _structure(i, i - d, w, c).reshape(-1).double()
+    p = _structure(i, d, w, c).reshape(-1).double()
     n, p = n - n.mean(), p - p.mean()
     tiny = 1e-12 * math.sqrt(n.numel())
     if float(n.norm()) <= tiny or float(p.norm()) <= tiny:
@@ -749,6 +855,12 @@ def temporal_psnr(frames: Tensor, neighbours: int = 5) -> Tensor:
 
 
 # -- estimator ----------------------------------------------------------------
+# frame-sized arrays held per frame, in the frame's dtype: the complex
+# spectrum and its masked product (4), the high-pass image and |h| (2),
+# and about ten for the quality score
+_OVERHEAD = 16.0
+
+
 class ACsN(Estimator):
     """ACsN: automatic correction of sCMOS-related noise.
 
@@ -763,19 +875,37 @@ class ACsN(Estimator):
 
     [`apply`][optix.Estimator.apply] streams batches of frames; each
     frame is loaded whole (the noise estimate needs its FFT) and its
-    sparse filter runs in blocks with a halo. The estimated σ_N of every
+    sparse filter runs in blocks with a halo
+    ([`halo`][optix.denoise.ACsN.halo]). The estimated σ_N of every
     frame is kept in `sigma_` (shape `(*group, *sample)`, electrons),
     and its no-reference quality score (the "image quality check" of
     Supplementary Table 5;
-    [`quality_score`][optix.denoise.utils.quality_score]) in `quality_`.
-    The output is in electrons.
+    [`quality_score`][optix.denoise.utils.quality_score]) in `quality_`
+    (NaN for frames smaller than 11 × 11). The output is in electrons.
 
     !!! note
         Faithful mode is the paper (`ratio="1d"`, `sigma_fit="histogram"`,
-        `camera_cutoff=1`, `hotspot=False`, `sigma=None`).
-        `faithful=False` selects `ratio="area"`, the exact white-noise
-        ratio. `block` does not change the result. The variance map of
-        the estimate is not used: σ_N comes from the frame.
+        `hotspot=False`, `sigma=None`), with `camera_cutoff=1.1` from
+        the ACsN code (not in the paper). `faithful=False` selects
+        `ratio="area"`, the exact white-noise ratio, and `hotspot=True`.
+        `block` does not change the result. The variance map of the
+        estimate is not used: σ_N comes from the frame.
+
+    !!! warning "`sigma_` in faithful mode is not the noise level"
+        The 1-D ratio of Supplementary Eq. (11) overestimates the noise
+        of a 2-D frame. In faithful mode `sigma_` is about 1.2 to 1.9
+        times the standard deviation of the noise, depending on f_c/f̄
+        (1.35 for f_c at 0.8 times the Nyquist frequency). It is the
+        level the filter uses, not a measurement of the read noise or
+        the SNR; `ratio="area"` (`faithful=False`) gives the noise
+        standard deviation.
+
+    !!! warning "Hot pixels"
+        With `hotspot=False` (faithful mode), a single hot pixel or
+        cosmic ray makes σ_N, and so the whole filter, wrong (see
+        [`acsn`][optix.denoise.acsn]). On real camera data use
+        `hotspot=True` (as `faithful=False` does), or correct hot
+        pixels first.
 
     !!! references "References"
         1. Mandracchia B, Hua X, Guo C, Son J, Urner T, Jia S. *Fast and
@@ -841,12 +971,12 @@ class ACsN(Estimator):
         "pixel_size": None,
         "ratio": "1d",
         "sigma_fit": "histogram",
-        "camera_cutoff": 1.0,
+        "camera_cutoff": 1.1,
         "hotspot": False,
         "sigma": None,
         "block": None,
     }
-    recommended = {**paper, "ratio": "area"}
+    recommended = {**paper, "ratio": "area", "hotspot": True}
 
     def __init__(
         self,
@@ -885,9 +1015,11 @@ class ACsN(Estimator):
             code, default) or the RMS of h (extension).
         camera_cutoff : float
             Camera cutoff f̄ in units of the Nyquist frequency (default
-            1; the ACsN code uses 1.1).
+            1.1, from the ACsN code, not in the paper). The pixel size
+            must be below λ/(4·NA)·`camera_cutoff`.
         hotspot : bool
-            Extension: hot-pixel removal of the ACsN code. Default False.
+            Extension: hot-pixel removal of the ACsN code. Default False
+            in faithful mode, True with `faithful=False`.
         sigma : float, optional
             Extension: known σ_N in electrons, for every frame.
         block : sequence of int, optional
@@ -920,6 +1052,19 @@ class ACsN(Estimator):
                 "sigma",
             )
         )
+
+    def halo(self) -> int:
+        """Halo of the blocks of the sparse filter inside a frame.
+
+        See [`acsn_halo`][optix.denoise.acsn_halo]: frames cannot be
+        tiled with it, since σ_N and the [0, 255] mapping come from the
+        whole frame.
+
+        Returns
+        -------
+        int
+        """
+        return acsn_halo()
 
     def fit(
         self,
@@ -1032,7 +1177,7 @@ class ACsN(Estimator):
             frame = x.permute(layout.permutation(2))[None]
             sigmas, quality = sigmas.reshape(1), quality.reshape(1)
             result = self._apply_frames(
-                frame, None, run, overhead=8.0, contiguous=True
+                frame, None, run, overhead=_OVERHEAD, contiguous=True
             )[0].permute(layout.inverse_permutation(2))
             out = prepare_out(
                 out, tuple(data.shape), like=raw, dtype=self.dtype
@@ -1046,7 +1191,9 @@ class ACsN(Estimator):
                 quality.reshape(()),
             )
             return out
-        out = self._apply_frames(data, out, run, overhead=8.0, contiguous=True)
+        out = self._apply_frames(
+            data, out, run, overhead=_OVERHEAD, contiguous=True
+        )
         self.sigma_, self.quality_ = sigmas, quality
         return out
 

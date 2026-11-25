@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import optix
-from optix.denoise import ACsN, acsn
+from optix.denoise import ACsN, acsn, acsn_halo
 from optix.denoise import _acsn as A
 from optix.denoise import utils as U
 from optix.estimates import SensorEstimate
@@ -76,10 +76,13 @@ def psnr(x, ref):
 # -- noise estimate -----------------------------------------------------------
 def test_otf_cutoff_and_ratio():
     assert U.otf_cutoff(1.4, 0.7) == pytest.approx(4.0)
-    # Eq. (11): f̄ = 1/(2Δ) = 5, f_c = 4 → √(5/1)
-    assert U.noise_ratio((64, 64), PX, FC) == pytest.approx(math.sqrt(5))
-    assert U.noise_ratio((64, 64), PX, FC, camera_cutoff=1.1) == pytest.approx(
+    # Eq. (11), f̄ = 1.1/(2Δ) = 5.5 (the ACsN code), f_c = 4 → √(5.5/1.5)
+    assert U.noise_ratio((64, 64), PX, FC) == pytest.approx(
         math.sqrt(5.5 / 1.5)
+    )
+    # f̄ = 1/(2Δ) = 5 → √(5/1)
+    assert U.noise_ratio((64, 64), PX, FC, camera_cutoff=1.0) == pytest.approx(
+        math.sqrt(5)
     )
     # 2-D: share of the DFT frequencies outside the disc
     f = torch.sqrt(
@@ -90,8 +93,17 @@ def test_otf_cutoff_and_ratio():
     assert U.noise_ratio((64, 64), PX, FC, ratio="area") == pytest.approx(
         math.sqrt(64 * 64 / n_out)
     )
-    with pytest.raises(ValueError):  # undersampled: f_c ≥ f̄
-        U.noise_ratio((64, 64), 0.2, FC)
+    with pytest.raises(ValueError, match="0.1375"):  # undersampled
+        U.noise_ratio((64, 64), 0.2, FC)  # largest: 0.7/(4·1.4)·1.1
+    # near Nyquist: finite with 1.1, an error with 1.0
+    assert math.isfinite(U.noise_ratio((64, 64), 0.13, FC))
+    with pytest.raises(ValueError, match="0.125"):
+        U.noise_ratio((64, 64), 0.13, FC, camera_cutoff=1.0)
+    # the 2-D grid follows the dtype of `like`
+    like = torch.empty(0, **F64)
+    assert U.noise_ratio(
+        (64, 64), PX, FC, ratio="area", like=like
+    ) == pytest.approx(math.sqrt(64 * 64 / n_out))
     with pytest.raises(ValueError):
         U.noise_ratio((64, 64), PX, FC, ratio="2d")
 
@@ -123,6 +135,23 @@ def test_gaussian_fit_is_exact_on_a_gaussian():
     assert A._gauss_fit(x, y, 800.0, 0.6) == pytest.approx(1.3)
 
 
+def test_gaussian_fit_flat_histogram_does_not_raise():
+    """Nearly flat counts drive σ up and JᵀJ towards singularity."""
+    g = torch.Generator().manual_seed(3)
+    h = torch.rand(64, 64, generator=g, dtype=torch.float64) - 0.5
+    s = U.sigma_from_highpass(h)
+    assert math.isfinite(s) and s >= 0
+    for seed in range(40):
+        g = torch.Generator().manual_seed(seed)
+        h = torch.rand(64, 64, generator=g, dtype=torch.float64) - 0.5
+        assert math.isfinite(U.sigma_from_highpass(h))
+
+
+def test_constant_highpass_gives_zero():
+    assert U.sigma_from_highpass(torch.zeros(32, 32, **F64)) == 0.0
+    assert U.sigma_from_highpass(torch.full((32, 32), 3.0, **F64)) == 0.0
+
+
 @pytest.mark.parametrize("method", ["histogram", "std"])
 def test_sigma_from_highpass(method):
     g = torch.Generator().manual_seed(1)
@@ -140,12 +169,14 @@ def test_noise_estimate_white_noise():
     m = scene((128, 128)) + 3.0 * torch.randn(128, 128, generator=g, **F64)
     area = U.acsn_noise(m, PX, FC, ratio="area", sigma_fit="std")
     assert area == pytest.approx(3.0, rel=0.02)
-    one = U.acsn_noise(m, PX, FC, ratio="1d", sigma_fit="std")
-    factor = U.noise_ratio(m.shape, PX, FC) / U.noise_ratio(
-        m.shape, PX, FC, ratio="area"
-    )
-    assert one == pytest.approx(area * factor, rel=1e-12)
-    assert factor == pytest.approx(1.577, abs=0.01)
+    area_ratio = U.noise_ratio(m.shape, PX, FC, ratio="area")
+    for cc, expected in ((1.1, 1.35), (1.0, 1.577)):
+        one = U.acsn_noise(
+            m, PX, FC, ratio="1d", sigma_fit="std", camera_cutoff=cc
+        )
+        factor = U.noise_ratio(m.shape, PX, FC, camera_cutoff=cc) / area_ratio
+        assert one == pytest.approx(area * factor, rel=1e-12)
+        assert factor == pytest.approx(expected, abs=0.01)
 
 
 def test_noise_estimate_scmos():
@@ -178,6 +209,47 @@ def test_hotspot_removal():
     assert not est.is_faithful
 
 
+@pytest.mark.parametrize(
+    "kw",
+    [
+        dict(hotspot=True),
+        dict(sigma_fit="std"),
+        dict(hotspot=True, sigma_fit="std"),
+    ],
+)
+def test_extensions_through_acsn_and_apply(kw):
+    raw, clean, sensor = simulate((64, 64))
+    raw = raw.clone()
+    raw[10, 20] += 4000  # a hot pixel
+    m = (raw - sensor.offset) / sensor.gain
+    out = acsn(raw, NA, LAM, PX, offset=sensor.offset, gain=sensor.gain, **kw)
+    est = ACsN(na=NA, wavelength=LAM, pixel_size=PX, **kw, **F64)
+    torch.testing.assert_close(
+        est.fit(init=sensor).apply(raw), out, rtol=0, atol=0
+    )
+    assert not est.is_faithful
+    src = A._remove_hotspots(m, PX, FC) if kw.get("hotspot") else m
+    assert float(est.sigma_) == pytest.approx(
+        U.acsn_noise(src, PX, FC, sigma_fit=kw.get("sigma_fit", "histogram"))
+    )
+    if kw.get("hotspot"):
+        assert float(out[10, 20]) < float(clean.max()) + 20
+        truth = float(electron_variance(clean, sensor).mean().sqrt())
+        assert float(est.sigma_) < 2 * truth
+
+
+def test_hot_pixel_breaks_the_faithful_estimate():
+    """The warning of the docstrings: one hot pixel inflates σ_N."""
+    raw, clean, sensor = simulate((128, 128))
+    m = (raw - sensor.offset) / sensor.gain
+    base = U.acsn_noise(m, PX, FC, ratio="area")
+    hot = m.clone()
+    hot[50, 60] += 1000
+    assert U.acsn_noise(hot, PX, FC, ratio="area") > 3 * base
+    fixed = A._remove_hotspots(hot, PX, FC)
+    assert U.acsn_noise(fixed, PX, FC, ratio="area") < 1.1 * base
+
+
 # -- sparse filter ------------------------------------------------------------
 def test_profile():
     ht, wie = U.acsn_profile()
@@ -187,6 +259,13 @@ def test_profile():
     assert (wie.size, wie.group, wie.step, wie.search) == (8, 8, 3, 19)
     assert wie.lam is None and wie.beta is None and wie.strict
     assert U.stage_halo(ht) + U.stage_halo(wie) == 50
+    assert acsn_halo() == 50
+    assert ACsN(na=NA, wavelength=LAM, pixel_size=PX).halo() == 50
+
+
+def test_stage_rejects_pixel_distance_with_lam2d():
+    with pytest.raises(ValueError):
+        U.Stage("dct", 8, 8, 3, 9, 2500.0, 4.0, 2.0, pixel_distance=True)
 
 
 def test_pixel_distance_matches_orthonormal_spectra():
@@ -265,8 +344,13 @@ def test_temporal_psnr():
 def test_estimator_options():
     est = ACsN(na=NA, wavelength=LAM, pixel_size=PX)
     assert est.is_faithful and est.options["ratio"] == "1d"
+    assert est.options["camera_cutoff"] == 1.1 and not est.options["hotspot"]
+    assert not ACsN(
+        na=NA, wavelength=LAM, pixel_size=PX, camera_cutoff=1.0
+    ).is_faithful
     rec = ACsN(na=NA, wavelength=LAM, pixel_size=PX, faithful=False)
     assert rec.options["ratio"] == "area" and not rec.is_faithful
+    assert rec.options["hotspot"] and rec.options["camera_cutoff"] == 1.1
     assert not ACsN(na=NA, wavelength=LAM, pixel_size=PX, sigma=2).is_faithful
     assert ACsN(
         na=NA, wavelength=LAM, pixel_size=PX, block=(32, 32)
@@ -329,6 +413,52 @@ def test_lazy_zarr_and_group_maps():
         expected = acsn(raw[i], NA, LAM, PX, offset=off, gain=sensor.gain)
         np.testing.assert_allclose(dst[i], expected.numpy(), atol=1e-9)
     assert est.sigma_.shape == (2,)
+
+
+def test_faithful_false_differs_only_through_sigma():
+    """With σ_N given, the faithful run and the recommended one (whose
+    hot-pixel removal is also applied here) are the same filter."""
+    raw, _, sensor = simulate((64, 64))
+    kw = dict(offset=sensor.offset, gain=sensor.gain)
+    fai = ACsN(na=NA, wavelength=LAM, pixel_size=PX, **F64).fit(init=sensor)
+    rec = ACsN(na=NA, wavelength=LAM, pixel_size=PX, faithful=False, **F64)
+    rec.fit(init=sensor)
+    a, b = fai.apply(raw), rec.apply(raw)
+    assert float(rec.sigma_) < float(fai.sigma_)
+    s_a, s_b = float(fai.sigma_), float(rec.sigma_)
+    ref_a = acsn(raw, NA, LAM, PX, sigma=s_a, **kw)
+    ref_b = acsn(raw, NA, LAM, PX, sigma=s_b, hotspot=True, **kw)
+    torch.testing.assert_close(a, ref_a, rtol=0, atol=0)
+    torch.testing.assert_close(b, ref_b, rtol=0, atol=0)
+
+
+def test_quality_is_nan_below_11():
+    g = torch.Generator().manual_seed(0)
+    x = 20 + 3 * torch.randn(10, 12, generator=g, **F64)
+    est = ACsN(na=NA, wavelength=LAM, pixel_size=PX, **F64).fit()
+    est.apply(x)
+    assert math.isnan(float(est.quality_))
+    assert math.isfinite(float(est.sigma_))
+    with pytest.raises(ValueError):
+        U.quality_score(x, x)
+
+
+def test_quality_score_float32():
+    raw, clean, sensor = simulate()
+    m = (raw - sensor.offset) / sensor.gain
+    out = acsn(raw, NA, LAM, PX, offset=sensor.offset, gain=sensor.gain)
+    q64 = U.quality_score(m, out)
+    q32 = U.quality_score(m.float(), out.float())
+    assert q32 == pytest.approx(q64, abs=1e-4)
+
+
+def test_partial_blocks_match_whole_frame():
+    """Windows (core + 2 × halo) smaller than the frame on both axes."""
+    raw, _, sensor = simulate((120, 150))
+    kw = dict(offset=sensor.offset, gain=sensor.gain)
+    whole = acsn(raw, NA, LAM, PX, **kw)
+    parts = acsn(raw, NA, LAM, PX, block=(16, 20), **kw)
+    torch.testing.assert_close(parts, whole, rtol=0, atol=1e-9)
 
 
 @pytest.mark.parametrize("dtype", [torch.float64, torch.float32])

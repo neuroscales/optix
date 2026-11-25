@@ -26,6 +26,7 @@
         - bm3d_halo
         - bm4d_halo
         - acsn
+        - acsn_halo
         - nl_means
         - nl_means_halo
 
