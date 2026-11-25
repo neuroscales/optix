@@ -46,6 +46,10 @@
         - hard_threshold
         - wiener
         - aggregate
+        - clean_range
+        - block_overhead
+        - match_batch
+        - filter_batch
         - transform_matrix
         - bior15_matrix
         - haar_matrix

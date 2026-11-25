@@ -374,6 +374,9 @@ def test_estimator_defaults():
     est = BM3D(sigma=10)
     assert est.is_faithful and est.options["profile"] == "normal"
     assert not BM3D(sigma=10, search=11).is_faithful
+    assert not BM3D(sigma=10, keep_dc=True).is_faithful
+    assert BM3D(sigma=10, keep_dc=False).is_faithful
+    assert "keep_dc" not in BM4D(sigma=1).options
     assert BM4D(sigma=1, profile="modified").is_faithful
     assert {"BM3D", "BM4D"} <= set(optix.estimators())
     with pytest.raises(ValueError):
@@ -391,7 +394,7 @@ def test_estimator_defaults():
 def test_estimator_matches_function():
     z = noisy(scene((2, 40, 40)), 20)
     est = BM3D(sigma=20, search=11, **F64).fit(z)
-    expected = bm3d(z, 20, data_range=float(z.max() - z.min()), search=11)
+    expected = bm3d(z, 20, search=11)  # the same default range
     torch.testing.assert_close(est.apply(z), expected, rtol=0, atol=1e-9)
 
 
@@ -403,19 +406,19 @@ def test_blocks_match_whole_2d():
     shapes = []
     filt = est._filter
 
-    def spy(x, origin):
+    def spy(x, origin, vst):
         shapes.append(tuple(x.shape))
-        return filt(x, origin)
+        return filt(x, origin, vst)
 
     est._filter = spy
     halo = est.halo()
-    k = 8 * 8
-    budget = (40 + 2 * halo) ** 2 * (3 * k + 8) * 8
+    overhead = U.block_overhead(8 * 8)
+    budget = int((40 + 2 * halo) ** 2 * overhead * 8)
     with optix.config(memory=budget):
         out = est.apply(data.numpy())
     # memory scaling: blocks are bounded by the budget, not by the image
     assert len(shapes) > 2
-    assert max(math.prod(s) for s in shapes) * (3 * k + 8) * 8 <= budget
+    assert max(math.prod(s) for s in shapes) * overhead * 8 <= budget
     np.testing.assert_allclose(
         np.asarray(out), expected.numpy(), rtol=0, atol=1e-9
     )
@@ -455,9 +458,7 @@ def test_lazy_zarr():
     dst = zarr.zeros(data.shape, chunks=(24, 26), dtype="f8")
     est = BM3D(sigma=20, search=7, block=(24, 26), **F64).fit(src)
     est.apply(src, out=dst)
-    expected = bm3d(
-        data, 20, search=7, data_range=float(data.max() - data.min())
-    )
+    expected = bm3d(data, 20, search=7)
     np.testing.assert_allclose(dst[:], expected.numpy(), rtol=0, atol=1e-9)
 
 
@@ -496,3 +497,259 @@ def test_save_load(tmp_path):
     torch.testing.assert_close(
         back.apply(z).double(), est.apply(z), rtol=0, atol=1e-2
     )
+
+
+# -- default range -----------------------------------------------------------
+def test_clean_range():
+    n, sigma = 10_000, 3.0
+    extent = 2 * math.sqrt(2 * math.log(n)) * sigma
+    assert U.clean_range(0.0, 100.0, n, sigma) == pytest.approx(100 - extent)
+    # floored at half the range of the data
+    assert U.clean_range(-5.0, 15.0, n, sigma) == pytest.approx(10.0)
+    assert U.clean_range(0.0, 1.0, 1, 0.0) == 1.0
+
+
+def test_default_range_reaches_high_noise_profile():
+    """σ > 40 (8-bit units) selects the high-noise column of Table I."""
+    clean = scene((96, 96))
+    z = noisy(clean, 60)
+    est = BM3D(sigma=60, **F64).fit(z)
+    assert est.halo() == bm3d_halo(60) == 97  # σ > 40 profile
+    # the noisy range would give σ̃ ≈ 24, the σ ≤ 40 profile
+    assert bm3d_halo(60, data_range=float(z.max() - z.min())) == 90
+    lo, hi = float(z.min()), float(z.max())
+    rng = U.clean_range(lo, hi, z.numel(), 60.0)
+    assert 255 * 60 / rng > 40
+    expected = bm3d(z, 60, data_range=rng, search=9)
+    torch.testing.assert_close(bm3d(z, 60, search=9), expected)
+    # σ = 20 stays in the σ ≤ 40 profile
+    assert BM3D(sigma=20).fit(noisy(clean, 20)).halo() == 90
+
+
+def test_default_range_sensor_low_counts():
+    """Stabilised low-count data (σ = 1) select the high-noise profile."""
+    g = torch.Generator().manual_seed(5)
+    lam = scene((64, 64)) / 50 + 0.5  # 0.5 to 5.6 electrons
+    z = 2.0 * torch.poisson(lam, generator=g) + 100.0
+    sensor = SensorEstimate(offset=100.0, variance=1.0, gain=2.0)
+    est = BM3D(**F64).fit(z, init=sensor)
+    assert 255 / est._range > 40
+    assert est.halo() == 97
+
+
+# -- offsets -----------------------------------------------------------------
+def _offset_scene():
+    x = phantoms.filaments((64, 64), intensity=200.0, seed=0, **F64)
+    x = 255 * (x - x.min()) / (x.max() - x.min())  # background 0
+    return noisy(x, 20, seed=0)
+
+
+def test_bm3d_depends_on_offset():
+    """BM3D thresholds the DC: an offset changes the result (Eq. (6))."""
+    z = _offset_scene()
+    kw = dict(data_range=255, search=15, output="basic")
+    diff = bm3d(z + 100, 20, **kw) - 100 - bm3d(z, 20, **kw)
+    assert diff.abs().max() > 0.5
+
+
+@pytest.mark.parametrize("output", ["basic", "final"])
+def test_keep_dc_offset_invariance(output):
+    z = _offset_scene()
+    kw = dict(data_range=255, search=15, output=output, keep_dc=True)
+    a = bm3d(z, 20, **kw)
+    b = bm3d(z + 100, 20, **kw) - 100
+    if output == "basic":
+        torch.testing.assert_close(a, b, rtol=0, atol=1e-9)
+    else:  # the Wiener gain of the DC depends on the mean
+        ref = bm3d(z + 100, 20, **{**kw, "keep_dc": False}) - 100
+        ref = (ref - bm3d(z, 20, **{**kw, "keep_dc": False})).abs().max()
+        assert (a - b).abs().max() < ref
+    est = BM3D(sigma=20, data_range=255, search=15, keep_dc=True, **F64)
+    torch.testing.assert_close(
+        est.fit().apply(z),
+        bm3d(z, 20, data_range=255, search=15, keep_dc=True),
+    )
+
+
+def test_bm4d_offset_invariance():
+    v = phantoms.filaments((12, 20, 20), intensity=1.0, ndim=3, seed=0, **F64)
+    z = noisy((v - v.min()) / (v.max() - v.min()), 0.1)
+    kw = dict(data_range=1, search=5, output="basic")
+    torch.testing.assert_close(
+        bm4d(z + 0.5, 0.1, **kw) - 0.5, bm4d(z, 0.1, **kw), rtol=0, atol=1e-12
+    )
+
+
+# -- memory ------------------------------------------------------------------
+def test_memory_budget_formula():
+    nc, k, e = 39 * 39, 64, 4
+    for budget in (2**24, 2**26, 2**28):
+        b = U.match_batch(nc, k, e, budget)
+        assert b * nc * (2 * k * e + 40) <= budget / 4
+        assert (b + 1) * nc * (2 * k * e + 40) > budget / 4
+        f = U.filter_batch(16, k, e, budget)
+        assert f * 16 * k * (8 * e + 8) <= budget / 4
+    # linear in the budget, and from the configuration by default
+    big, small = (U.filter_batch(16, k, e, b) for b in (2**26, 2**24))
+    assert abs(big - 4 * small) < 4
+    with optix.config(memory=2**24):
+        assert U.match_batch(nc, k, e) == U.match_batch(nc, k, e, 2**24)
+    assert U.match_batch(nc, k, e, 1) == U.filter_batch(32, k, e, 1) == 1
+    # the spectra (three copies of K values per sample) get half the budget
+    assert U.block_overhead(k) == 2 * (3 * k + 8)
+
+
+def test_batches_follow_budget(monkeypatch):
+    """`run_stage` sizes its batches from the configured budget."""
+    from optix.denoise import _engine
+
+    seen = {}
+    real = _engine.filter_batch
+
+    def spy(m, k, e, memory=None):
+        out = real(m, k, e, memory)
+        seen.setdefault(optix.get_config().memory, set()).add(out)
+        return out
+
+    monkeypatch.setattr(_engine, "filter_batch", spy)
+    z = noisy(scene((40, 40)), 20)
+    outs = []
+    for budget in (2**16, 2**26):
+        with optix.config(memory=budget):
+            outs.append(bm3d(z, 20, data_range=255, search=9))
+    assert max(seen[2**16]) < min(seen[2**26])
+    torch.testing.assert_close(outs[0], outs[1], rtol=0, atol=1e-9)
+
+
+# -- streaming ---------------------------------------------------------------
+def _spy_blocks(est):
+    shapes = []
+    filt = est._filter
+
+    def spy(x, origin, vst):
+        shapes.append(tuple(x.shape))
+        return filt(x, origin, vst)
+
+    est._filter = spy
+    return shapes
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_blocks_interior_edges(dtype):
+    """Blocks of 31 × 37 (dividing neither the image nor N_step = 3)."""
+    z = noisy(scene((150, 170)), 20).to(dtype)
+    est = BM3D(sigma=20, data_range=255, search=9, block=(31, 37), dtype=dtype)
+    halo = est.halo()
+    assert halo == 30 and 150 >= 2 * halo + 2 * 31 and 170 >= 2 * halo + 74
+    shapes = _spy_blocks(est)
+    out = est.apply(z)
+    assert len(shapes) == 25
+    assert min(s[0] for s in shapes) < 150 and min(s[1] for s in shapes) < 170
+    expected = bm3d(z, 20, data_range=255, search=9)
+    torch.testing.assert_close(out, expected, rtol=0, atol=1e-9)
+
+
+def test_halo_is_tight():
+    z = noisy(scene((150, 170)), 20)
+    est = BM3D(sigma=20, data_range=255, search=9, block=(31, 37), **F64)
+    halo = est.halo()
+    est.halo = lambda: halo - 1
+    out = est.apply(z)
+    expected = bm3d(z, 20, data_range=255, search=9)
+    assert (out - expected).abs().max() > 1e-6
+
+
+def test_blocks_default_halo():
+    """The default profile (N_S = 39, halo 90), blocked along one axis."""
+    z = noisy(scene((250, 40)), 20)
+    est = BM3D(sigma=20, data_range=255, block=(50, None), **F64)
+    assert est.halo() == 90
+    shapes = _spy_blocks(est)
+    out = est.apply(z)
+    assert len(shapes) == 5 and min(s[0] for s in shapes) < 250
+    torch.testing.assert_close(
+        out, bm3d(z, 20, data_range=255), rtol=0, atol=1e-9
+    )
+
+
+def test_blocks_bm4d_two_axes():
+    v = noisy(scene((44, 46, 10)) / 255, 0.1)
+    est = BM4D(sigma=0.1, data_range=1, search=5, block=(8, 9, None), **F64)
+    halo = est.halo()
+    assert 44 >= 2 * halo + 16 and 46 >= 2 * halo + 18
+    shapes = _spy_blocks(est)
+    out = est.apply(v)
+    assert len(shapes) > 4
+    expected = bm4d(v, 0.1, data_range=1, search=5)
+    torch.testing.assert_close(out, expected, rtol=0, atol=1e-12)
+
+
+def _camera(shape=(48, 48), seed=4):
+    g = torch.Generator().manual_seed(seed)
+    lam = scene(shape) / 10 + 1  # 1 to 26 electrons
+    alpha, s, mu = 2.0, 3.0, 100.0
+    z = alpha * torch.poisson(lam, generator=g) + mu
+    z = z + s * torch.randn(z.shape, generator=g, dtype=z.dtype)
+    return (
+        z,
+        alpha * lam + mu,
+        SensorEstimate(offset=mu, variance=s * s, gain=alpha),
+    )
+
+
+def test_sensor_blocks_match_whole():
+    z, _, sensor = _camera((96, 100))
+    whole = BM3D(search=9, **F64).fit(z, init=sensor)
+    blocked = BM3D(search=9, block=(20, 23), **F64).fit(z, init=sensor)
+    torch.testing.assert_close(
+        blocked.apply(z), whole.apply(z), rtol=0, atol=1e-9
+    )
+
+
+@pytest.mark.parametrize("inverse", ["closed-form", "asymptotic", "algebraic"])
+def test_sensor_inverses(inverse):
+    from optix.sensor import anscombe, inverse_anscombe
+
+    z, truth, sensor = _camera()
+    est = BM3D(search=9, inverse=inverse, **F64).fit(z, init=sensor)
+    out = est.apply(z)
+    d = bm3d(
+        anscombe(z, 2.0, 3.0, 100.0), 1.0, data_range=est._range, search=9
+    )
+    expected = inverse_anscombe(d, 2.0, 3.0, 100.0, method=inverse)
+    torch.testing.assert_close(out, expected, rtol=0, atol=1e-9)
+    assert float((out - truth).square().mean()) < float(
+        (z - truth).square().mean()
+    )
+
+
+def test_sensor_maps_per_pixel():
+    """Per-pixel offset and variance maps are applied pixel by pixel."""
+    from optix.sensor import anscombe, inverse_anscombe
+    from optix.sensor._anscombe import build_table
+
+    z, truth, _ = _camera((60, 64))
+    g = torch.Generator().manual_seed(7)
+    offset = 100 + 10 * torch.rand(60, 64, generator=g, dtype=torch.float64)
+    variance = 9 + 4 * torch.rand(60, 64, generator=g, dtype=torch.float64)
+    z = z - 100 + offset
+    sensor = SensorEstimate(offset=offset, variance=variance, gain=2.0)
+    est = BM3D(search=9, block=(17, 19), **F64).fit(z, init=sensor)
+    s = variance.sqrt()
+    f = anscombe(z, 2.0, s, offset)
+    rng = U.clean_range(float(f.min()), float(f.max()), z.numel(), 1.0)
+    assert est._range == pytest.approx(rng)
+    d = bm3d(f, 1.0, data_range=rng, search=9)
+    table = build_table((s / 2.0).square().reshape(-1))
+    expected = inverse_anscombe(d, 2.0, s, offset, table=table)
+    torch.testing.assert_close(est.apply(z), expected, rtol=0, atol=1e-9)
+    # constant maps are the scalar case
+    flat = SensorEstimate(
+        offset=torch.full((60, 64), 100.0), variance=9.0, gain=2.0
+    )
+    a = BM3D(search=9, **F64).fit(z, init=flat)
+    b = BM3D(search=9, **F64).fit(
+        z, init=SensorEstimate(offset=100.0, variance=9.0, gain=2.0)
+    )
+    assert a._maps is None
+    torch.testing.assert_close(a.apply(z), b.apply(z), rtol=0, atol=0)

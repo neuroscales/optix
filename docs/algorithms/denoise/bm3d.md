@@ -114,7 +114,7 @@ and the papers' own:
   the block transform $\mathbf{T} \in \mathbb{R}^{K \times K}$ (separable: the same
   1-D transform along every axis of the block) applied to each block, then the
   Haar transform $\mathbf{H}_m \in \mathbb{R}^{m \times m}$ across the group. Its coefficient
-  $\Theta_{00}$ is the DC: the mean of the group.
+  $\Theta_{00}$ is the DC, proportional to the mean of the group.
 
 The estimate of a group is a shrinkage of its spectrum, either a *hard threshold*
 or an *empirical Wiener* gain, and the estimate of the image is a weighted average
@@ -348,8 +348,9 @@ that the run received as input: this occurs only when $N_{\text{step}} > N$.
 ### Poisson–Gaussian data
 
 With `fit(init=sensor)`, the three parameters $g$, $\sigma$, $o$ of the
-[`SensorEstimate`](../../reference/estimates.md) (the means of its maps, if
-they are maps) define the generalised Anscombe transform $f$, and the estimate is
+[`SensorEstimate`](../../reference/estimates.md) define the generalised
+Anscombe transform $f$, pixel by pixel when they are maps (such as the offset
+and variance maps of an sCMOS camera), and the estimate is
 
 $$
 \hat{\mathbf{x}} = g\,\mathcal{I}_{\sigma/g}\bigl(\operatorname{BM3D}(f(\mathbf{y}),\ \sigma = 1)\bigr) + o,
@@ -448,9 +449,21 @@ code makes them as follows.
    images with values in $[0, 255]$ (`BM3D`) or $[0, 1]$ (`BM4D`), and they
    include thresholds on the distance and on $\sigma$. The data and $\sigma$ are
    therefore multiplied by $255/\texttt{data\_range}$ ($1/\texttt{data\_range}$), and the result divided by
-   it. `data_range` defaults to the maximum minus the minimum of the data
-   given to `fit`, which noise widens; give the range of the clean signal when it is known. With a
-   `SensorEstimate` the range is that of the stabilised data.
+   it. The default `data_range` is an estimate of the range of the clean
+   signal ([`clean_range`][optix.denoise.utils.clean_range]). The extremes of
+   noisy data overshoot those of the signal by about $\sqrt{2\ln n}\,\sigma$
+   each, for $n$ samples, so the estimate is the range of the data minus
+   $2\sqrt{2\ln n}\,\sigma$, and at least half the range of the data:
+   $\hat r = \max\bigl(\max\mathbf{y} - \min\mathbf{y} - 2\sqrt{2\ln n}\,\sigma,\ (\max\mathbf{y} - \min\mathbf{y})/2\bigr)$.
+   This is not in the papers, whose images have a known range. The range of the
+   noisy data itself would keep $\tilde\sigma$ below about 39, since the noise
+   alone spans 6 to 9 $\sigma$, so that the $\tilde\sigma > 40$ rows of Table 1
+   would not be reached. With a `SensorEstimate` the estimate is that of the
+   stabilised data, with $\sigma = 1$. Give the range of the clean signal when
+   it is known. On a $160^2$ synthetic scene of range 255, a `data_range` twice
+   too large changes the PSNR by at most 0.2 dB for $\sigma$ from 20 to 80; one
+   40 % too small (150 for 255) loses up to 0.3 dB for $\sigma \le 50$,
+   and 1.3 dB at $\sigma = 80$.
 2. **The bior1.5 transform.** The paper names the wavelet; the transform of a
    block of $N$ samples is built here as the full dyadic decomposition with
    periodic extension, iterated on the approximation down to one coefficient
@@ -460,8 +473,19 @@ code makes them as follows.
    variance $\sigma^2$ gives coefficients of variance $\sigma^2$.
    For $N = 4$ it is the orthonormal Haar transform, as
    [Maggioni et al. (2013, §III-A)](https://doi.org/10.1109/TIP.2012.2210725) state.
+   The paper mentions "periodized wavelets" (§IV) and "full dyadic"
+   decompositions (§IV-B). At $N = 8$, the block size of the paper, the
+   periodic extension cancels the outer taps: taps $-4$ and $4$ ($+3$ and $-3$)
+   fall on the same sample, and so do taps $-3$ and $5$. The effective low-pass
+   filter is the 6-tap $\tfrac{\sqrt2}{256}[-22, 22, 128, 128, 22, -22]$, and the
+   two coarser levels are Haar. A symmetric extension would keep the
+   $\pm 3/256$ taps; Table II of Dabov et al. suggests that this matters little
+   (29.42 dB with bior1.3 against 29.43 dB with bior1.5).
    The matching distance of the first run is taken between these
-   coefficients, as in footnote 3 of Dabov et al.
+   coefficients, the literal Eq. 4 (and footnote 3 of Dabov et al.). As
+   $\mathbf{T}$ is not orthogonal, $\tau = 2500$ then applies to
+   $\lVert\mathbf{T}(\mathbf{p}_{\mathbf{r}} - \mathbf{p}_{\mathbf{r}'})\rVert^2/K$,
+   not to the mean squared difference of the pixels.
 3. **The reference grid.** References sit on a global grid, at the multiples of
    $N_{\text{step}}$ from the first pixel, plus the last position along each axis, so that
    every pixel is covered. Streamed blocks use the grid of the whole image.
@@ -482,14 +506,39 @@ code makes them as follows.
    Table I (2.9, 0.4, 24.6, 6.7) are larger than any
    distance of Eq. 2 between cubes of values in $[0, 1]$, where $d \le 1$, and so
    every cube would match. They are applied to the sum of squared differences
-   $\lVert C_{x_i} - C_{x_j}\rVert_2^2$, that is $d \le \tau / L^3$. Per voxel this is $0.045$ and
-   $0.0063$ for the normal profile, of the same order as the thresholds of `BM3D` for data in $[0, 1]$
-   ($2500/255^2 \approx 0.038$ and $400/255^2 \approx 0.006$).
+   $\lVert C_{x_i} - C_{x_j}\rVert_2^2$, that is $d \le \tau / L^3$. Maggioni et al. reuse
+   "most of the settings originally optimized for BM3D" (§III-A), and in 8-bit
+   units, $\tau \cdot 255^2 / L^3$, this reading gives the thresholds of `BM3D`
+   (Table 1):
+
+    | Table 2 | $L$ | $\tau \cdot 255^2 / L^3$ | `BM3D` |
+    |---|---|---|---|
+    | 0.4 (Wiener, normal) | 4 | 406 | 400 (second run, $\tilde\sigma \le 40$) |
+    | 6.7 (Wiener, modified) | 5 | 3485 | 3500 (second run, $\tilde\sigma > 40$) |
+    | 2.9 (hard thresholding, normal) | 4 | 2946 | 2500 (first run, $\tilde\sigma \le 40$) |
+    | 24.6 (hard thresholding, modified) | 4 | 24994 | none |
+
+    The two Wiener values, $0.4/64$ and $6.7/125$, are the $400/255^2$ and
+    $3500/255^2$ of `BM3D` to rounding, each with the $L$ of its profile.
 8. **The DC coefficient in `BM3D`.** `BM4D` never thresholds the DC
    ([Maggioni et al. 2013, §II-B](https://doi.org/10.1109/TIP.2012.2210725)). The
    `BM3D` paper does not say, and its Eq. 10, with the case $N_{\mathrm{har}} = 0$ (all coefficients,
    the DC included, thresholded), implies that the DC may be: it is thresholded
-   like the others.
+   like the others. `BM3D` is therefore not invariant to an offset of the
+   intensities. The DC of a group of $m$ blocks, $\sqrt{mK}$ times its mean, is
+   removed when the mean is below $\lambda_{\mathrm{ht}}\tilde\sigma/\sqrt{mK}$ in
+   absolute value (about $0.08\,\tilde\sigma$ for $m = 16$), which occurs on a
+   background close to 0, as in dark-subtracted microscopy data. On a filament
+   phantom with a background of 0 ($96^2$ pixels, range $[0, 255]$,
+   $\sigma = 20$, `search=15`), denoising $\mathbf{y}$ and $\mathbf{y} + 100$
+   differs by up to 22 grey levels in the first estimate and 25 in the final
+   one. The weight 1 of a group with $N_{\mathrm{har}} = 0$ is not scale-free,
+   unlike $1/(\sigma^2 N_{\mathrm{har}})$: at $\sigma = 20$ in 8-bit units it is at
+   least 400 times any other weight, so such a group, whose estimate is 0,
+   dominates the pixels it covers. The extension `keep_dc` keeps the DC, as
+   `BM4D` does: the first estimate is then invariant to an offset, and the final
+   one nearly so (2.5 grey levels in the case above), since the Wiener gain of
+   the DC still depends on the mean.
 
 ### Extensions (opt-in, not faithful)
 
@@ -497,10 +546,11 @@ code makes them as follows.
 |---|---|---|---|
 | `search` | side $N_S$ of the search window, in both runs | `None` ($N_S = 39$ for `BM3D`, 11 for `BM4D`) | `None` |
 | `step` | step $N_{\text{step}}$ between reference blocks, in both runs | `None` (3, or 4 and 6 for `BM3D` with $\tilde\sigma > 40$) | `None` |
+| `keep_dc` (`BM3D` only) | never thresholds the DC of a group in the first run, as `BM4D` does (choice 8) | `False` | `False` |
 
-Both trade quality for speed: the cost per pixel and run is about
-$N_S^2 N^2 / N_{\text{step}}^2$ operations. Giving either sets `is_faithful` to
-false. They are not a "fast profile" of the paper, which also changes the
+`search` and `step` trade quality for speed: the cost per pixel and run is about
+$N_S^2 N^2 / N_{\text{step}}^2$ operations. Giving any of the three sets
+`is_faithful` to false. They are not a "fast profile" of the paper, which also changes the
 transforms and uses a predictive search: that profile is not implemented.
 Table IV of [Maggioni et al. (2013)](https://doi.org/10.1109/TIP.2012.2210725)
 studies the effect of $N_S$ and $N_{\text{step}}$ on `BM4D`.
@@ -510,7 +560,7 @@ The other keywords do not change the method:
 | Keyword | Changes | Faithful value |
 |---|---|---|
 | `sigma` | noise standard deviation $\sigma$; omit it to give a `SensorEstimate` to `fit` | `None` |
-| `data_range` | intensity range mapped to $[0, 255]$ ($[0, 1]$) | `None` (range of the data) |
+| `data_range` | intensity range mapped to $[0, 255]$ ($[0, 1]$) | `None` (estimated from the data, choice 1) |
 | `profile` | `"normal"`; `BM4D` also has `"modified"` | `"normal"` |
 | `output` | `"final"` (second run) or `"basic"` (first run only) | `"final"` |
 | `inverse` | inverse of the Anscombe transform, for Poisson–Gaussian data | `"exact"` |
@@ -541,8 +591,9 @@ image. The result therefore equals the whole-image computation, up to
 floating-point rounding, for any `block`. The data may be a zarr array or a
 memory-mapped file larger than memory; the output cannot be the input (an
 in-place call is refused, as a halo needs the unchanged neighbours). `fit` reads
-the data once, only when `data_range` is not given, to take its range. Images of
-a stack, and groups, are independent.
+the data once, only when `data_range` is not given, to estimate its range. Images of
+a stack, and groups, are independent. Maps of a `SensorEstimate` are cropped to
+each block.
 
 Within a block, the spectra of all blocks of the image are kept: $N^2$ values per
 pixel ($N^3$ per voxel), and twice that in the second run, which also holds the
@@ -550,8 +601,10 @@ spectra of the first estimate. The cost per pixel is about
 $N_S^2 N^2 / N_{\text{step}}^2$ operations per run
 ([Dabov et al. 2007, §IV-A](https://doi.org/10.1109/TIP.2007.901238)), linear in the
 size of the image; it is the search size $N_S$ that dominates, and the one to
-lower first, with `search` and `step` (extensions), to go faster. Reduce
-`block` to bound memory. The computation is vectorised over batches of references
+lower first, with `search` and `step` (extensions), to go faster. The memory
+budget of [`optix.config`](../../reference/configuration.md) is shared: half for the
+spectra (which set the default `block`), and a quarter each for a batch of
+block matching and a batch of filtering, which run one after the other. The computation is vectorised over batches of references
 with gathers, sorts and scatter-adds, and runs on any torch device. On the CPU
 it is deterministic; on CUDA the aggregation uses atomic additions, so the result may differ in the last bits.
 
@@ -579,13 +632,19 @@ final estimate with the truth.
 29.5
 ```
 
-The estimator form, with a fit and the halo of the streaming:
+The estimator form streams the image in blocks with a halo, and gives the
+whole-image result. Here a $150 \times 170$ image is cut into blocks of
+$31 \times 37$ pixels; `search=9` only shortens the example, and reduces the halo
+from 90 to 30 pixels.
 
 ```pycon
->>> est = BM3D(sigma=25, data_range=255).fit()
+>>> big = 255 * phantoms.filaments((150, 170), intensity=1.0, seed=1)
+>>> noisy_big = big + 20 * torch.randn_like(big)
+>>> est = BM3D(sigma=20, data_range=255, search=9, block=(31, 37)).fit()
 >>> est.halo()
-90
->>> bool(torch.equal(est.apply(y), bm3d(y, sigma=25, data_range=255)))
+30
+>>> out = est.apply(noisy_big)  # 25 blocks
+>>> bool(torch.equal(out, bm3d(noisy_big, sigma=20, data_range=255, search=9)))
 True
 ```
 
@@ -604,7 +663,7 @@ looking at 1 to 26 electrons. The estimator is given the
 >>> round(float((z - truth).square().mean().sqrt()), 1)
 5.0
 >>> round(float((den - truth).square().mean().sqrt()), 1)
-1.9
+2.3
 ```
 
 Volumes use `BM4D` in the same way, here with the "modified" profile for data in $[0, 1]$.
@@ -641,12 +700,10 @@ $[0, 255]$; `BM4D`: $24 \times 48^2$ voxels, range $[0, 1]$.
 | `BM4D`, $\sigma = 0.05$ | 26.02 | | 40.34 (normal), 40.76 (modified) |
 | `BM4D`, $\sigma = 0.15$ | 16.48 | | 34.03 (normal), 34.66 (modified) |
 
-These numbers describe the synthetic scenes only; they are not compared with
-the values published for standard test images, which are other images. In
-`float32` and in `float64` the PSNR agrees to 0.01 dB. A reference
-implementation, the `bm3d` package on PyPI, is "free for non-commercial use",
-a licence not compatible with the MIT licence of optix, so it was not read, run
-or used for the comparison; the code was written from the two papers.
+These numbers describe the synthetic scenes only, not the standard test images
+of the papers. In `float32` and in `float64` the PSNR agrees to 0.01 dB. No
+comparison with the authors' implementation is given: its licence
+(non-commercial use) is not compatible with that of optix.
 
 ## References
 
@@ -654,11 +711,11 @@ or used for the comparison; the code was written from the two papers.
 
     1. Dabov K, Foi A, Katkovnik V, Egiazarian K. *Image denoising by sparse
        3-D transform-domain collaborative filtering.* IEEE Trans Image Process
-       **16**(8), 2007.
+       **16**(8):2080–2095, 2007.
        [doi:10.1109/TIP.2007.901238](https://doi.org/10.1109/TIP.2007.901238)
     2. Maggioni M, Katkovnik V, Egiazarian K, Foi A. *A nonlocal
        transform-domain filter for volumetric data denoising and
-       reconstruction.* IEEE Trans Image Process **22**(1), 2013.
+       reconstruction.* IEEE Trans Image Process, 2013.
        [doi:10.1109/TIP.2012.2210725](https://doi.org/10.1109/TIP.2012.2210725)
     3. Mäkitalo M, Foi A. *Optimal inversion of the generalized Anscombe
        transformation for Poisson-Gaussian noise.* IEEE Trans Image Process
@@ -674,6 +731,7 @@ or used for the comparison; the code was written from the two papers.
           journal = {IEEE Transactions on Image Processing},
           volume  = {16},
           number  = {8},
+          pages   = {2080--2095},
           year    = {2007},
           doi     = {10.1109/TIP.2007.901238},
         }
@@ -681,8 +739,6 @@ or used for the comparison; the code was written from the two papers.
           author  = {Maggioni, Matteo and Katkovnik, Vladimir and Egiazarian, Karen and Foi, Alessandro},
           title   = {A nonlocal transform-domain filter for volumetric data denoising and reconstruction},
           journal = {IEEE Transactions on Image Processing},
-          volume  = {22},
-          number  = {1},
           year    = {2013},
           doi     = {10.1109/TIP.2012.2210725},
         }

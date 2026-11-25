@@ -24,9 +24,12 @@ __all__ = [
     "Stage",
     "aggregate",
     "block_match",
+    "block_overhead",
     "bm3d_profile",
     "bm4d_profile",
+    "filter_batch",
     "hard_threshold",
+    "match_batch",
     "patch_spectra",
     "reference_grid",
     "run_stage",
@@ -141,6 +144,100 @@ def override(stage: Stage, **changes: object) -> Stage:
     )
 
 
+# -- memory ------------------------------------------------------------------
+# Share of the memory budget (`get_config().memory`) of each phase of a
+# stage: the spectra of all blocks (sized by the streaming block, see
+# `SPECTRA_COPIES`), then, one after the other, a batch of block matching
+# and a batch of collaborative filtering.
+SPECTRA_SHARE = 0.5
+BATCH_SHARE = 0.25
+# Values per pixel held while the spectra are computed: the spectra of
+# the noisy data and of the pilot (or pre-filtered) data, plus one
+# transform temporary.
+SPECTRA_COPIES = 3
+
+
+def block_overhead(k: int) -> float:
+    """Values per sample of a streamed block, for the memory budget.
+
+    The spectra of a stage take `SPECTRA_COPIES`·K values per sample,
+    plus about eight image-sized buffers (data, estimates, aggregation
+    buffers); the block is sized so that they fit in `SPECTRA_SHARE` of
+    the budget, which leaves `BATCH_SHARE` to each batch.
+
+    Parameters
+    ----------
+    k : int
+        Values per block K.
+
+    Returns
+    -------
+    float
+        `overhead` of [`blocks`][optix.io.blocks].
+    """
+    return (SPECTRA_COPIES * k + 8) / SPECTRA_SHARE
+
+
+def match_batch(
+    candidates: int, k: int, itemsize: int, memory: int | None = None
+) -> int:
+    """References per batch of the block matching of a stage.
+
+    A batch of b references holds about b·N_c·(2K·e + 40) bytes: the
+    gathered candidate spectra and their differences (K values of e bytes
+    each per candidate), plus the indices, masks and distances of the N_c
+    candidates. It is sized to `BATCH_SHARE` of the budget.
+
+    Parameters
+    ----------
+    candidates : int
+        Candidates per reference N_c (N_Sᵈ).
+    k : int
+        Values per block K.
+    itemsize : int
+        Bytes per value e.
+    memory : int, optional
+        Budget in bytes (default: `get_config().memory`).
+
+    Returns
+    -------
+    int
+    """
+    memory = get_config().memory if memory is None else memory
+    per_ref = candidates * (2 * k * itemsize + 40)
+    return max(1, int(BATCH_SHARE * memory) // per_ref)
+
+
+def filter_batch(
+    group: int, k: int, itemsize: int, memory: int | None = None
+) -> int:
+    """Groups per batch of the collaborative filtering of a stage.
+
+    A batch of b groups of m blocks holds about b·m·K·(8e + 8) bytes: up
+    to eight temporaries of the size of the group (gathered spectra,
+    transforms, shrinkage, block estimates, weights) and the int64
+    aggregation indices. It is sized to `BATCH_SHARE` of the budget.
+
+    Parameters
+    ----------
+    group : int
+        Blocks per group m.
+    k : int
+        Values per block K.
+    itemsize : int
+        Bytes per value e.
+    memory : int, optional
+        Budget in bytes (default: `get_config().memory`).
+
+    Returns
+    -------
+    int
+    """
+    memory = get_config().memory if memory is None else memory
+    per_group = group * k * (8 * itemsize + 8)
+    return max(1, int(BATCH_SHARE * memory) // per_group)
+
+
 def stage_halo(stage: Stage) -> int:
     """Reach of a stage: output samples depend on inputs within this.
 
@@ -250,7 +347,8 @@ def block_match(
         Reference positions.
     stage : Stage
     batch : int, optional
-        References per batch (default: from the memory budget).
+        References per batch (default:
+        [`match_batch`][optix.denoise.utils.match_batch]).
 
     Returns
     -------
@@ -270,8 +368,7 @@ def block_match(
     centre = int(((delta == 0).all(-1)).nonzero()[0, 0])
     nc, k = delta.shape[0], spectra.shape[1]
     if batch is None:
-        budget = get_config().memory // (4 * spectra.element_size())
-        batch = max(1, budget // (nc * k))
+        batch = match_batch(nc, k, spectra.element_size())
     keep = min(stage.group, nc)
     refs = refs.to(device)
     index = torch.empty(len(refs), keep, dtype=torch.long, device=device)
@@ -306,6 +403,14 @@ def hard_threshold(
     Υ(c) = c·[|c| > λσ] (Dabov et al. 2007, Eq. (6)), with weight
     w = 1/(σ²·N_har) for N_har ≥ 1 retained coefficients, else 1
     (Eq. (10)).
+
+    !!! note
+        The weight 1 of a group with N_har = 0 does not scale with the
+        data, unlike 1/(σ²·N_har): in 8-bit units and σ = 20 it is at
+        least 400 times any other weight, so such a group (all of its
+        coefficients, the DC included, below λσ) dominates the samples
+        it covers, where its estimate is 0. It occurs only without
+        `keep_dc`, in groups whose mean is close to 0.
 
     Parameters
     ----------
@@ -486,7 +591,7 @@ def run_stage(
     for m in torch.unique(size).tolist():
         sel = (size == m).nonzero()[:, 0]
         haar = haar_matrix(m, dtype=dtype, device=device)
-        bmax = max(1, (1 << 22) // (m * n**ndim))
+        bmax = filter_batch(m, n**ndim, spectra.element_size())
         for start in range(0, len(sel), bmax):
             members = index[sel[start : start + bmax], :m]
             group = torch.einsum("ij,bjk->bik", haar, spectra[members])

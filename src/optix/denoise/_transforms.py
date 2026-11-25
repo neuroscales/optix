@@ -61,8 +61,21 @@ def bior15_matrix(
         The filters are those of the bior1.5 wavelet named in Dabov et
         al. (2007, Table I); the periodic extension, the alignment of
         the filters and the row normalisation are not specified in the
-        paper. With n = 4 the transform is the orthonormal Haar
-        transform, as stated by Maggioni et al. (2013, Section III-A).
+        paper, which mentions "periodized wavelets" (Section IV) and
+        "full dyadic" decompositions (Section IV-B). With n = 4 the
+        transform is the orthonormal Haar transform, as stated by
+        Maggioni et al. (2013, Section III-A).
+
+        With the periodic extension, the outer taps cancel at n = 8,
+        the block size of the paper: in the first level, taps −4 and 4
+        (+3 and −3) fall on the same sample, and so do taps −3 and 5.
+        The effective low-pass filter is the 6-tap
+        (√2/256)·[−22, 22, 128, 128, 22, −22], and the two coarser
+        levels are Haar. A symmetric extension would keep the ±3/256
+        taps.
+
+        T is not orthogonal, so a distance between coefficients,
+        ‖T(a − b)‖², is not the distance between the samples.
 
     Parameters
     ----------
