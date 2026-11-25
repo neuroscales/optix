@@ -717,7 +717,8 @@ comparison with the authors' implementation is given: its licence
        [doi:10.1109/TIP.2007.901238](https://doi.org/10.1109/TIP.2007.901238)
     2. Maggioni M, Katkovnik V, Egiazarian K, Foi A. *A nonlocal
        transform-domain filter for volumetric data denoising and
-       reconstruction.* IEEE Trans Image Process, 2013.
+       reconstruction.* IEEE Trans Image Process
+       **22**(1):119–133, 2013.
        [doi:10.1109/TIP.2012.2210725](https://doi.org/10.1109/TIP.2012.2210725)
     3. Mäkitalo M, Foi A. *Optimal inversion of the generalized Anscombe
        transformation for Poisson-Gaussian noise.* IEEE Trans Image Process
@@ -741,6 +742,9 @@ comparison with the authors' implementation is given: its licence
           author  = {Maggioni, Matteo and Katkovnik, Vladimir and Egiazarian, Karen and Foi, Alessandro},
           title   = {A nonlocal transform-domain filter for volumetric data denoising and reconstruction},
           journal = {IEEE Transactions on Image Processing},
+          volume  = {22},
+          number  = {1},
+          pages   = {119--133},
           year    = {2013},
           doi     = {10.1109/TIP.2012.2210725},
         }
