@@ -2,7 +2,8 @@
 
 The stages, transforms, block matching and collaborative filters of
 BM3D and BM4D, the patch distances of non-local means, the default
-intensity range and the memory budget; the total-variation solver of
+intensity range and the memory budget; the transform, thresholding
+functions and PURE system of PURE-LET; the total-variation solver of
 ROF.
 """
 
@@ -30,6 +31,7 @@ from ._nlm import (
     patch_kernel,
     search_offsets,
 )
+from ._purelet import PureSums, haar_uwt, let_basis, let_threshold
 from ._transforms import (
     bior15_matrix,
     dct_matrix,
@@ -40,6 +42,7 @@ from ._transforms import (
 from ._tv import TVResult, tv_denoise
 
 __all__ = [
+    "PureSums",
     "Stage",
     "TVResult",
     "aggregate",
@@ -53,8 +56,11 @@ __all__ = [
     "dct_matrix",
     "filter_batch",
     "haar_matrix",
+    "haar_uwt",
     "hard_threshold",
     "kaiser_window",
+    "let_basis",
+    "let_threshold",
     "match_batch",
     "offset_batch",
     "patch_distances",

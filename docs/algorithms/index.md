@@ -40,6 +40,7 @@ example. The sections follow the modules of the
 | | [Chouzenoux](deconv/chouzenoux.md) (`Chouzenoux`) | deconvolved image, TV and Hessian regularised, with the exact Poisson–Gaussian likelihood |
 | | [Multiview Richardson–Lucy](deconv/multiview.md) (`MultiviewRL`) | one deconvolved image from several registered views |
 | [`optix.denoise`](../reference/denoise.md) | [BM3D and BM4D](denoise/bm3d.md) (`BM3D`, `BM4D`) | denoised image or volume, by block matching and collaborative filtering |
+| | [PURE-LET](denoise/pure-let.md) (`PURELET`) | denoised image or volume for Poisson–Gaussian noise, by thresholding in an undecimated Haar wavelet transform |
 | | [Non-local means](denoise/nl-means.md) (`NLMeans`) | denoised image or volume, by averaging pixels with similar patches |
 | | [ROF total variation](denoise/rof.md) (`ROF`) | denoised image or volume, by total-variation minimisation under a noise constraint |
 | [`optix.destripe`](../reference/destripe.md) | [Wavelet-FFT](destripe/wavelet-fft.md) (`WaveletFFT`) | stripe-free image |
