@@ -11,6 +11,7 @@
         - BM3D
         - BM4D
         - PURELET
+        - NLMeans
 
 ## Transforms
 
@@ -26,6 +27,8 @@
         - bm4d_halo
         - pure_let
         - pure_let_halo
+        - nl_means
+        - nl_means_halo
 
 ## Utilities
 
@@ -62,3 +65,8 @@
         - let_threshold
         - let_basis
         - PureSums
+        - patch_kernel
+        - default_h
+        - search_offsets
+        - patch_distances
+        - offset_batch
