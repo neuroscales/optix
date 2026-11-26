@@ -120,6 +120,19 @@ The same three roles cover most acquisitions. A few worked patterns:
 | `(tile, z, y, x)`, 3D pictures, one per tile | `Layout("tzyx", spatial="zyx", sample="t")` | `(z, y, x)` |
 | `(camera, n, y, x)`, two cameras | `Layout("cnyx", spatial="yx", group="c")` | `(c, y, x)` |
 
+| `(tile, x, y, z)`, `(y, z)` pictures indexed by `x`, overlapping tiles | `Layout("txyz", spatial="yz")` | `(y, z)` |
+
+Tiles of a mosaic that overlap are still samples (they share the flat
+field). [`GammaMixture`][optix.shading.GammaMixture] can also use the
+overlaps: give the integer position of each tile in a common voxel frame,
+with one component per non-tile axis in storage order (`(x, y, z)` above),
+as `overlap=TileOverlap(positions=...)`, or as the steps between
+consecutive tiles (`steps=`, or one `step=` for all of them, e.g.
+`step=(0, 64, 0)` for tiles 64 rows apart along `y`). Every pair of tiles
+whose boxes intersect shares the signal of their common voxels, including
+a step along a sample axis such as `x` (frame `k` of one tile is frame
+`k − sx` of the other); tiles that do not touch are independent.
+
 An axis can also be given by position instead of by name, which is how the
 default layout works (`spatial=(-2, -1)`), and `Layout` checks the roles
 against the data as soon as it can: an unknown label, an axis with two

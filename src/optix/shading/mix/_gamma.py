@@ -15,7 +15,12 @@ from ...distributions import Gamma, GammaStats
 from ...special import gauss_hermite
 from ._model import AU, BU, G1, G2, GC, GV, HCC, HVV, NSTATS, WU, XU
 
-__all__ = ["GammaComponent", "init_gamma_classes", "quadrature"]
+__all__ = [
+    "GammaComponent",
+    "init_gamma_classes",
+    "quadrature",
+    "quadrature_shared",
+]
 
 
 def cubic_mode(
@@ -318,6 +323,240 @@ def quadrature(
     return L1, EU, ElogU, Emom
 
 
+# -- one scene voxel seen by several tiles -----------------------------------
+def gaussian_terms(
+    R: Tensor, S2: Tensor, dq: float
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Per-observation kernel of the Gaussian likelihood.
+
+    For an observation with residual r = y − mean and variance σ², returns
+
+    - log p = −½ (r² + δ)/σ² − ½ log σ² (without −½ log 2π),
+    - ψ₁ = ∂ log p/∂mean = r/σ², ψ₂ = ∂ log p/∂σ² = q,
+    - the exact negative second derivatives h₁₁ = −∂ψ₁/∂mean,
+      h₁₂ = −∂ψ₁/∂σ² (= −∂ψ₂/∂mean), h₂₂ = −∂ψ₂/∂σ²,
+    - the Fisher weights f₁ = 1/σ², f₂ = 1/(2σ⁴).
+
+    Everything else (the integral over u, its statistics and the parameter
+    step) only sees these, so another observation model (e.g. a censored
+    one for saturated pixels) is a `torch.where` on its outputs.
+    """
+    iS2 = S2.reciprocal()
+    R2 = R.square().add_(dq)
+    logp = (R2 * iS2).add_(S2.log()).mul_(-0.5)
+    psi1 = R * iS2
+    f2 = iS2.square().mul_(0.5)
+    psi2 = (R2 * f2).sub_(iS2, alpha=0.5)
+    h11 = iS2
+    h12 = psi1 * iS2  # r/σ⁴
+    h22 = (R2 * iS2).mul_(iS2).mul_(iS2).sub_(f2)  # (r² + δ)/σ⁶ − ½/σ⁴
+    return logp, psi1, psi2, h11, h12, h22, f2
+
+
+def _shared_terms(
+    U: Tensor,
+    R0: Tensor,
+    V: Tensor,
+    B: Tensor,
+    gain: Tensor,
+    nu: Tensor,
+    beta: Tensor,
+    dq: float,
+    full: bool,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """l(τ), and G, F, H in u summed over the tiles, at u = U `(n, h, w)`.
+
+    `R0`, `V`, `B` are `(S, ...)`; l = ν log u − β u + ∑ₜ log pₜ.
+    """
+    R = R0 - B * U
+    S2 = (V + gain * B * U) if full else V.expand_as(R)
+    logp, psi1, psi2, h11, h12, h22, f2 = gaussian_terms(R, S2, dq)
+    gb = gain * B
+    G = B * psi1
+    F = B.square() * h11
+    if full:
+        G = G + gb * psi2
+        F = F + gb.square() * f2
+        H = B.square() * h11 + 2 * B * gb * h12 + gb.square() * h22
+    else:
+        H = F
+    L = (nu * U.log()).sub_(beta * U).add_(logp.sum(0))
+    return L, G.sum(0), F.sum(0), H.sum(0)
+
+
+def shared_mode(
+    R0: Tensor,
+    V: Tensor,
+    B: Tensor,
+    gain: Tensor,
+    nu: Tensor,
+    beta: Tensor,
+    dq: float,
+    full: bool,
+    newton: int = 4,
+) -> Tensor:
+    """Mode û of the summed integrand over u (in τ = log u).
+
+    `R0`, `V`, `B` are `(S, n, h, w)` (or broadcastable): residuals at
+    u = 0, variances and b = g·f of the S tiles seeing each voxel.
+
+    Constant noise: l′(τ) = ν − β·u + u·∑ₜ bₜ(r₀ₜ − bₜu)/vₜ is a quadratic
+    in u, solved exactly. Full noise: the stationarity polynomial has
+    degree 2S + 1, so the mode is found iteratively, with a fixed number of
+    branch-free steps:
+
+    1. candidates: the S single-tile modes (each tile with the prior,
+       `cubic_mode`) and the mode of the constant-variance approximation
+       with σₜ² frozen at the mean ū of the single-tile modes;
+    2. keep the candidate with the largest summed l;
+    3. `newton` safeguarded Newton steps in τ, of length
+       l′/max(−l″, ν + u²F) clamped to ±2, each kept only if l increases.
+    """
+    tiny = torch.finfo(R0.dtype).tiny
+
+    def joint_quadratic(S2: Tensor) -> Tensor:
+        A = (B.square() / S2).sum(0)
+        Bq = beta - (B * R0 / S2).sum(0)
+        delta = Bq.hypot((A * nu).mul_(4).sqrt_())
+        U0 = (delta - Bq).div_(A).mul_(0.5)
+        U1 = (delta + Bq).reciprocal_().mul_(nu).mul_(2)
+        U = torch.where(Bq < 0, U0, U1)
+        return torch.where(U.isfinite() & (U > 0), U, nu / beta)
+
+    if not full:
+        return joint_quadratic(V).clamp_min_(tiny)
+
+    single = cubic_mode(R0, V, B, gain, nu, beta, dq)  # (S, n, h, w)
+    ubar = single.mean(0)
+    cands = torch.cat([single, joint_quadratic(V + gain * B * ubar)[None]])
+    cands = cands.clamp_min_(tiny)
+    L = torch.stack(
+        [
+            _shared_terms(c, R0, V, B, gain, nu, beta, dq, full)[0]
+            for c in cands.unbind(0)
+        ]
+    )
+    L = torch.where(L.isnan(), -math.inf, L)
+    U = cands.gather(0, L.argmax(0, keepdim=True))[0]
+    Lu, G, F, H = _shared_terms(U, R0, V, B, gain, nu, beta, dq, full)
+    for _ in range(newton):
+        d1 = (U * G).add_(nu).sub_(beta * U)  # l′(τ)
+        d2 = beta.sub(G).addcmul_(U, H).mul_(U)  # −l″(τ)
+        F0 = U.square().mul_(F).add_(nu)
+        step = (d1 / torch.maximum(d2, F0)).clamp_(-2, 2)
+        step = step.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
+        Un = U * step.exp()
+        Ln, Gn, Fn, Hn = _shared_terms(Un, R0, V, B, gain, nu, beta, dq, full)
+        ok = Ln > Lu
+        U = torch.where(ok, Un, U)
+        Lu = torch.where(ok, Ln, Lu)
+        G = torch.where(ok, Gn, G)
+        F = torch.where(ok, Fn, F)
+        H = torch.where(ok, Hn, H)
+    return U
+
+
+@maybe_compile
+def quadrature_shared(
+    Y: Tensor,
+    C: Tensor,
+    V: Tensor,
+    B: Tensor,
+    gain: Tensor,
+    mu: Tensor,
+    nu: Tensor,
+    *,
+    dq: float,
+    nodes: tuple[float, ...],
+    logws: tuple[float, ...],
+    full: bool,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Integrate Gamma(u | ν, ν/μ) · ∏ₜ N(yₜ | cₜ + bₜu, σₜ²(u)) over u.
+
+    One scene voxel seen by S tiles shares its signal u: the integrand is
+    the prior times the product of the S tile likelihoods, integrated by
+    one Gauss-Hermite rule in τ = log u centred on the mode of the summed
+    log integrand (`shared_mode`), with the scale from its curvature
+    there (exact where positive and not below the Fisher information
+    allows, else Fisher scoring, as in `quadrature`).
+
+    Parameters
+    ----------
+    Y : (S, n, h, w) Tensor
+        Observations of the voxels by each of their S tiles.
+    C, V, B : (S, 1, h, w) or (S, n, h, w) Tensor
+        Offset, variance and b = gₜ·f of each observation.
+    gain, mu, nu : () Tensor
+        Sensor gain γ, mean and shape of the Gamma class.
+    dq, nodes, logws, full
+        See `quadrature`.
+
+    Returns
+    -------
+    log_lik : (n, h, w) Tensor
+        log p(y₁ … y_S | z = class).
+    EU, ElogU : (n, h, w) Tensor
+        E[u | y, z] and E[log u | y, z].
+    Emom : (10, S, n, h, w) Tensor
+        Per observation, the conditional expectations of the statistics
+        of `_model`, with u in place of the per-tile signal (multiply the
+        u-weighted ones by gₜ, or gₜ², to express them in terms of f).
+    """
+    beta = nu / mu
+    R0 = Y - C
+    U = shared_mode(R0, V, B, gain, nu, beta, dq, full)
+    T = U.log()
+    L0, G, F, H = _shared_terms(U, R0, V, B, gain, nu, beta, dq, full)
+    H0 = beta.sub(G).addcmul_(U, H).mul_(U)
+    F0 = U.square().mul_(F).add_(nu)
+    msk = (F0 > 1.25 * nu) & (H0 > 0)
+    H0 = torch.where(msk, H0, F0)
+    scale = H0.reciprocal_().mul_(2).sqrt_()
+
+    # The mode is approximate, so lⱼ − l₀ may be slightly positive; it
+    # stays bounded (the nodes lie within a few scales of a near-maximum).
+    Z = torch.zeros_like(U)
+    EU = torch.zeros_like(U)
+    ElogU = torch.zeros_like(U)
+    Emom = Y.new_zeros((NSTATS, *Y.shape))
+    for Xj, logWj in zip(nodes, logws, strict=True):
+        Tj = T.add(scale, alpha=Xj)
+        Uj = Tj.exp()
+        Rj = R0 - B * Uj
+        Sj = (V + gain * B * Uj) if full else V.expand_as(Rj)
+        logp, psi1, psi2, _, _, _, f2 = gaussian_terms(Rj, Sj, dq)
+        f1 = Sj.reciprocal()
+        Lj = (nu * Tj).sub_(beta * Uj).add_(logp.sum(0))
+        Wj = Lj.sub_(L0).add_(logWj).exp_()
+        Z += Wj
+        EU.addcmul_(Wj, Uj)
+        ElogU.addcmul_(Wj, Tj)
+        W1 = Wj * f1
+        Emom[HCC] += W1
+        Emom[GC] += Wj * psi1
+        Emom[XU] += W1 * Uj
+        Emom[G1] += (Wj * Uj) * psi1
+        Emom[AU] += W1 * Uj.square()
+        W2 = Wj * f2
+        Emom[HVV] += W2
+        Emom[GV] += Wj * psi2
+        if full:
+            Emom[WU] += W2 * Uj
+            Emom[G2] += (Wj * Uj) * psi2
+            Emom[BU] += W2 * Uj.square()
+
+    Z = Z.clamp_min_(torch.finfo(Y.dtype).tiny)
+    nobs = Y.shape[0]
+    log_norm = (
+        beta.log() * nu - nu.lgamma() - 0.5 * nobs * math.log(2 * math.pi)
+    )
+    L1 = L0.add(Z.log()).add_(scale.log_()).add_(log_norm)
+    EU /= Z
+    ElogU /= Z
+    Emom /= Z
+    return L1, EU, ElogU, Emom
+
+
 class GammaComponent:
     """Gamma tissue classes, u | z = c ~ Gamma(ν_c, rate ν_c / μ_c).
 
@@ -360,6 +599,34 @@ class GammaComponent:
             C,
             V,
             M,
+            gain,
+            params[0],
+            params[1],
+            dq=dq,
+            nodes=self.nodes,
+            logws=self.logws,
+            full=full,
+        )
+        return logp, (EU, ElogU), Emom
+
+    def loglik_shared(
+        self,
+        Y: Tensor,
+        C: Tensor,
+        V: Tensor,
+        B: Tensor,
+        gain: Tensor,
+        params: Tensor,
+        *,
+        dq: float,
+        full: bool,
+    ) -> tuple[Tensor, tuple[Tensor, ...], Tensor]:
+        """`loglik` of voxels seen by S tiles (`Y` is `(S, n, h, w)`)."""
+        logp, EU, ElogU, Emom = quadrature_shared(
+            Y,
+            C,
+            V,
+            B,
             gain,
             params[0],
             params[1],
